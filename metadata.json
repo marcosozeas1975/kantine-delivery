@@ -1,0 +1,6 @@
+{
+  "name": "Kantine Delivery",
+  "description": "Central Privada de Entregas da Kantine - M1: Bot Telegram e Cadastro/Aprovação de Motoristas",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
