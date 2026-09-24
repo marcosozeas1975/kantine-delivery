@@ -4,10 +4,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { driverService } from './src/server/driverService.ts';
+import { deliveryService } from './src/server/deliveryService.ts';
 import { telegramBot } from './src/server/telegramBot.ts';
 import { requireAdminAuth, AuthRequest } from './src/middleware/auth.ts';
 import { canReceiveDeliveryOffers } from './src/server/eligibility.ts';
-import { DriverStatus } from './src/server/types.ts';
+import { DriverStatus, DeliveryStatus } from './src/server/types.ts';
 
 dotenv.config();
 
@@ -191,6 +192,117 @@ app.post('/api/admin/telegram/simulate-update', requireAdminAuth, async (req: Au
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// M2 — Delivery Management API Endpoints
+// ==========================================
+
+// 10. List Deliveries (filtered by status: DRAFT, OFFERED, CANCELLED)
+app.get('/api/admin/deliveries', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const status = req.query.status as DeliveryStatus | undefined;
+    if (status && !['DRAFT', 'OFFERED', 'CANCELLED'].includes(status)) {
+      return res.status(400).json({ error: 'INVALID_STATUS_FILTER' });
+    }
+    const deliveriesList = await deliveryService.getDeliveries(status);
+    res.json(deliveriesList);
+  } catch (err: any) {
+    console.error('[API GET /api/admin/deliveries failed]', err.message);
+    res.status(500).json({ error: 'Failed to retrieve deliveries' });
+  }
+});
+
+// 11. Create Delivery Draft (DRAFT status, no Telegram message sent)
+app.post('/api/admin/deliveries', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const {
+      pickup_location,
+      destination_address,
+      destination_neighborhood,
+      cargo_description,
+      delivery_fee,
+      delivery_mode,
+      observations,
+    } = req.body;
+
+    const delivery = await deliveryService.createDraft(
+      {
+        pickup_location,
+        destination_address,
+        destination_neighborhood,
+        cargo_description,
+        delivery_fee,
+        delivery_mode,
+        observations,
+      },
+      req.user?.email || 'ADMIN'
+    );
+
+    res.status(201).json({ success: true, delivery });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/deliveries failed]', err.message);
+    if (err.message === 'MISSING_REQUIRED_FIELDS') {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: 'Failed to create delivery draft' });
+  }
+});
+
+// 12. Get Delivery details, dispatches, and audit events
+app.get('/api/admin/deliveries/:id', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DELIVERY_ID' });
+
+    const details = await deliveryService.getDeliveryDetails(id);
+    res.json(details);
+  } catch (err: any) {
+    console.error(`[API GET /api/admin/deliveries/${req.params.id} failed]`, err.message);
+    if (err.message === 'DELIVERY_NOT_FOUND') return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to fetch delivery details' });
+  }
+});
+
+// 13. Publish Delivery (DRAFT -> OFFERED, distributes offer to all ACTIVE drivers)
+app.post('/api/admin/deliveries/:id/publish', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DELIVERY_ID' });
+
+    const result = await deliveryService.publishDelivery(id, req.user?.email || 'ADMIN');
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/deliveries/${req.params.id}/publish failed]`, err.message);
+    if (err.message === 'DELIVERY_NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.message === 'NO_ACTIVE_DRIVERS_AVAILABLE') {
+      return res.status(400).json({
+        error: 'NO_ACTIVE_DRIVERS_AVAILABLE',
+        code: 'NO_ELIGIBLE_DRIVERS',
+        message: 'Nenhum motorista ativo disponível para receber esta entrega. A entrega permanece como rascunho.',
+      });
+    }
+    if (err.message === 'DELIVERY_ALREADY_OFFERED' || err.message === 'CANNOT_PUBLISH_CANCELLED_DELIVERY') {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: 'Failed to publish delivery' });
+  }
+});
+
+// 14. Cancel Delivery (DRAFT -> CANCELLED or OFFERED -> CANCELLED)
+app.post('/api/admin/deliveries/:id/cancel', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DELIVERY_ID' });
+
+    const delivery = await deliveryService.cancelDelivery(id, req.user?.email || 'ADMIN');
+    res.json({ success: true, delivery });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/deliveries/${req.params.id}/cancel failed]`, err.message);
+    if (err.message === 'DELIVERY_NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.message === 'DELIVERY_ALREADY_CANCELLED') return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to cancel delivery' });
   }
 });
 

@@ -112,6 +112,71 @@ export class TelegramBotService {
     }
   }
 
+  /**
+   * M2: Send delivery offer to an ACTIVE driver
+   * Enforces strict privacy: never sends full destination address, customer name or phone.
+   */
+  public async sendDeliveryOffer(
+    chatId: string | number,
+    delivery: {
+      id: number;
+      pickup_location: string;
+      destination_neighborhood: string;
+      cargo_description: string;
+      delivery_fee: string;
+      delivery_mode: string;
+      observations: string | null;
+    }
+  ): Promise<{ success: boolean; errorCode?: string }> {
+    if (!this.token) {
+      return { success: false, errorCode: 'TELEGRAM_BOT_TOKEN_NOT_CONFIGURED' };
+    }
+
+    const modeLabel = delivery.delivery_mode === 'NO_CONTACT' ? 'Sem contato' : 'Presencial';
+    const obsText = delivery.observations?.trim() ? delivery.observations.trim() : 'Nenhuma';
+    
+    // Normalize fee formatting to R$ X,XX
+    let feeStr = delivery.delivery_fee.trim();
+    if (!feeStr.includes(',')) {
+      const num = parseFloat(feeStr);
+      if (!isNaN(num)) feeStr = num.toFixed(2).replace('.', ',');
+    }
+
+    const text =
+      `🛵 *NOVA ENTREGA #${delivery.id}*\n\n` +
+      `📍 *Retirada:*\n${delivery.pickup_location}\n\n` +
+      `🏁 *Destino:*\nBairro ${delivery.destination_neighborhood}\n\n` +
+      `📦 *Carga:*\n${delivery.cargo_description}\n\n` +
+      `💰 *Frete:*\nR$ ${feeStr}\n\n` +
+      `🤝 *Modalidade:*\n${modeLabel}\n\n` +
+      `⚠️ *Observação:*\n${obsText}\n\n` +
+      `_Funcionalidade de aceite será habilitada na próxima etapa._`;
+
+    try {
+      await this.callTelegramApi('sendMessage', {
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown',
+      });
+      return { success: true };
+    } catch (err: any) {
+      console.error(`[Telegram] Failed to dispatch offer #${delivery.id} to chat ${chatId}:`, err.message);
+      return { success: false, errorCode: err.message || 'DISPATCH_FAILED' };
+    }
+  }
+
+  /**
+   * M2: Send cancellation notification to drivers who received the offer
+   */
+  public async sendDeliveryCancellation(
+    chatId: string | number,
+    deliveryId: number
+  ): Promise<boolean> {
+    if (!this.token) return false;
+    const text = `❌ *ENTREGA #${deliveryId} CANCELADA*`;
+    return this.sendMessage(chatId, text);
+  }
+
   public async start() {
     if (!this.token) {
       console.log('[Telegram Bot] TELEGRAM_BOT_TOKEN not configured. Polling not started.');

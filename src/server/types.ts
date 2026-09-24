@@ -85,3 +85,56 @@ export interface DriverEvent {
   event_type: DriverEventType;
   timestamp: Date;
 }
+
+// M2 — Delivery Domain Types
+export type DeliveryStatus = 'DRAFT' | 'OFFERED' | 'CANCELLED';
+export type DeliveryMode = 'IN_PERSON' | 'NO_CONTACT';
+export type DispatchStatus = 'SENT' | 'FAILED';
+
+export interface Delivery {
+  id: number;
+  pickup_location: string;
+  destination_address: string;
+  destination_neighborhood: string;
+  cargo_description: string;
+  delivery_fee: string;
+  delivery_mode: DeliveryMode;
+  observations: string | null;
+  status: DeliveryStatus;
+  created_at: Date;
+  offered_at: Date | null;
+}
+
+export interface DeliveryOfferDispatch {
+  id: number;
+  delivery_id: number;
+  driver_id: number;
+  telegram_chat_id: string;
+  status: DispatchStatus;
+  sent_at: Date;
+  error_code: string | null;
+}
+
+export type DeliveryEventType =
+  | 'DELIVERY_CREATED'
+  | 'DELIVERY_OFFERED'
+  | 'DELIVERY_CANCELLED';
+
+export interface DeliveryEvent {
+  id: number;
+  delivery_id: number;
+  event_type: DeliveryEventType;
+  timestamp: Date;
+  actor: string | null;
+}
+
+export interface CreateDeliveryDTO {
+  pickup_location?: string;
+  destination_address: string;
+  destination_neighborhood: string;
+  cargo_description: string;
+  delivery_fee: string;
+  delivery_mode?: DeliveryMode;
+  observations?: string;
+}
+
