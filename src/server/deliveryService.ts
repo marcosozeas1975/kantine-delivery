@@ -6,13 +6,14 @@
 
 import { db } from '../db/index.ts';
 import { deliveries, deliveryOfferDispatches, deliveryEvents, drivers } from '../db/schema.ts';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and, sql } from 'drizzle-orm';
 import {
   Delivery,
   DeliveryStatus,
   DeliveryOfferDispatch,
   DeliveryEvent,
   CreateDeliveryDTO,
+  AcceptDeliveryResult,
 } from './types.ts';
 import { canReceiveDeliveryOffers } from './eligibility.ts';
 import { telegramBot } from './telegramBot.ts';
@@ -175,6 +176,7 @@ export class DeliveryService {
             delivery_id: id,
             driver_id: driver.id,
             telegram_chat_id: driver.telegram_chat_id,
+            telegram_message_id: sendResult.messageId || null,
             status: dispatchStatus,
             error_code: sendResult.errorCode || null,
           })
@@ -211,6 +213,7 @@ export class DeliveryService {
 
   /**
    * Cancel Delivery: DRAFT -> CANCELLED or OFFERED -> CANCELLED
+   * M3 Rule: ACCEPTED deliveries CANNOT be cancelled in this milestone.
    * If OFFERED was cancelled, notifies drivers who received SENT offer
    */
   public async cancelDelivery(id: number, actor?: string): Promise<Delivery> {
@@ -219,6 +222,10 @@ export class DeliveryService {
 
     if (delivery.status === 'CANCELLED') {
       throw new Error('DELIVERY_ALREADY_CANCELLED');
+    }
+
+    if (delivery.status === 'ACCEPTED') {
+      throw new Error('CANNOT_CANCEL_ACCEPTED_DELIVERY');
     }
 
     const previousStatus = delivery.status;
@@ -254,6 +261,210 @@ export class DeliveryService {
 
     return updatedDelivery as Delivery;
   }
+
+  /**
+   * M3: Exclusive and Atomic Delivery Acceptance
+   * Guarantees at most ONE winning driver per delivery even under extreme concurrency.
+   * Atomic decision enforced directly in PostgreSQL without in-memory locks.
+   */
+  public async acceptDelivery(
+    deliveryId: number,
+    identifier: { telegramUserId?: string; driverId?: number }
+  ): Promise<AcceptDeliveryResult> {
+    // 1. Resolve Driver
+    let driver = null;
+    if (identifier.telegramUserId) {
+      driver = await driverService.getDriverByTelegramUserId(identifier.telegramUserId);
+    } else if (identifier.driverId) {
+      driver = await driverService.getDriverById(identifier.driverId);
+    }
+
+    if (!driver) {
+      return {
+        status: 'REJECTED',
+        error: 'DRIVER_NOT_FOUND',
+        message: 'Motorista não encontrado.',
+      };
+    }
+
+    // 2. Validate Driver Status: PENDING and BLOCKED must NOT accept
+    if (driver.status === 'PENDING') {
+      return {
+        status: 'REJECTED',
+        error: 'DRIVER_PENDING',
+        message: 'Seu cadastro está aguardando aprovação.',
+      };
+    }
+    if (driver.status === 'BLOCKED') {
+      return {
+        status: 'REJECTED',
+        error: 'DRIVER_BLOCKED',
+        message: 'Seu cadastro não está ativo no momento.',
+      };
+    }
+    if (driver.status !== 'ACTIVE') {
+      return {
+        status: 'REJECTED',
+        error: 'DRIVER_NOT_ACTIVE',
+        message: 'Motorista não está ativo.',
+      };
+    }
+
+    // 3. Validate Delivery Exists
+    const delivery = await this.getDeliveryById(deliveryId);
+    if (!delivery) {
+      return {
+        status: 'REJECTED',
+        error: 'DELIVERY_NOT_FOUND',
+        message: 'Entrega não encontrada.',
+      };
+    }
+
+    // 4. Validate Delivery is not CANCELLED
+    if (delivery.status === 'CANCELLED') {
+      return {
+        status: 'REJECTED',
+        error: 'DELIVERY_CANCELLED',
+        message: 'Esta entrega foi cancelada.',
+      };
+    }
+
+    // 5. Validate Dispatch: Driver MUST have received this offer with status SENT
+    const dispatches = await db
+      .select()
+      .from(deliveryOfferDispatches)
+      .where(
+        and(
+          eq(deliveryOfferDispatches.delivery_id, deliveryId),
+          eq(deliveryOfferDispatches.driver_id, driver.id)
+        )
+      );
+
+    const sentDispatch = dispatches.find((d) => d.status === 'SENT');
+    if (!sentDispatch) {
+      return {
+        status: 'REJECTED',
+        error: 'NO_SENT_DISPATCH',
+        message: 'Você não recebeu a oferta para esta entrega.',
+      };
+    }
+
+    // 6. Idempotency Check: Did this driver ALREADY win this delivery?
+    if (delivery.status === 'ACCEPTED' && delivery.accepted_driver_id === driver.id) {
+      return {
+        status: 'ALREADY_WON',
+        delivery,
+        message: 'Esta entrega já está confirmada para você.',
+      };
+    }
+
+    // 7. Check if already accepted by another driver
+    if (delivery.status === 'ACCEPTED' && delivery.accepted_driver_id !== driver.id) {
+      return {
+        status: 'LOST',
+        message: 'Esta entrega já foi aceita por outro motorista.',
+      };
+    }
+
+    // 8. Delivery must be OFFERED
+    if (delivery.status !== 'OFFERED') {
+      return {
+        status: 'REJECTED',
+        error: 'DELIVERY_NOT_OFFERED',
+        message: 'Esta entrega não está disponível para aceite.',
+      };
+    }
+
+    // 9. CRITICAL: ATOMIC ACCEPTANCE IN POSTGRESQL
+    // Database engine enforces exclusive row lock on the single target delivery row.
+    // Exactly ONE concurrent transaction will successfully update status OFFERED -> ACCEPTED.
+    const updateResults = await db
+      .update(deliveries)
+      .set({
+        status: 'ACCEPTED',
+        accepted_driver_id: driver.id,
+        accepted_at: sql`NOW()`,
+      })
+      .where(
+        and(
+          eq(deliveries.id, deliveryId),
+          eq(deliveries.status, 'OFFERED')
+        )
+      )
+      .returning();
+
+    if (updateResults.length > 0) {
+      // 1 line returned: THIS DRIVER IS THE EXCLUSIVE WINNER
+      const wonDelivery = updateResults[0] as Delivery;
+
+      // Record exactly ONE DELIVERY_ACCEPTED audit event
+      await db.insert(deliveryEvents).values({
+        delivery_id: deliveryId,
+        event_type: 'DELIVERY_ACCEPTED',
+        actor: `DRIVER #${driver.id}`,
+      });
+
+      // Invalidate offer markup for all other drivers who received the offer (UX improvement)
+      this.invalidateOtherOffers(deliveryId, driver.id).catch((err) => {
+        console.warn('[DeliveryService] Invalidate other offers error:', err.message);
+      });
+
+      return {
+        status: 'WON',
+        delivery: wonDelivery,
+        message: 'Entrega aceita com sucesso.',
+      };
+    }
+
+    // 0 lines returned: Another concurrent transaction already won or delivery changed state
+    const freshDelivery = await this.getDeliveryById(deliveryId);
+    if (freshDelivery?.status === 'ACCEPTED' && freshDelivery.accepted_driver_id === driver.id) {
+      return {
+        status: 'ALREADY_WON',
+        delivery: freshDelivery,
+        message: 'Esta entrega já está confirmada para você.',
+      };
+    }
+
+    if (freshDelivery?.status === 'ACCEPTED') {
+      return {
+        status: 'LOST',
+        message: 'Esta entrega já foi aceita por outro motorista.',
+      };
+    }
+
+    return {
+      status: 'REJECTED',
+      error: 'DELIVERY_UNAVAILABLE',
+      message: 'Esta entrega não está mais disponível.',
+    };
+  }
+
+  /**
+   * Helper to invalidate/update inline keyboard on other drivers' messages (UX improvement)
+   */
+  private async invalidateOtherOffers(deliveryId: number, winningDriverId: number) {
+    try {
+      const otherDispatches = await db
+        .select()
+        .from(deliveryOfferDispatches)
+        .where(
+          and(
+            eq(deliveryOfferDispatches.delivery_id, deliveryId),
+            eq(deliveryOfferDispatches.status, 'SENT')
+          )
+        );
+
+      for (const disp of otherDispatches) {
+        if (disp.driver_id !== winningDriverId && disp.telegram_message_id) {
+          await telegramBot.invalidateOfferMarkup(disp.telegram_chat_id, disp.telegram_message_id).catch(() => {});
+        }
+      }
+    } catch (err: any) {
+      console.warn('[DeliveryService.invalidateOtherOffers] Error:', err.message);
+    }
+  }
 }
 
 export const deliveryService = new DeliveryService();
+telegramBot.setDeliveryService(deliveryService);

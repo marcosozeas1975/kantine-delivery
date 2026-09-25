@@ -1,9 +1,14 @@
 import { db } from '../db/index.ts';
-import { drivers, driverEvents } from '../db/schema.ts';
-import { eq, desc } from 'drizzle-orm';
-import { Driver, DriverStatus, VehicleType, DriverEventType } from './types.ts';
+import { drivers, driverEvents, driverInvitations, driverReferrals } from '../db/schema.ts';
+import { eq, desc, sql } from 'drizzle-orm';
+import { Driver, DriverStatus, VehicleType, DriverEventType, PixKeyType, DriverInvitation } from './types.ts';
 import { canReceiveDeliveryOffers } from './eligibility.ts';
 import { telegramBot } from './telegramBot.ts';
+import {
+  validateAndNormalizePix,
+  maskPixKey,
+  normalizeGeneralPhone,
+} from './pixValidation.ts';
 
 export class DriverService {
   public async getDrivers(statusFilter?: DriverStatus): Promise<Driver[]> {
@@ -54,7 +59,10 @@ export class DriverService {
     name: string;
     phone: string;
     vehicle_type: string;
-    pix_key: string;
+    pix_key?: string;
+    pix_key_type?: PixKeyType;
+    pix_key_value?: string;
+    invite_token?: string;
   }): Promise<Driver> {
     // Validate vehicle type
     const validVehicles: VehicleType[] = [
@@ -69,7 +77,27 @@ export class DriverService {
       throw new Error(`INVALID_VEHICLE_TYPE: ${data.vehicle_type}`);
     }
 
-    if (!data.name || !data.phone || !data.pix_key || !data.telegram_user_id) {
+    if (!data.name || !data.phone || !data.telegram_user_id) {
+      throw new Error('MISSING_REQUIRED_FIELDS');
+    }
+
+    // Determine Pix key type and canonical value
+    let canonicalPixType: PixKeyType = 'REQUIRES_UPDATE';
+    let canonicalPixValue: string = '';
+
+    if (data.pix_key_type) {
+      const val = data.pix_key_value || data.pix_key || '';
+      const validation = validateAndNormalizePix(data.pix_key_type, val);
+      if (!validation.isValid) {
+        throw new Error(`INVALID_PIX_KEY: ${validation.error}`);
+      }
+      canonicalPixType = data.pix_key_type;
+      canonicalPixValue = validation.canonical!;
+    } else if (data.pix_key) {
+      // Legacy M1 fallback: explicitly marked as REQUIRES_UPDATE per M1.1 Section 13
+      canonicalPixValue = data.pix_key.trim();
+      canonicalPixType = 'REQUIRES_UPDATE';
+    } else {
       throw new Error('MISSING_REQUIRED_FIELDS');
     }
 
@@ -88,7 +116,9 @@ export class DriverService {
           name: data.name.trim(),
           phone: data.phone.trim(),
           vehicle_type: data.vehicle_type,
-          pix_key: data.pix_key.trim(),
+          pix_key: canonicalPixValue,
+          pix_key_type: canonicalPixType,
+          pix_key_value: canonicalPixValue,
           status: 'PENDING',
         })
         .returning();
@@ -99,7 +129,59 @@ export class DriverService {
       await db.insert(driverEvents).values({
         driver_id: newDriver.id,
         event_type: 'DRIVER_REGISTERED',
+        actor_type: 'DRIVER',
+        actor_id: data.telegram_user_id,
       });
+
+      // Link any matching driver invitation
+      try {
+        if (data.invite_token) {
+          await db
+            .update(driverInvitations)
+            .set({
+              status: 'COMPLETED',
+              telegram_user_id: data.telegram_user_id,
+              driver_id: newDriver.id,
+              completed_at: new Date(),
+            })
+            .where(eq(driverInvitations.token, data.invite_token));
+        } else if (data.phone) {
+          await db
+            .update(driverInvitations)
+            .set({
+              status: 'COMPLETED',
+              telegram_user_id: data.telegram_user_id,
+              driver_id: newDriver.id,
+              completed_at: new Date(),
+            })
+            .where(eq(driverInvitations.phone, data.phone.trim()));
+        }
+      } catch (invErr: any) {
+        console.warn('[DriverService] Note: Failed to link invitation:', invErr?.message);
+      }
+
+      // Link any matching driver referral (M1.2)
+      try {
+        if (data.invite_token) {
+          const cleanToken = data.invite_token.replace(/^invite_/, '').trim();
+          await db
+            .update(driverReferrals)
+            .set({
+              resulting_driver_id: newDriver.id,
+              updated_at: new Date(),
+            })
+            .where(eq(driverReferrals.invitation_token, cleanToken));
+        }
+        await db
+          .update(driverReferrals)
+          .set({
+            resulting_driver_id: newDriver.id,
+            updated_at: new Date(),
+          })
+          .where(eq(driverReferrals.invited_telegram_user_id, data.telegram_user_id));
+      } catch (refErr: any) {
+        console.warn('[DriverService] Note: Failed to link referral:', refErr?.message);
+      }
 
       return newDriver;
     } catch (err: any) {
@@ -110,6 +192,192 @@ export class DriverService {
       console.error('[DriverService.registerDriver failed]', err);
       throw new Error('Failed to register driver', { cause: err });
     }
+  }
+
+  /**
+   * M1.1: Updates driver profile (name, phone, vehicle_type, pix)
+   * Strictly protects id, telegram_user_id, telegram_chat_id, status, created_at.
+   * Records atomic DRIVER_PROFILE_UPDATED events in driver_events.
+   */
+  public async updateDriverProfile(
+    driverId: number,
+    updates: {
+      name?: string;
+      phone?: string;
+      vehicle_type?: string;
+      pix_key_type?: string;
+      pix_key_value?: string;
+      pix?: {
+        pix_key_type: PixKeyType;
+        pix_key_value: string;
+      };
+      status?: any;
+      id?: any;
+      telegram_user_id?: any;
+      telegram_chat_id?: any;
+      created_at?: any;
+    },
+    context: {
+      actor_type: 'DRIVER' | 'ADMIN';
+      actor_id?: string;
+    }
+  ): Promise<Driver> {
+    // 1. Strictly forbid editing protected fields
+    if (
+      updates.status !== undefined ||
+      updates.id !== undefined ||
+      updates.telegram_user_id !== undefined ||
+      updates.telegram_chat_id !== undefined ||
+      updates.created_at !== undefined
+    ) {
+      throw new Error('PROTECTED_FIELDS_CANNOT_BE_MODIFIED');
+    }
+
+    const driver = await this.getDriverById(driverId);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    const setPayload: any = {
+      updated_at: new Date(),
+    };
+    const auditEventsToInsert: any[] = [];
+
+    // 2. Validate and set Name
+    if (updates.name !== undefined) {
+      const trimmedName = updates.name.trim();
+      if (trimmedName.length < 2) {
+        throw new Error('INVALID_NAME: O nome deve ter pelo menos 2 caracteres.');
+      }
+      if (trimmedName !== driver.name) {
+        setPayload.name = trimmedName;
+        auditEventsToInsert.push({
+          driver_id: driverId,
+          event_type: 'DRIVER_PROFILE_UPDATED',
+          actor_type: context.actor_type,
+          actor_id: context.actor_id || null,
+          field_changed: 'name',
+          old_value: driver.name,
+          new_value: trimmedName,
+        });
+      }
+    }
+
+    // 3. Validate and set Phone
+    if (updates.phone !== undefined) {
+      const cleanedDigits = updates.phone.replace(/\D/g, '');
+      if (cleanedDigits.length < 8) {
+        throw new Error('INVALID_PHONE: Telefone inválido.');
+      }
+      const formattedPhone = normalizeGeneralPhone(updates.phone);
+      if (formattedPhone !== driver.phone) {
+        setPayload.phone = formattedPhone;
+        auditEventsToInsert.push({
+          driver_id: driverId,
+          event_type: 'DRIVER_PROFILE_UPDATED',
+          actor_type: context.actor_type,
+          actor_id: context.actor_id || null,
+          field_changed: 'phone',
+          old_value: driver.phone,
+          new_value: formattedPhone,
+        });
+      }
+    }
+
+    // 4. Validate and set Vehicle Type
+    if (updates.vehicle_type !== undefined) {
+      const validVehicles: VehicleType[] = [
+        'CAR_HATCH',
+        'CAR_SEDAN',
+        'CAR_SW',
+        'MOTO_WITH_BAG',
+        'MOTO_WITHOUT_BAG',
+        'OTHER',
+      ];
+      if (!validVehicles.includes(updates.vehicle_type as VehicleType)) {
+        throw new Error(`INVALID_VEHICLE_TYPE: ${updates.vehicle_type}`);
+      }
+      if (updates.vehicle_type !== driver.vehicle_type) {
+        setPayload.vehicle_type = updates.vehicle_type;
+        auditEventsToInsert.push({
+          driver_id: driverId,
+          event_type: 'DRIVER_PROFILE_UPDATED',
+          actor_type: context.actor_type,
+          actor_id: context.actor_id || null,
+          field_changed: 'vehicle_type',
+          old_value: driver.vehicle_type,
+          new_value: updates.vehicle_type,
+        });
+      }
+    }
+
+    // 5. Validate and set Pix (Atomic unit: type + value)
+    const targetPixType = updates.pix?.pix_key_type || updates.pix_key_type;
+    const targetPixValue = updates.pix?.pix_key_value || updates.pix_key_value;
+
+    if (targetPixType !== undefined || targetPixValue !== undefined) {
+      if (!targetPixType || !targetPixValue) {
+        throw new Error('INVALID_PIX_UPDATE: Tipo e valor Pix devem ser atualizados conjuntamente.');
+      }
+
+      const valRes = validateAndNormalizePix(targetPixType as PixKeyType, targetPixValue);
+      if (!valRes.isValid) {
+        throw new Error(valRes.error || 'INVALID_PIX_KEY');
+      }
+
+      const canonicalVal = valRes.canonical!;
+      const canonicalType = targetPixType as PixKeyType;
+
+      const isPixDifferent =
+        driver.pix_key_type !== canonicalType ||
+        (driver.pix_key_value || driver.pix_key) !== canonicalVal;
+
+      if (isPixDifferent) {
+        const oldMasked = maskPixKey(driver.pix_key_type, driver.pix_key_value || driver.pix_key);
+        const newMasked = maskPixKey(canonicalType, canonicalVal);
+
+        setPayload.pix_key_type = canonicalType;
+        setPayload.pix_key_value = canonicalVal;
+        setPayload.pix_key = canonicalVal;
+
+        auditEventsToInsert.push({
+          driver_id: driverId,
+          event_type: 'DRIVER_PROFILE_UPDATED',
+          actor_type: context.actor_type,
+          actor_id: context.actor_id || null,
+          field_changed: 'pix',
+          old_value: `${driver.pix_key_type}:${oldMasked}`,
+          new_value: `${canonicalType}:${newMasked}`,
+          details: JSON.stringify({
+            old_pix_type: driver.pix_key_type,
+            old_pix_value_masked: oldMasked,
+            new_pix_type: canonicalType,
+            new_pix_value_masked: newMasked,
+          }),
+        });
+      }
+    }
+
+    // If nothing changed, return current driver
+    if (Object.keys(setPayload).length === 1 && setPayload.updated_at) {
+      return driver;
+    }
+
+    // Perform database update
+    const updated = await db
+      .update(drivers)
+      .set(setPayload)
+      .where(eq(drivers.id, driverId))
+      .returning();
+
+    const updatedDriver = updated[0] as Driver;
+
+    // Record all audit events
+    for (const event of auditEventsToInsert) {
+      await db.insert(driverEvents).values(event);
+    }
+
+    return updatedDriver;
   }
 
   public async approveDriver(id: number): Promise<Driver> {
@@ -261,6 +529,151 @@ export class DriverService {
 
   public checkEligibility(driver: Driver): boolean {
     return canReceiveDeliveryOffers(driver);
+  }
+
+  public async createDriverInvitation(data: {
+    name?: string;
+    phone?: string;
+    vehicle_type?: string;
+    created_by?: string;
+  }): Promise<DriverInvitation> {
+    try {
+      const randomPart = Math.random().toString(36).substring(2, 8);
+      const timePart = Date.now().toString(36);
+      const token = `inv_${timePart}_${randomPart}`;
+
+      const inserted = await db
+        .insert(driverInvitations)
+        .values({
+          token,
+          name: data.name?.trim() || null,
+          phone: data.phone?.trim() || null,
+          vehicle_type: data.vehicle_type || null,
+          status: 'PENDING',
+          created_by: data.created_by || 'ADMIN',
+        })
+        .returning();
+
+      return inserted[0] as DriverInvitation;
+    } catch (err: any) {
+      console.error('[DriverService.createDriverInvitation failed]', err);
+      throw new Error('Failed to create driver invitation', { cause: err });
+    }
+  }
+
+  public async getDriverInvitations(): Promise<DriverInvitation[]> {
+    try {
+      return (await db
+        .select()
+        .from(driverInvitations)
+        .orderBy(desc(driverInvitations.created_at))) as DriverInvitation[];
+    } catch (err: any) {
+      console.error('[DriverService.getDriverInvitations failed]', err);
+      throw new Error('Failed to retrieve driver invitations', { cause: err });
+    }
+  }
+
+  public async getInviteByToken(token: string): Promise<DriverInvitation | null> {
+    try {
+      const results = await db
+        .select()
+        .from(driverInvitations)
+        .where(eq(driverInvitations.token, token));
+      return (results[0] as DriverInvitation) || null;
+    } catch (err: any) {
+      console.error(`[DriverService.getInviteByToken failed for ${token}]`, err);
+      return null;
+    }
+  }
+
+  public async cancelDriverInvitation(id: number): Promise<boolean> {
+    try {
+      await db
+        .update(driverInvitations)
+        .set({ status: 'CANCELLED' })
+        .where(eq(driverInvitations.id, id));
+      return true;
+    } catch (err: any) {
+      console.error(`[DriverService.cancelDriverInvitation failed for #${id}]`, err);
+      return false;
+    }
+  }
+
+  /**
+   * M4.1 PARTE A: Relatório de Auditoria de Veículos dos Motoristas de Indicação (Seção 7)
+   */
+  public async getReferralVehicleAudit(): Promise<{
+    driver_id: number;
+    driver_name: string;
+    driver_phone: string;
+    vehicle_type: VehicleType;
+    driver_status: string;
+    driver_created_at: Date;
+    referral_id: number;
+    referred_name: string;
+    referred_phone: string;
+    referred_by_driver_id: number;
+    indicator_name: string | null;
+    indicator_vehicle_type: string | null;
+    is_potentially_affected: boolean;
+    audit_note: string;
+  }[]> {
+    const referralsWithDrivers = await db
+      .select({
+        referral_id: driverReferrals.id,
+        referred_name: driverReferrals.referred_name,
+        referred_phone: driverReferrals.referred_phone,
+        referred_by_driver_id: driverReferrals.referred_by_driver_id,
+        resulting_driver_id: driverReferrals.resulting_driver_id,
+        referral_created_at: driverReferrals.created_at,
+      })
+      .from(driverReferrals)
+      .where(sql`${driverReferrals.resulting_driver_id} IS NOT NULL`);
+
+    if (referralsWithDrivers.length === 0) return [];
+
+    const driverIds = Array.from(
+      new Set(
+        referralsWithDrivers
+          .map((r) => r.resulting_driver_id!)
+          .concat(referralsWithDrivers.map((r) => r.referred_by_driver_id))
+      )
+    );
+
+    const driverRows = await db
+      .select()
+      .from(drivers)
+      .where(sql`${drivers.id} IN (${sql.join(driverIds.map((id) => sql`${id}`), sql`, `)})`);
+
+    const driverMap = new Map<number, Driver>();
+    for (const d of driverRows) {
+      driverMap.set(d.id, d as Driver);
+    }
+
+    return referralsWithDrivers.map((ref) => {
+      const driver = driverMap.get(ref.resulting_driver_id!)!;
+      const indicator = driverMap.get(ref.referred_by_driver_id);
+      const isPotentiallyAffected = driver?.vehicle_type === 'CAR_SEDAN';
+
+      return {
+        driver_id: driver?.id || ref.resulting_driver_id!,
+        driver_name: driver?.name || ref.referred_name,
+        driver_phone: driver?.phone || ref.referred_phone,
+        vehicle_type: (driver?.vehicle_type || 'CAR_SEDAN') as VehicleType,
+        driver_status: driver?.status || 'PENDING',
+        driver_created_at: driver?.created_at || new Date(),
+        referral_id: ref.referral_id,
+        referred_name: ref.referred_name,
+        referred_phone: ref.referred_phone,
+        referred_by_driver_id: ref.referred_by_driver_id,
+        indicator_name: indicator?.name || null,
+        indicator_vehicle_type: indicator?.vehicle_type || null,
+        is_potentially_affected: isPotentiallyAffected,
+        audit_note: isPotentiallyAffected
+          ? 'Origem: indicação. Veículo atribuído como CAR_SEDAN. Recomendada conferência administrativa com o motorista.'
+          : 'Veículo compatível ou com escolha explícita.',
+      };
+    });
   }
 }
 
