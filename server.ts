@@ -362,6 +362,16 @@ app.post('/api/admin/telegram/simulate-update', requireAdminAuth, async (req: Au
   }
 });
 
+// Telegram audit/test inspection endpoints
+app.get('/api/admin/telegram/recent-messages', requireAdminAuth, (_req: AuthRequest, res) => {
+  res.json(telegramBot.getRecentDispatches());
+});
+
+app.post('/api/admin/telegram/clear-recent-messages', requireAdminAuth, (_req: AuthRequest, res) => {
+  telegramBot.clearRecentDispatches();
+  res.json({ success: true });
+});
+
 // ==========================================
 // M2 — Delivery Management API Endpoints
 // ==========================================
@@ -741,7 +751,7 @@ app.post('/api/admin/routes/:id/accept', requireAdminAuth, async (req: AuthReque
 // ==========================================
 
 // M4: Chegada na Coleta (ACCEPTED -> ARRIVED_PICKUP)
-app.post('/api/admin/routes/:id/arrived-pickup', async (req, res) => {
+app.post('/api/admin/routes/:id/arrived-pickup', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
@@ -749,11 +759,11 @@ app.post('/api/admin/routes/:id/arrived-pickup', async (req, res) => {
       return res.status(404).json({ error: 'Route not found' });
     }
 
-    const driverId = req.body.driver_id ? parseInt(req.body.driver_id, 10) : route.accepted_driver_id;
-    if (!driverId) {
-      return res.status(400).json({ error: 'Missing driver_id' });
+    if (!route.accepted_driver_id) {
+      return res.status(400).json({ error: 'ROUTE_NOT_ACCEPTED: Rota ainda não possui motorista alocado' });
     }
 
+    const driverId = route.accepted_driver_id;
     const updated = await routeService.markArrivedPickup(routeId, { driverId });
     res.json({ success: true, route: updated });
   } catch (err: any) {
@@ -763,7 +773,7 @@ app.post('/api/admin/routes/:id/arrived-pickup', async (req, res) => {
 });
 
 // M4: Pedidos Coletados (ARRIVED_PICKUP -> PICKED_UP)
-app.post('/api/admin/routes/:id/picked-up', async (req, res) => {
+app.post('/api/admin/routes/:id/picked-up', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
@@ -771,11 +781,11 @@ app.post('/api/admin/routes/:id/picked-up', async (req, res) => {
       return res.status(404).json({ error: 'Route not found' });
     }
 
-    const driverId = req.body.driver_id ? parseInt(req.body.driver_id, 10) : route.accepted_driver_id;
-    if (!driverId) {
-      return res.status(400).json({ error: 'Missing driver_id' });
+    if (!route.accepted_driver_id) {
+      return res.status(400).json({ error: 'ROUTE_NOT_ACCEPTED: Rota ainda não possui motorista alocado' });
     }
 
+    const driverId = route.accepted_driver_id;
     const updated = await routeService.markPickedUp(routeId, { driverId });
     res.json({ success: true, route: updated });
   } catch (err: any) {
@@ -785,7 +795,7 @@ app.post('/api/admin/routes/:id/picked-up', async (req, res) => {
 });
 
 // M4: Iniciar Rota (PICKED_UP -> IN_TRANSIT)
-app.post('/api/admin/routes/:id/start', async (req, res) => {
+app.post('/api/admin/routes/:id/start', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
@@ -793,11 +803,11 @@ app.post('/api/admin/routes/:id/start', async (req, res) => {
       return res.status(404).json({ error: 'Route not found' });
     }
 
-    const driverId = req.body.driver_id ? parseInt(req.body.driver_id, 10) : route.accepted_driver_id;
-    if (!driverId) {
-      return res.status(400).json({ error: 'Missing driver_id' });
+    if (!route.accepted_driver_id) {
+      return res.status(400).json({ error: 'ROUTE_NOT_ACCEPTED: Rota ainda não possui motorista alocado' });
     }
 
+    const driverId = route.accepted_driver_id;
     const result = await routeService.startRoute(routeId, { driverId });
     res.json({ success: true, ...result });
   } catch (err: any) {
@@ -807,7 +817,7 @@ app.post('/api/admin/routes/:id/start', async (req, res) => {
 });
 
 // M4: Entrega Presencial - Validar PIN
-app.post('/api/admin/routes/stops/:id/deliver-pin', async (req, res) => {
+app.post('/api/admin/routes/stops/:id/deliver-pin', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const stopId = parseInt(req.params.id, 10);
     const stop = await routeService.getStopById(stopId);
@@ -816,11 +826,11 @@ app.post('/api/admin/routes/stops/:id/deliver-pin', async (req, res) => {
     }
 
     const route = await routeService.getRouteById(stop.route_id);
-    const driverId = req.body.driver_id ? parseInt(req.body.driver_id, 10) : route?.accepted_driver_id;
-    if (!driverId) {
-      return res.status(400).json({ error: 'Missing driver_id' });
+    if (!route?.accepted_driver_id) {
+      return res.status(400).json({ error: 'ROUTE_NOT_ACCEPTED: Rota ainda não possui motorista alocado' });
     }
 
+    const driverId = route.accepted_driver_id;
     const { pin } = req.body;
     const result = await routeService.deliverStopWithPin(stopId, pin, { driverId });
     if (!result.success) {
@@ -834,7 +844,7 @@ app.post('/api/admin/routes/stops/:id/deliver-pin', async (req, res) => {
 });
 
 // M4: Entrega Sem Contato - Foto
-app.post('/api/admin/routes/stops/:id/deliver-photo', async (req, res) => {
+app.post('/api/admin/routes/stops/:id/deliver-photo', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const stopId = parseInt(req.params.id, 10);
     const stop = await routeService.getStopById(stopId);
@@ -843,11 +853,11 @@ app.post('/api/admin/routes/stops/:id/deliver-photo', async (req, res) => {
     }
 
     const route = await routeService.getRouteById(stop.route_id);
-    const driverId = req.body.driver_id ? parseInt(req.body.driver_id, 10) : route?.accepted_driver_id;
-    if (!driverId) {
-      return res.status(400).json({ error: 'Missing driver_id' });
+    if (!route?.accepted_driver_id) {
+      return res.status(400).json({ error: 'ROUTE_NOT_ACCEPTED: Rota ainda não possui motorista alocado' });
     }
 
+    const driverId = route.accepted_driver_id;
     const { proof_reference } = req.body;
     const result = await routeService.deliverStopWithPhoto(stopId, proof_reference, { driverId });
     res.json(result);
@@ -858,7 +868,7 @@ app.post('/api/admin/routes/stops/:id/deliver-photo', async (req, res) => {
 });
 
 // M4: Registrar Incidente na Parada
-app.post('/api/admin/routes/stops/:id/incident', async (req, res) => {
+app.post('/api/admin/routes/stops/:id/incident', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const stopId = parseInt(req.params.id, 10);
     const stop = await routeService.getStopById(stopId);
@@ -867,11 +877,11 @@ app.post('/api/admin/routes/stops/:id/incident', async (req, res) => {
     }
 
     const route = await routeService.getRouteById(stop.route_id);
-    const driverId = req.body.driver_id ? parseInt(req.body.driver_id, 10) : route?.accepted_driver_id;
-    if (!driverId) {
-      return res.status(400).json({ error: 'Missing driver_id' });
+    if (!route?.accepted_driver_id) {
+      return res.status(400).json({ error: 'ROUTE_NOT_ACCEPTED: Rota ainda não possui motorista alocado' });
     }
 
+    const driverId = route.accepted_driver_id;
     const { incident_type, incident_note } = req.body;
     const result = await routeService.reportStopIncident(stopId, { incident_type, incident_note }, { driverId });
     res.json(result);
@@ -1199,20 +1209,20 @@ app.get('/api/driver/routes/:id', async (req, res) => {
 });
 
 // Authorized Driver Route Navigation Links Endpoint (M4.3)
-app.get('/api/driver/routes/:id/navigation', async (req, res) => {
+app.get('/api/driver/routes/:id/navigation', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
-    const driverIdHeader = req.headers['x-driver-id'] as string;
-    const driverIdQuery = req.query.driver_id as string;
-    const telegramUserId = (req.query.telegram_user_id as string) || (req.headers['x-telegram-user-id'] as string);
-
-    const driverId = driverIdHeader ? parseInt(driverIdHeader, 10) : (driverIdQuery ? parseInt(driverIdQuery, 10) : undefined);
-
-    if (!driverId && !telegramUserId) {
-      return res.status(401).json({ error: 'MISSING_DRIVER_IDENTIFIER' });
+    const route = await routeService.getRouteById(routeId);
+    if (!route) {
+      return res.status(404).json({ error: 'Route not found' });
     }
 
-    const navLinks = await routeService.getRouteNavigation(routeId, { driverId, telegramUserId });
+    if (!route.accepted_driver_id) {
+      return res.status(403).json({ error: 'FORBIDDEN_PRE_ACCEPTANCE' });
+    }
+
+    const driverId = route.accepted_driver_id;
+    const navLinks = await routeService.getRouteNavigation(routeId, { driverId });
     res.json(navLinks);
   } catch (err: any) {
     if (err.message === 'ROUTE_NOT_FOUND') {

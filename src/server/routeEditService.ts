@@ -49,28 +49,6 @@ export class RouteEditService {
     const status = existingRoute.status;
     const diff_items: RouteEditAnalysis['diff_items'] = [];
     const changed_fields: string[] = [];
-
-    // Se estiver em DRAFT ou OFFERED, tem classificação própria
-    if (status === 'DRAFT') {
-      return {
-        change_type: 'DRAFT_EDIT',
-        is_material: false,
-        changed_fields: ['draft_details'],
-        diff_summary: 'Edição de rascunho',
-        diff_items: [],
-      };
-    }
-
-    if (status === 'OFFERED') {
-      return {
-        change_type: 'OFFERED_REOFFER',
-        is_material: false,
-        changed_fields: ['offered_details'],
-        diff_summary: 'Edição de oferta publicada (requer novo envio aos motoristas)',
-        diff_items: [],
-      };
-    }
-
     let is_material = false;
 
     // 1. Verificar alteração no ponto de coleta (Material)
@@ -254,7 +232,14 @@ export class RouteEditService {
       }
     }
 
-    const change_type: RouteChangeType = is_material ? 'MATERIAL' : 'OPERATIONAL';
+    let change_type: RouteChangeType = is_material ? 'MATERIAL' : 'OPERATIONAL';
+    if (status === 'DRAFT') {
+      change_type = 'DRAFT_EDIT';
+      is_material = false;
+    } else if (status === 'OFFERED') {
+      change_type = 'OFFERED_REOFFER';
+      is_material = false;
+    }
 
     // Construir resumo legível
     const summaryLines = diff_items.map((item) => {

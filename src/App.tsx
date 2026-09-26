@@ -55,6 +55,8 @@ import {
   signOut,
   User,
 } from 'firebase/auth';
+import { RouteEditModal } from './components/RouteEditModal.tsx';
+import { RouteUpdatesHistory } from './components/RouteUpdatesHistory.tsx';
 
 // Types for Driver (M1 & M1.1)
 type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED';
@@ -683,6 +685,9 @@ export default function App() {
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [selectedRouteDetails, setSelectedRouteDetails] = useState<RouteDetails | null>(null);
   const [loadingRouteDetails, setLoadingRouteDetails] = useState<boolean>(false);
+
+  // M4.4 Route Edit State
+  const [editingRouteId, setEditingRouteId] = useState<number | null>(null);
 
   // Pre-Publish Summary Modal State (Seção 25)
   const [routeToPublish, setRouteToPublish] = useState<Route | null>(null);
@@ -2390,6 +2395,31 @@ export default function App() {
                               >
                                 Detalhes
                               </button>
+
+                              {/* M4.4: Botão Editar (A1) */}
+                              {['DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(route.status) ? (
+                                <button
+                                  onClick={() => setEditingRouteId(route.id)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold transition-colors flex items-center gap-1 whitespace-nowrap shadow-2xs"
+                                  title="Editar rota (M4.4)"
+                                >
+                                  <Pencil className="w-3 h-3 text-amber-700" />
+                                  <span>Editar</span>
+                                </button>
+                              ) : (
+                                <button
+                                  disabled
+                                  className="px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-neutral-100 text-neutral-400 text-[11px] font-semibold cursor-not-allowed flex items-center gap-1 whitespace-nowrap"
+                                  title={
+                                    route.status === 'COMPLETED'
+                                      ? 'Rotas concluídas não podem ser alteradas (M4.4 Seção 21)'
+                                      : 'Rotas canceladas não podem ser alteradas (M4.4 Seção 22)'
+                                  }
+                                >
+                                  <Pencil className="w-3 h-3 opacity-40" />
+                                  <span>Editar</span>
+                                </button>
+                              )}
 
                               {route.status === 'DRAFT' && (
                                 <button
@@ -4495,12 +4525,35 @@ export default function App() {
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedRouteDetails(null)}
-                className="text-neutral-400 hover:text-neutral-700 text-xl font-semibold"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-2">
+                {['DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(selectedRouteDetails.route.status) ? (
+                  <button
+                    onClick={() => setEditingRouteId(selectedRouteDetails.route.id)}
+                    className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-colors flex items-center gap-1.5 shadow-2xs"
+                    title="Editar rota (M4.4)"
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Editar Rota</span>
+                  </button>
+                ) : (
+                  <span
+                    className="px-2.5 py-1 rounded-md text-[10px] font-medium bg-neutral-100 text-neutral-500 border border-neutral-200"
+                    title={
+                      selectedRouteDetails.route.status === 'COMPLETED'
+                        ? 'Rotas concluídas não podem ser alteradas (M4.4 Seção 21)'
+                        : 'Rotas canceladas não podem ser alteradas (M4.4 Seção 22)'
+                    }
+                  >
+                    Edição bloqueada ({selectedRouteDetails.route.status})
+                  </span>
+                )}
+                <button
+                  onClick={() => setSelectedRouteDetails(null)}
+                  className="text-neutral-400 hover:text-neutral-700 text-xl font-semibold p-1"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             {/* Stepper / Timeline Operacional (M4 Seção 26) */}
@@ -4855,6 +4908,14 @@ export default function App() {
               </div>
             )}
 
+            {/* M4.4: Histórico de Alterações e Versões da Rota (A6) */}
+            <div className="pt-2 border-t border-neutral-200">
+              <RouteUpdatesHistory
+                routeId={selectedRouteDetails.route.id}
+                getAuthHeaders={getAuthHeaders}
+              />
+            </div>
+
             {/* Audit Events */}
             <div>
               <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
@@ -4887,6 +4948,26 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ============================================================== */}
+      {/* MODAL: EDIÇÃO CONTROLADA E VERSIONAMENTO DE ROTA (M4.4)        */}
+      {/* ============================================================== */}
+      <RouteEditModal
+        routeId={editingRouteId}
+        isOpen={editingRouteId !== null}
+        onClose={() => setEditingRouteId(null)}
+        onSuccess={async (updatedRoute) => {
+          setSuccessMessage(
+            `✅ Rota #${updatedRoute.id} atualizada com sucesso para a versão v${updatedRoute.route_version}!`
+          );
+          await fetchRoutes();
+          if (selectedRouteDetails?.route.id === updatedRoute.id) {
+            openRouteDetails(updatedRoute.id);
+          }
+        }}
+        getAuthHeaders={getAuthHeaders}
+        locations={pickupLocations}
+      />
 
       {/* ============================================================== */}
       {/* SUBMODAL: VALIDAR PIN DA PARADA (M4)                           */}

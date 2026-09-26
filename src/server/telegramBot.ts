@@ -96,9 +96,25 @@ export class TelegramBotService {
   private deliveryService: any = null;
   private routeService: any = null;
   private referralService: any = null;
+  private recentDispatches: Array<{ chatId: string | number; text: string; markup?: any; timestamp: number }> = [];
 
   constructor() {
     this.updateTokenFromEnv();
+  }
+
+  public getRecentDispatches() {
+    return [...this.recentDispatches];
+  }
+
+  public clearRecentDispatches() {
+    this.recentDispatches = [];
+  }
+
+  private recordRecentDispatch(entry: { chatId: string | number; text: string; markup?: any; timestamp: number }) {
+    this.recentDispatches.push(entry);
+    if (this.recentDispatches.length > 200) {
+      this.recentDispatches.shift();
+    }
   }
 
   /**
@@ -161,6 +177,15 @@ export class TelegramBotService {
    * Never prints or leaks the token in logs or exceptions
    */
   private async callTelegramApi(method: string, body?: any, timeoutMs: number = 15000): Promise<any> {
+    if (method === 'sendMessage' && body?.chat_id) {
+      this.recordRecentDispatch({
+        chatId: body.chat_id,
+        text: body.text || '',
+        markup: body.reply_markup,
+        timestamp: Date.now(),
+      });
+    }
+
     if (body?.chat_id && isMockChatId(body.chat_id)) {
       return {
         message_id: Math.floor(100000 + Math.random() * 900000),
@@ -206,7 +231,7 @@ export class TelegramBotService {
   }
 
   public async sendMessage(chatId: string | number, text: string, extra: any = {}): Promise<boolean> {
-    if (!this.token) {
+    if (!this.token && !isMockChatId(chatId)) {
       console.warn(`[Telegram] Skipping message to chat ${chatId}: TELEGRAM_BOT_TOKEN is not configured.`);
       return false;
     }
@@ -450,7 +475,7 @@ export class TelegramBotService {
     route: Route,
     driverVehicle?: string
   ): Promise<{ success: boolean; errorCode?: string; messageId?: string }> {
-    if (!this.token) {
+    if (!this.token && !isMockChatId(chatId)) {
       return { success: false, errorCode: 'TELEGRAM_BOT_TOKEN_NOT_CONFIGURED' };
     }
 
@@ -535,7 +560,7 @@ export class TelegramBotService {
     chatId: string | number,
     route: Route
   ): Promise<boolean> {
-    if (!this.token) return false;
+    if (!this.token && !isMockChatId(chatId)) return false;
 
     const total = route.stops?.length || 0;
     const pickupNeighborhood = route.pickup_neighborhood_snapshot?.trim();
@@ -703,7 +728,7 @@ export class TelegramBotService {
     chatId: string | number,
     routeId: number
   ): Promise<boolean> {
-    if (!this.token) return false;
+    if (!this.token && !isMockChatId(chatId)) return false;
     const text = `❌ *ROTA #${routeId} CANCELADA*`;
     return this.sendMessage(chatId, text);
   }
@@ -718,7 +743,7 @@ export class TelegramBotService {
     newVersion: number,
     diffSummary: string
   ): Promise<boolean> {
-    if (!this.token) return false;
+    if (!this.token && !isMockChatId(chatId)) return false;
 
     const navLinks = generateRouteNavigationLinks(route);
 
@@ -773,7 +798,7 @@ export class TelegramBotService {
     updateId: number,
     diffSummary: string
   ): Promise<boolean> {
-    if (!this.token) return false;
+    if (!this.token && !isMockChatId(chatId)) return false;
 
     const text =
       `⚠️ *ALTERAÇÃO IMPORTANTE — ROTA #${route.id}*\n\n` +
@@ -809,7 +834,7 @@ export class TelegramBotService {
     route: Route,
     accepted: boolean
   ): Promise<boolean> {
-    if (!this.token) return false;
+    if (!this.token && !isMockChatId(chatId)) return false;
 
     if (accepted) {
       const navLinks = generateRouteNavigationLinks(route);
@@ -855,7 +880,8 @@ export class TelegramBotService {
     chatId: string | number,
     messageId: string | number
   ): Promise<boolean> {
-    if (!this.token || !messageId) return false;
+    if (!this.token && !isMockChatId(chatId)) return false;
+    if (!messageId) return false;
     try {
       await this.callTelegramApi('editMessageReplyMarkup', {
         chat_id: chatId,
