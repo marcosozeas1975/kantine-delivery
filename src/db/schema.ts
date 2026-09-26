@@ -207,6 +207,11 @@ export const routes = pgTable(
     suggested_driver_fee: numeric('suggested_driver_fee', { precision: 10, scale: 2 }),
     final_driver_fee: numeric('final_driver_fee', { precision: 10, scale: 2 }),
     override_reason: text('override_reason'),
+    // M4.4 Versionamento e Edição Controlada
+    route_version: integer('route_version').default(1).notNull(),
+    driver_acknowledged_version: integer('driver_acknowledged_version').default(1).notNull(),
+    change_pending_driver_approval: boolean('change_pending_driver_approval').default(false).notNull(),
+    pending_material_change: text('pending_material_change'),
     created_at: timestamp('created_at').defaultNow().notNull(),
     offered_at: timestamp('offered_at'),
   },
@@ -296,11 +301,43 @@ export const routeOfferDispatches = pgTable(
 export const routeEvents = pgTable('route_events', {
   id: serial('id').primaryKey(),
   route_id: integer('route_id').references(() => routes.id, { onDelete: 'cascade' }).notNull(),
-  event_type: text('event_type').notNull(), // ROUTE_CREATED | ROUTE_OFFERED | ROUTE_ACCEPTED | ROUTE_CANCELLED | ROUTE_STOP_CREATED | ROUTE_STOP_REORDERED
+  event_type: text('event_type').notNull(), // ROUTE_CREATED | ROUTE_OFFERED | ROUTE_ACCEPTED | ROUTE_CANCELLED | ROUTE_STOP_CREATED | ROUTE_STOP_REORDERED | ROUTE_UPDATED | ROUTE_CHANGE_ACCEPTED | ROUTE_CHANGE_REJECTED
   timestamp: timestamp('timestamp').defaultNow().notNull(),
   actor: text('actor'),
   details: text('details'),
 });
+
+// Route Updates & Version Snapshots Table (M4.4 Edição Controlada e Versionamento)
+export const routeUpdates = pgTable(
+  'route_updates',
+  {
+    id: serial('id').primaryKey(),
+    route_id: integer('route_id').references(() => routes.id, { onDelete: 'cascade' }).notNull(),
+    old_version: integer('old_version').notNull(),
+    new_version: integer('new_version').notNull(),
+    change_type: text('change_type').notNull(), // OPERATIONAL | MATERIAL | DRAFT_EDIT | OFFERED_REOFFER
+    changed_fields: text('changed_fields').notNull(), // JSON string e.g. ["destination_address"]
+    diff_summary: text('diff_summary').notNull(), // Resumo legível das diferenças
+    previous_snapshot: text('previous_snapshot').notNull(), // JSON do estado anterior da rota e paradas
+    new_snapshot: text('new_snapshot'), // JSON do estado resultante após alteração (ou null se pendente)
+    pending_proposal: text('pending_proposal'), // Proposta pendente se alteração material
+    actor: text('actor').notNull(), // Identificação do autor da alteração
+    driver_approval_status: text('driver_approval_status').default('NOT_REQUIRED').notNull(), // NOT_REQUIRED | PENDING | ACCEPTED | REJECTED
+    driver_decision_at: timestamp('driver_decision_at'),
+    driver_acknowledged_at: timestamp('driver_acknowledged_at'),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      'route_updates_change_type_check',
+      sql`${table.change_type} IN ('OPERATIONAL', 'MATERIAL', 'DRAFT_EDIT', 'OFFERED_REOFFER')`
+    ),
+    check(
+      'route_updates_approval_status_check',
+      sql`${table.driver_approval_status} IN ('NOT_REQUIRED', 'PENDING', 'ACCEPTED', 'REJECTED')`
+    ),
+  ]
+);
 
 // Driver Invitations Table (Convites de Motoristas para Telegram)
 export const driverInvitations = pgTable(

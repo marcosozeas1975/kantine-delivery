@@ -84,6 +84,105 @@ const VEHICLE_DISPLAY: Record<string, { label: string; icon: string }> = {
   OTHER: { label: 'OUTRO', icon: '🚚' },
 };
 
+const renderCompactVehicleBadges = (types: VehicleType[]) => {
+  if (!types || types.length === 0) {
+    return <span className="text-neutral-400 text-[11px]">—</span>;
+  }
+
+  // All 6 accepted: clean single-row presentation without redundant badges
+  if (types.length >= 6) {
+    return (
+      <div className="flex items-center gap-1" title="Todos os veículos aceitos (Carros, Motos e Outro)">
+        <span className="text-[10px] font-semibold px-2 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap">
+          🚗 CARROS (3)
+        </span>
+        <span className="text-[10px] font-semibold px-2 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap">
+          🏍️ MOTOS (2)
+        </span>
+        <span className="text-[10px] font-bold px-1.5 py-0.5 bg-neutral-200 text-neutral-700 rounded border border-neutral-300 whitespace-nowrap" title="Outro">
+          +1
+        </span>
+      </div>
+    );
+  }
+
+  const badges: { key: string; label: string; icon: string; title: string }[] = [];
+
+  const cars = types.filter((t) => t.startsWith('CAR_'));
+  if (cars.length === 3) {
+    badges.push({
+      key: 'cars-all',
+      icon: '🚗',
+      label: 'CARROS (3)',
+      title: 'Carro Hatch, Sedan e SW',
+    });
+  } else {
+    for (const c of cars) {
+      badges.push({
+        key: c,
+        icon: VEHICLE_DISPLAY[c]?.icon || '🚗',
+        label: VEHICLE_DISPLAY[c]?.label || 'CARRO',
+        title: VEHICLE_DISPLAY[c]?.label || c,
+      });
+    }
+  }
+
+  const motos = types.filter((t) => t.startsWith('MOTO_'));
+  if (motos.length === 2) {
+    badges.push({
+      key: 'motos-all',
+      icon: '🏍️',
+      label: 'MOTOS (2)',
+      title: 'Moto com Bag e sem Bag',
+    });
+  } else {
+    for (const m of motos) {
+      badges.push({
+        key: m,
+        icon: VEHICLE_DISPLAY[m]?.icon || '🏍️',
+        label: VEHICLE_DISPLAY[m]?.label || 'MOTO',
+        title: VEHICLE_DISPLAY[m]?.label || m,
+      });
+    }
+  }
+
+  const others = types.filter((t) => !t.startsWith('CAR_') && !t.startsWith('MOTO_'));
+  for (const o of others) {
+    badges.push({
+      key: o,
+      icon: VEHICLE_DISPLAY[o]?.icon || '🚚',
+      label: VEHICLE_DISPLAY[o]?.label || 'OUTRO',
+      title: VEHICLE_DISPLAY[o]?.label || o,
+    });
+  }
+
+  const maxVisible = 2;
+  const visible = badges.slice(0, maxVisible);
+  const remaining = badges.length - maxVisible;
+
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {visible.map((b) => (
+        <span
+          key={b.key}
+          className="text-[10px] font-medium px-1.5 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap"
+          title={b.title}
+        >
+          {b.icon} {b.label}
+        </span>
+      ))}
+      {remaining > 0 && (
+        <span
+          className="text-[10px] font-bold px-1.5 py-0.5 bg-neutral-200 text-neutral-700 rounded border border-neutral-300 whitespace-nowrap cursor-help"
+          title={badges.slice(maxVisible).map((b) => `${b.label}: ${b.title}`).join(', ')}
+        >
+          +{remaining}
+        </span>
+      )}
+    </div>
+  );
+};
+
 interface Driver {
   id: number;
   telegram_user_id: string;
@@ -1883,7 +1982,7 @@ export default function App() {
       {/* HEADER                                                         */}
       {/* ============================================================== */}
       <header className="border-b border-neutral-200/80 bg-white/90 backdrop-blur sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+        <div className="w-full px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-orange-600 flex items-center justify-center text-white font-bold text-xl shadow-md shadow-orange-500/20">
               K
@@ -1950,7 +2049,7 @@ export default function App() {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-2 border-t border-neutral-100 pt-2">
+        <div className="w-full px-4 sm:px-6 flex items-center gap-2 border-t border-neutral-100 pt-2 overflow-x-auto">
           <button
             onClick={() => setActiveTab('ROUTES')}
             className={`flex items-center gap-2 px-4 py-2 border-b-2 text-xs sm:text-sm font-bold transition-colors ${
@@ -2067,7 +2166,7 @@ export default function App() {
       {/* GLOBAL TOAST ALERTS                                            */}
       {/* ============================================================== */}
       {errorMessage && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="w-full px-4 sm:px-6 mt-4">
           <div className="flex items-center justify-between p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold shadow-xs">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -2081,7 +2180,7 @@ export default function App() {
       )}
 
       {successMessage && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="w-full px-4 sm:px-6 mt-4">
           <div className="flex items-center justify-between p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shadow-xs">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2098,7 +2197,7 @@ export default function App() {
       {/* TAB 1: ROTAS MULTI-ENTREGA (M2.1)                              */}
       {/* ============================================================== */}
       {activeTab === 'ROUTES' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <main id="main-content" className="w-full px-4 sm:px-6 mt-6 space-y-6">
           {/* Action Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
@@ -2157,13 +2256,13 @@ export default function App() {
               <table className="w-full text-left text-xs">
                 <thead className="bg-neutral-50/80 border-b border-neutral-200 text-neutral-600 font-bold uppercase tracking-wider text-[10px]">
                   <tr>
-                    <th className="px-4 py-3">ID / Status</th>
+                    <th className="px-4 py-3 whitespace-nowrap">ID / Status</th>
                     <th className="px-4 py-3">Ponto de Coleta</th>
                     <th className="px-4 py-3">Paradas / Entregas</th>
-                    <th className="px-4 py-3">Prazo Final</th>
-                    <th className="px-4 py-3">Frete Total</th>
-                    <th className="px-4 py-3">Veículos Aceitos</th>
-                    <th className="px-4 py-3 text-right">Ações</th>
+                    <th className="px-4 py-3 whitespace-nowrap">Prazo Final</th>
+                    <th className="px-4 py-3 whitespace-nowrap">Frete Total</th>
+                    <th className="px-4 py-3 whitespace-nowrap">Veículos Aceitos</th>
+                    <th className="px-4 py-3 text-right whitespace-nowrap">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100">
@@ -2189,7 +2288,7 @@ export default function App() {
 
                       return (
                         <tr key={route.id} className="hover:bg-neutral-50/50 transition-colors">
-                          <td className="px-4 py-3.5">
+                          <td className="px-4 py-3.5 whitespace-nowrap">
                             <div className="font-mono font-bold text-sm text-neutral-900">
                               #{route.id}
                             </div>
@@ -2237,67 +2336,57 @@ export default function App() {
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5">
+                          <td className="px-4 py-3.5 max-w-[220px] 2xl:max-w-[280px]">
                             <div className="font-bold text-neutral-900 flex items-center gap-1.5 flex-wrap">
                               <MapPin className="w-3.5 h-3.5 text-orange-600 shrink-0" />
-                              <span>{route.pickup_name}</span>
+                              <span className="truncate">{route.pickup_name}</span>
                               {route.pickup_neighborhood_snapshot ? (
-                                <span className="text-[10px] font-semibold text-orange-700 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
+                                <span className="text-[10px] font-semibold text-orange-700 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200 shrink-0">
                                   {route.pickup_neighborhood_snapshot}
                                 </span>
                               ) : (
-                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Bairro ausente">
+                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 shrink-0" title="Bairro ausente">
                                   Sem bairro
                                 </span>
                               )}
                             </div>
-                            <div className="text-[11px] text-neutral-500 truncate max-w-xs mt-0.5">
+                            <div className="text-[11px] text-neutral-500 truncate mt-0.5">
                               {route.pickup_address}
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5">
+                          <td className="px-4 py-3.5 max-w-[220px] 2xl:max-w-[280px]">
                             <div className="flex items-center gap-1.5 font-bold text-neutral-900">
                               <Package className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
                               <span>{stopsCount} {stopsCount === 1 ? 'Parada' : 'Paradas'}</span>
                             </div>
-                            <div className="text-[11px] text-neutral-500 font-medium truncate max-w-xs mt-0.5">
+                            <div className="text-[11px] text-neutral-500 font-medium truncate mt-0.5">
                               {stopsSummary}
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5 font-semibold text-neutral-800">
+                          <td className="px-4 py-3.5 font-semibold text-neutral-800 whitespace-nowrap">
                             <div className="flex items-center gap-1">
                               <Clock className="w-3.5 h-3.5 text-neutral-400" />
                               <span>{route.final_deadline}</span>
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5">
+                          <td className="px-4 py-3.5 whitespace-nowrap">
                             <span className="font-bold text-sm text-emerald-700">
                               R$ {route.total_fee}
                             </span>
                           </td>
 
-                          <td className="px-4 py-3.5">
-                            <div className="flex flex-wrap gap-1 max-w-[200px]">
-                              {route.accepted_vehicle_types.map((v) => (
-                                <span
-                                  key={v}
-                                  className="text-[10px] px-1.5 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200"
-                                  title={VEHICLE_DISPLAY[v]?.label || v}
-                                >
-                                  {VEHICLE_DISPLAY[v]?.icon} {VEHICLE_DISPLAY[v]?.label.split(' ')[0]}
-                                </span>
-                              ))}
-                            </div>
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            {renderCompactVehicleBadges(route.accepted_vehicle_types)}
                           </td>
 
-                          <td className="px-4 py-3.5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
+                          <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                               <button
                                 onClick={() => openRouteDetails(route.id)}
-                                className="px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors"
+                                className="px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap"
                               >
                                 Detalhes
                               </button>
@@ -2306,7 +2395,7 @@ export default function App() {
                                 <button
                                   onClick={() => openPublishSummary(route)}
                                   disabled={publishingId === route.id}
-                                  className="px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-bold shadow-xs transition-colors flex items-center gap-1"
+                                  className="px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-bold shadow-xs transition-colors flex items-center gap-1 whitespace-nowrap"
                                 >
                                   <Send className="w-3 h-3" />
                                   <span>Publicar</span>
@@ -2317,7 +2406,7 @@ export default function App() {
                                 <button
                                   onClick={() => handleCancelRoute(route.id)}
                                   disabled={cancellingId === route.id}
-                                  className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold transition-colors"
+                                  className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold transition-colors whitespace-nowrap"
                                 >
                                   Cancelar
                                 </button>
@@ -2339,7 +2428,7 @@ export default function App() {
       {/* TAB 2: PONTOS DE COLETA (M2.1 Seção 12)                        */}
       {/* ============================================================== */}
       {activeTab === 'LOCATIONS' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <main id="main-content" className="w-full px-4 sm:px-6 mt-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -2457,7 +2546,7 @@ export default function App() {
       {/* TAB 3: MOTORISTAS (M1 & M1.1)                                  */}
       {/* ============================================================== */}
       {activeTab === 'DRIVERS' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <main id="main-content" className="w-full px-4 sm:px-6 mt-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -2678,7 +2767,7 @@ export default function App() {
       {/* TAB 4: INDICAÇÕES DE MOTORISTAS (M1.2)                         */}
       {/* ============================================================== */}
       {activeTab === 'REFERRALS' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <main id="main-content" className="w-full px-4 sm:px-6 mt-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -2930,7 +3019,7 @@ export default function App() {
       {/* TAB 5: PENDÊNCIAS OPERACIONAIS (M4.1 PARTE B)                  */}
       {/* ============================================================== */}
       {activeTab === 'INCIDENTS' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <main id="main-content" className="w-full px-4 sm:px-6 mt-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -3129,7 +3218,7 @@ export default function App() {
       {/* TAB 6: GESTÃO DE PAGAMENTOS (M4.1 PARTE C)                     */}
       {/* ============================================================== */}
       {activeTab === 'PAYMENTS' && (
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        <main id="main-content" className="w-full px-4 sm:px-6 mt-6 space-y-6">
           {/* Header & KPI Summary */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-4 rounded-2xl bg-white border border-amber-200 shadow-xs">

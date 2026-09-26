@@ -467,4 +467,8 @@ export class DeliveryService {
 }
 
 export const deliveryService = new DeliveryService();
-telegramBot.setDeliveryService(deliveryService);
+try {
+  telegramBot?.setDeliveryService(deliveryService);
+} catch {
+  // Set during bootstrapping in server.ts or test suites
+}

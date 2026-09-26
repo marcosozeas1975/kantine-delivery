@@ -678,4 +678,8 @@ export class DriverService {
 }
 
 export const driverService = new DriverService();
-telegramBot.setDriverService(driverService);
+try {
+  telegramBot?.setDriverService(driverService);
+} catch {
+  // Set during bootstrapping in server.ts or test suites
+}

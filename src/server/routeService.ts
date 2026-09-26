@@ -35,6 +35,10 @@ import { canReceiveRouteOffer } from './eligibility.ts';
 import { telegramBot } from './telegramBot.ts';
 import { driverService } from './driverService.ts';
 import { deliveryConfigService } from './deliveryConfigService.ts';
+import {
+  generateRouteNavigationLinks,
+  RouteNavigationLinks,
+} from './mapsNavigation.ts';
 
 export class RouteService {
   // ==========================================
@@ -193,6 +197,11 @@ export class RouteService {
       suggested_driver_fee: row.suggested_driver_fee != null ? parseFloat(String(row.suggested_driver_fee)) : null,
       final_driver_fee: row.final_driver_fee != null ? parseFloat(String(row.final_driver_fee)) : null,
       override_reason: row.override_reason || null,
+      // M4.4 Versionamento e Edição Controlada
+      route_version: row.route_version != null ? Number(row.route_version) : 1,
+      driver_acknowledged_version: row.driver_acknowledged_version != null ? Number(row.driver_acknowledged_version) : 1,
+      change_pending_driver_approval: Boolean(row.change_pending_driver_approval),
+      pending_material_change: row.pending_material_change || null,
       created_at: row.created_at,
       offered_at: row.offered_at,
       stops,
@@ -510,7 +519,7 @@ export class RouteService {
   public async publishRoute(
     id: number,
     actor?: string,
-    options?: { pickup_neighborhood?: string }
+    options?: { pickup_neighborhood?: string; isRepublish?: boolean }
   ): Promise<{
     route: Route;
     dispatches: RouteOfferDispatch[];
@@ -519,7 +528,7 @@ export class RouteService {
     const route = await this.getRouteById(id);
     if (!route) throw new Error('ROUTE_NOT_FOUND');
 
-    if (route.status === 'OFFERED') {
+    if (route.status === 'OFFERED' && !options?.isRepublish) {
       throw new Error('ROUTE_ALREADY_OFFERED');
     }
     if (route.status === 'CANCELLED') {
@@ -706,7 +715,7 @@ export class RouteService {
    */
   public async acceptRoute(
     routeId: number,
-    identifier: { telegramUserId?: string; driverId?: number }
+    identifier: { telegramUserId?: string; driverId?: number; expectedVersion?: number }
   ): Promise<AcceptRouteResult> {
     // 1. Resolve Driver
     let driver = null;
@@ -763,6 +772,15 @@ export class RouteService {
         status: 'REJECTED',
         error: 'VEHICLE_INCOMPATIBLE',
         message: 'Seu veículo atual não é compatível com esta rota.',
+      };
+    }
+
+    // M4.4 Seção 4 & 24: Validação de versão da oferta contra callback antigo
+    if (identifier.expectedVersion !== undefined && identifier.expectedVersion !== route.route_version) {
+      return {
+        status: 'REJECTED',
+        error: 'OUTDATED_ROUTE_VERSION',
+        message: 'Esta oferta foi atualizada pela loja. Verifique a nova oferta antes de aceitar.',
       };
     }
 
@@ -834,7 +852,10 @@ export class RouteService {
       .where(
         and(
           eq(routes.id, routeId),
-          eq(routes.status, 'OFFERED')
+          eq(routes.status, 'OFFERED'),
+          identifier.expectedVersion !== undefined
+            ? eq(routes.route_version, identifier.expectedVersion)
+            : sql`true`
         )
       )
       .returning();
@@ -1795,7 +1816,49 @@ export class RouteService {
       routes: filteredRoutes,
     };
   }
+
+  /**
+   * M4.3: Retorna links de navegação para a rota, com validação estrita de autorização
+   * - Antes do aceite (DRAFT/OFFERED): Acesso negado para proteger privacidade dos clientes
+   * - Após o aceite: Apenas o motorista vencedor pode acessar os links
+   */
+  public async getRouteNavigation(
+    routeId: number,
+    identifier: { driverId?: number; telegramUserId?: string }
+  ): Promise<RouteNavigationLinks> {
+    const route = await this.getRouteById(routeId);
+    if (!route) {
+      throw new Error('ROUTE_NOT_FOUND');
+    }
+
+    let driver = null;
+    if (identifier.telegramUserId) {
+      driver = await driverService.getDriverByTelegramUserId(identifier.telegramUserId);
+    } else if (identifier.driverId) {
+      driver = await driverService.getDriverById(identifier.driverId);
+    }
+
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    // Regra de Privacidade Pré-Aceite: Não expor antes do aceite
+    if (route.status === 'DRAFT' || route.status === 'OFFERED') {
+      throw new Error('FORBIDDEN_PRE_ACCEPTANCE');
+    }
+
+    // Apenas o motorista vencedor tem acesso
+    if (route.accepted_driver_id !== driver.id) {
+      throw new Error('FORBIDDEN_NOT_WINNING_DRIVER');
+    }
+
+    return generateRouteNavigationLinks(route);
+  }
 }
 
 export const routeService = new RouteService();
-telegramBot.setRouteService(routeService);
+try {
+  telegramBot?.setRouteService(routeService);
+} catch {
+  // Set during bootstrapping in server.ts or test suites
+}

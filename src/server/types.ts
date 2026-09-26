@@ -466,9 +466,77 @@ export interface Route {
   suggested_driver_fee?: number | null;
   final_driver_fee?: number | null;
   override_reason?: string | null;
+  // M4.4 Versionamento e Edição Controlada
+  route_version: number;
+  driver_acknowledged_version: number;
+  change_pending_driver_approval: boolean;
+  pending_material_change?: string | null;
   created_at: Date;
   offered_at: Date | null;
   stops?: RouteStop[];
+}
+
+export type RouteChangeType = 'OPERATIONAL' | 'MATERIAL' | 'DRAFT_EDIT' | 'OFFERED_REOFFER';
+export type DriverApprovalStatus = 'NOT_REQUIRED' | 'PENDING' | 'ACCEPTED' | 'REJECTED';
+
+export interface RouteUpdateRecord {
+  id: number;
+  route_id: number;
+  old_version: number;
+  new_version: number;
+  change_type: RouteChangeType;
+  changed_fields: string[];
+  diff_summary: string;
+  previous_snapshot: any;
+  new_snapshot?: any;
+  pending_proposal?: any;
+  actor: string;
+  driver_approval_status: DriverApprovalStatus;
+  driver_decision_at?: Date | null;
+  driver_acknowledged_at?: Date | null;
+  created_at: Date;
+}
+
+export interface EditRouteDTO {
+  expected_version: number;
+  pickup_type?: PickupType;
+  pickup_location_id?: number | null;
+  pickup_name?: string;
+  pickup_address?: string;
+  pickup_neighborhood?: string;
+  pickup_neighborhood_snapshot?: string;
+  final_deadline?: string;
+  total_fee?: string;
+  accepted_vehicle_types?: VehicleType[];
+  final_driver_fee?: number | string | null;
+  override_reason?: string | null;
+  stops?: Array<{
+    id?: number;
+    destination_address: string;
+    destination_neighborhood: string;
+    cargo_description: string;
+    delivery_mode?: DeliveryMode;
+    observations?: string;
+    desired_deadline?: string;
+    sequence?: number;
+    modality_code?: string;
+    neighborhood_id?: number;
+    pricing_vehicle_category?: PricingVehicleCategory;
+    customer_freight?: number | string;
+  }>;
+}
+
+export interface RouteEditAnalysis {
+  change_type: RouteChangeType;
+  is_material: boolean;
+  changed_fields: string[];
+  diff_summary: string;
+  diff_items: Array<{
+    field: string;
+    label: string;
+    old_value: any;
+    new_value: any;
+  }>;
 }
 
 export interface RouteOfferDispatch {
@@ -496,7 +564,11 @@ export type RouteEventType =
   | 'ROUTE_COMPLETED'
   | 'ROUTE_CANCELLED'
   | 'ROUTE_STOP_CREATED'
-  | 'ROUTE_STOP_REORDERED';
+  | 'ROUTE_STOP_REORDERED'
+  | 'ROUTE_UPDATED'
+  | 'ROUTE_CHANGE_ACCEPTED'
+  | 'ROUTE_CHANGE_REJECTED'
+  | 'ROUTE_CHANGE_ACKNOWLEDGED';
 
 export interface RouteEvent {
   id: number;

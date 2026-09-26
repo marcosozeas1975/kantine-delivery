@@ -51,7 +51,34 @@ export async function initDbConstraints() {
         (status IN ('ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'COMPLETED') AND accepted_driver_id IS NOT NULL AND accepted_at IS NOT NULL) 
         OR (status NOT IN ('ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'COMPLETED'))
       )`);
-      console.log('[initDbConstraints] Successfully updated routes constraints for M4 using admin pool.');
+
+      // M4.4 Versionamento e Edição Controlada
+      await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);
+      await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "driver_acknowledged_version" integer DEFAULT 1 NOT NULL`);
+      await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
+      await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS "route_updates" (
+          "id" serial PRIMARY KEY,
+          "route_id" integer NOT NULL REFERENCES "routes"("id") ON DELETE CASCADE,
+          "old_version" integer NOT NULL,
+          "new_version" integer NOT NULL,
+          "change_type" text NOT NULL,
+          "changed_fields" text NOT NULL,
+          "diff_summary" text NOT NULL,
+          "previous_snapshot" text NOT NULL,
+          "new_snapshot" text,
+          "pending_proposal" text,
+          "actor" text NOT NULL,
+          "driver_approval_status" text DEFAULT 'NOT_REQUIRED' NOT NULL,
+          "driver_decision_at" timestamp,
+          "driver_acknowledged_at" timestamp,
+          "created_at" timestamp DEFAULT now() NOT NULL
+        );
+      `);
+
+      console.log('[initDbConstraints] Successfully updated routes constraints and M4.4 schema using admin pool.');
     } finally {
       client.release();
     }

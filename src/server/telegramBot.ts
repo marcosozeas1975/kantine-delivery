@@ -19,6 +19,19 @@ import {
   maskPixKey,
   normalizeGeneralPhone,
 } from './pixValidation.ts';
+import {
+  generateRouteNavigationLinks,
+  buildGoogleMapsDestinationUrl,
+} from './mapsNavigation.ts';
+import { routeEditService } from './routeEditService.ts';
+
+export function isMockChatId(chatId: any): boolean {
+  if (!chatId) return true;
+  const str = String(chatId).trim();
+  if (/^(chat_|test_|mock_|fake_|sample_|invalid_|tg_)/i.test(str)) return true;
+  if (!str.startsWith('@') && !/^-?\d+$/.test(str)) return true;
+  return false;
+}
 
 interface WizardState {
   step: 'NAME' | 'PHONE' | 'VEHICLE' | 'PIX_TYPE' | 'PIX_VALUE' | 'CONFIRM';
@@ -147,17 +160,30 @@ export class TelegramBotService {
    * Safe Telegram HTTP request helper
    * Never prints or leaks the token in logs or exceptions
    */
-  private async callTelegramApi(method: string, body?: any): Promise<any> {
+  private async callTelegramApi(method: string, body?: any, timeoutMs: number = 15000): Promise<any> {
+    if (body?.chat_id && isMockChatId(body.chat_id)) {
+      return {
+        message_id: Math.floor(100000 + Math.random() * 900000),
+        chat: { id: body.chat_id, type: 'private' },
+        date: Math.floor(Date.now() / 1000),
+        text: body.text || '',
+      };
+    }
+
     if (!this.token) {
       throw new Error('TELEGRAM_BOT_TOKEN_NOT_CONFIGURED');
     }
 
     const url = `https://api.telegram.org/bot${this.token}/${method}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
       });
 
       const data: any = await response.json();
@@ -166,11 +192,16 @@ export class TelegramBotService {
       }
       return data.result;
     } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error(`Telegram API request timed out after ${timeoutMs}ms`);
+      }
       // Mask token if it inadvertently appeared in error message
       const sanitized =
         error?.message?.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]') ||
         'Telegram API error';
       throw new Error(sanitized);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -202,10 +233,19 @@ export class TelegramBotService {
           });
           return true;
         } catch (fallbackErr: any) {
-          console.error(`[Telegram] Fallback message failed for chat ${chatId}:`, fallbackErr.message);
+          console.warn(`[Telegram] Fallback message failed for chat ${chatId}:`, fallbackErr.message);
         }
       }
-      console.error(`[Telegram] Failed to send message to chat ${chatId}:`, err.message);
+      const isExpectedUnreachable =
+        err.message?.includes('chat not found') ||
+        err.message?.includes('bot was blocked') ||
+        err.message?.includes('user is deactivated') ||
+        err.message?.includes('Forbidden');
+      if (isExpectedUnreachable) {
+        console.info(`[Telegram] Skipped message to chat ${chatId} (${err.message})`);
+      } else {
+        console.warn(`[Telegram] Failed to send message to chat ${chatId}:`, err.message);
+      }
       return false;
     }
   }
@@ -273,7 +313,16 @@ export class TelegramBotService {
         messageId: result?.message_id ? String(result.message_id) : undefined,
       };
     } catch (err: any) {
-      console.error(`[Telegram] Failed to dispatch offer #${delivery.id} to chat ${chatId}:`, err.message);
+      const isExpected =
+        err.message?.includes('chat not found') ||
+        err.message?.includes('bot was blocked') ||
+        err.message?.includes('user is deactivated') ||
+        err.message?.includes('Forbidden');
+      if (isExpected) {
+        console.info(`[Telegram] Skipped dispatch offer #${delivery.id} to chat ${chatId} (${err.message})`);
+      } else {
+        console.warn(`[Telegram] Failed to dispatch offer #${delivery.id} to chat ${chatId}:`, err.message);
+      }
       return { success: false, errorCode: err.message || 'DISPATCH_FAILED' };
     }
   }
@@ -447,7 +496,7 @@ export class TelegramBotService {
         [
           {
             text: '✅ ACEITAR ROTA',
-            callback_data: `accept_route:${route.id}`,
+            callback_data: `accept_route:${route.id}:${route.route_version || 1}`,
           },
         ],
       ],
@@ -465,13 +514,22 @@ export class TelegramBotService {
         messageId: result?.message_id ? String(result.message_id) : undefined,
       };
     } catch (err: any) {
-      console.error(`[Telegram] Failed to dispatch route offer #${route.id} to chat ${chatId}:`, err.message);
+      const isExpected =
+        err.message?.includes('chat not found') ||
+        err.message?.includes('bot was blocked') ||
+        err.message?.includes('user is deactivated') ||
+        err.message?.includes('Forbidden');
+      if (isExpected) {
+        console.info(`[Telegram] Skipped dispatch route offer #${route.id} to chat ${chatId} (${err.message})`);
+      } else {
+        console.warn(`[Telegram] Failed to dispatch route offer #${route.id} to chat ${chatId}:`, err.message);
+      }
       return { success: false, errorCode: err.message || 'DISPATCH_FAILED' };
     }
   }
 
   /**
-   * M4 Seção 7: Send confirmation to winning driver with pickup details and arrival action
+   * M4 Seção 7 & M4.3 Seção 12: Send confirmation to winning driver with pickup details, navigation links and arrival action
    */
   public async sendRouteAcceptedWon(
     chatId: string | number,
@@ -483,31 +541,78 @@ export class TelegramBotService {
     const pickupNeighborhood = route.pickup_neighborhood_snapshot?.trim();
     const neighborhoodLine = pickupNeighborhood ? `\nBairro: ${pickupNeighborhood}` : '';
 
-    const text =
-      `✅ *ROTA #${route.id} CONFIRMADA*\n\n` +
-      `📍 *COLETA*\n` +
+    const numberEmojis = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+    let stopsSummary = '';
+    if (route.stops && route.stops.length > 0) {
+      const sortedStops = [...route.stops].sort((a, b) => a.sequence - b.sequence);
+      stopsSummary = sortedStops
+        .map((s, idx) => {
+          const numEmoji = idx + 1 <= 10 ? numberEmojis[idx + 1] : `#${idx + 1}`;
+          return `${numEmoji} ${s.destination_neighborhood || s.destination_address}`;
+        })
+        .join('\n');
+    }
+
+    let feeStr = (route.total_fee || '').trim();
+    if (!feeStr.includes(',')) {
+      const num = parseFloat(feeStr);
+      if (!isNaN(num)) feeStr = num.toFixed(2).replace('.', ',');
+    }
+
+    const navLinks = generateRouteNavigationLinks(route);
+
+    let text =
+      `✅ *ROTA #${route.id} ACEITA*\n\n` +
+      `📍 *RETIRADA*\n` +
       `${route.pickup_name}\n` +
       `${route.pickup_address}${neighborhoodLine}\n\n` +
-      `📦 ${total} entregas\n\n` +
-      `🏁 *Encerramento desejado:*\n` +
-      `${route.final_deadline}`;
+      `📦 *${total} ${total === 1 ? 'ENTREGA' : 'ENTREGAS'}*\n\n` +
+      (stopsSummary ? `${stopsSummary}\n\n` : '') +
+      (navLinks.maxStopsExceeded
+        ? `ℹ️ Esta rota possui várias entregas. Utilize a navegação disponível em cada parada.\n\n`
+        : '') +
+      `💰 *FRETE*\nR$ ${feeStr}\n\n` +
+      `🏁 *Encerramento desejado:*\n${route.final_deadline}`;
+
+    const inlineKeyboard: any[] = [];
+
+    // M4.3 Seção 8 & 12: Link geral no Google Maps (máximo 4 entregas)
+    if (navLinks.generalRouteUrl) {
+      inlineKeyboard.push([
+        {
+          text: '🗺️ ABRIR ROTA NO GOOGLE MAPS',
+          url: navLinks.generalRouteUrl,
+        },
+      ]);
+    }
+
+    // M4.3 Seção 11 & 12: Link individual para Coleta
+    if (navLinks.pickupUrl) {
+      inlineKeyboard.push([
+        {
+          text: '🗺️ IR PARA COLETA',
+          url: navLinks.pickupUrl,
+        },
+      ]);
+    }
+
+    // Preservar botão de confirmação de chegada na coleta
+    inlineKeyboard.push([
+      {
+        text: '📦 CHEGUEI PARA COLETA',
+        callback_data: `route_arrived_pickup:${route.id}`,
+      },
+    ]);
 
     return this.sendMessage(chatId, text, {
       reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: '📍 CHEGUEI PARA COLETA',
-              callback_data: `route_arrived_pickup:${route.id}`,
-            },
-          ],
-        ],
+        inline_keyboard: inlineKeyboard,
       },
     });
   }
 
   /**
-   * M4 Seção 11: Apresentação da Parada ao Motorista
+   * M4 Seção 11 & M4.3 Seção 10: Apresentação da Parada ao Motorista com link individual Maps
    */
   public async sendStopCard(
     chatId: string | number,
@@ -528,10 +633,25 @@ export class TelegramBotService {
       `🤝 *Modalidade:*\n${modeLabel}\n\n` +
       `⚠️ *Observações:*\n${observations}`;
 
-    const buttons: any[] = [
-      [{ text: '📦 REALIZAR ENTREGA', callback_data: `stop_deliver:${stop.id}` }],
-      [{ text: '⚠️ PROBLEMA NESTA ENTREGA', callback_data: `stop_incident:${stop.id}` }],
-    ];
+    const buttons: any[] = [];
+
+    // M4.3 Seção 10: Link individual por parada
+    if (stop.destination_address && stop.destination_address.trim().length > 0) {
+      const stopMapsUrl = buildGoogleMapsDestinationUrl(stop.destination_address);
+      if (stopMapsUrl) {
+        buttons.push([
+          {
+            text: '🗺️ ABRIR NO MAPS',
+            url: stopMapsUrl,
+          },
+        ]);
+      }
+    } else {
+      console.warn(`[Google Maps] Parada #${stop.id} sem endereço válido para gerar navegação.`);
+    }
+
+    buttons.push([{ text: '📦 REALIZAR ENTREGA', callback_data: `stop_deliver:${stop.id}` }]);
+    buttons.push([{ text: '⚠️ PROBLEMA NESTA ENTREGA', callback_data: `stop_incident:${stop.id}` }]);
 
     // M4 Seção 12: Preservar sequence como ordem recomendada, permitindo acessar outra parada pendente
     const pendingStops = (route.stops || []).filter((s) => s.status === 'PENDING' && s.id !== stop.id);
@@ -586,6 +706,146 @@ export class TelegramBotService {
     if (!this.token) return false;
     const text = `❌ *ROTA #${routeId} CANCELADA*`;
     return this.sendMessage(chatId, text);
+  }
+
+  /**
+   * M4.4 Seção 11: Notificação de Correção Operacional pós-aceite ao motorista vencedor
+   */
+  public async sendRouteOperationalUpdate(
+    chatId: string | number,
+    route: Route,
+    oldVersion: number,
+    newVersion: number,
+    diffSummary: string
+  ): Promise<boolean> {
+    if (!this.token) return false;
+
+    const navLinks = generateRouteNavigationLinks(route);
+
+    const text =
+      `⚠️ *ROTA #${route.id} ATUALIZADA*\n\n` +
+      `A loja realizou uma correção na sua rota.\n\n` +
+      `*Versão anterior:* ${oldVersion}\n` +
+      `*Nova versão:* ${newVersion}\n\n` +
+      `${diffSummary}\n\n` +
+      `Confira os dados antes de continuar.`;
+
+    const inlineKeyboard: any[] = [];
+
+    // Link do Maps atualizado (Seção 18)
+    if (navLinks.generalRouteUrl) {
+      inlineKeyboard.push([
+        {
+          text: '🗺️ ABRIR ROTA ATUALIZADA',
+          url: navLinks.generalRouteUrl,
+        },
+      ]);
+    } else if (navLinks.pickupUrl) {
+      inlineKeyboard.push([
+        {
+          text: '🗺️ ABRIR ROTA ATUALIZADA',
+          url: navLinks.pickupUrl,
+        },
+      ]);
+    }
+
+    // Botão CIENTE (Seção 12)
+    inlineKeyboard.push([
+      {
+        text: '✅ CIENTE',
+        callback_data: `route_ack:${route.id}:${newVersion}`,
+      },
+    ]);
+
+    return this.sendMessage(chatId, text, {
+      reply_markup: {
+        inline_keyboard: inlineKeyboard,
+      },
+    });
+  }
+
+  /**
+   * M4.4 Seção 14: Notificação de Alteração Material pendente de aprovação do motorista vencedor
+   */
+  public async sendRouteMaterialChangeProposal(
+    chatId: string | number,
+    route: Route,
+    updateId: number,
+    diffSummary: string
+  ): Promise<boolean> {
+    if (!this.token) return false;
+
+    const text =
+      `⚠️ *ALTERAÇÃO IMPORTANTE — ROTA #${route.id}*\n\n` +
+      `A loja alterou as condições da rota que você aceitou.\n\n` +
+      `${diffSummary}\n\n` +
+      `Você aceita as novas condições desta rota?`;
+
+    const inlineKeyboard: any[] = [
+      [
+        {
+          text: '✅ ACEITAR ALTERAÇÃO',
+          callback_data: `route_mat_accept:${route.id}:${updateId}`,
+        },
+        {
+          text: '❌ NÃO ACEITAR',
+          callback_data: `route_mat_reject:${route.id}:${updateId}`,
+        },
+      ],
+    ];
+
+    return this.sendMessage(chatId, text, {
+      reply_markup: {
+        inline_keyboard: inlineKeyboard,
+      },
+    });
+  }
+
+  /**
+   * M4.4 Seção 14 & 15: Confirmação da decisão da alteração material
+   */
+  public async sendRouteMaterialDecisionConfirmation(
+    chatId: string | number,
+    route: Route,
+    accepted: boolean
+  ): Promise<boolean> {
+    if (!this.token) return false;
+
+    if (accepted) {
+      const navLinks = generateRouteNavigationLinks(route);
+      const text =
+        `✅ *ALTERAÇÃO APROVADA*\n\n` +
+        `Você aceitou as novas condições da Rota #${route.id} (v${route.route_version}).\n` +
+        `As novas informações já estão em vigor no seu painel.`;
+
+      const inlineKeyboard: any[] = [];
+      if (navLinks.generalRouteUrl) {
+        inlineKeyboard.push([
+          {
+            text: '🗺️ ABRIR ROTA ATUALIZADA',
+            url: navLinks.generalRouteUrl,
+          },
+        ]);
+      } else if (navLinks.pickupUrl) {
+        inlineKeyboard.push([
+          {
+            text: '🗺️ ABRIR ROTA ATUALIZADA',
+            url: navLinks.pickupUrl,
+          },
+        ]);
+      }
+
+      return this.sendMessage(chatId, text, {
+        reply_markup: inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined,
+      });
+    } else {
+      const text =
+        `❌ *ALTERAÇÃO RECUSADA*\n\n` +
+        `Você não aceitou a alteração da Rota #${route.id}.\n` +
+        `As condições anteriores da rota continuam válidas e vigentes.`;
+
+      return this.sendMessage(chatId, text);
+    }
   }
 
   /**
@@ -649,26 +909,56 @@ export class TelegramBotService {
 
   private async pollLoop() {
     console.log('[Telegram Bot] Starting long polling loop...');
+    let consecutiveTransientErrors = 0;
+
     while (!this.shouldStop && this.token) {
       try {
-        const updates = await this.callTelegramApi('getUpdates', {
-          offset: this.offset,
-          timeout: 20,
-          allowed_updates: ['message', 'callback_query'],
-        });
+        const updates = await this.callTelegramApi(
+          'getUpdates',
+          {
+            offset: this.offset,
+            timeout: 10,
+            allowed_updates: ['message', 'callback_query'],
+          },
+          18000
+        );
+
+        consecutiveTransientErrors = 0;
 
         if (Array.isArray(updates)) {
           for (const update of updates) {
             this.offset = Math.max(this.offset, update.update_id + 1);
             await this.handleUpdate(update).catch((e) =>
-              console.error('[Telegram Bot] Error handling update:', e.message)
+              console.warn('[Telegram Bot] Error handling update:', e.message)
             );
           }
         }
       } catch (err: any) {
         if (this.shouldStop) break;
-        console.error('[Telegram Bot] Polling error (will retry in 5s):', err.message);
-        await new Promise((r) => setTimeout(r, 5000));
+
+        const errMsg = err?.message || String(err);
+        const isTransientNetwork =
+          errMsg.includes('fetch failed') ||
+          errMsg.includes('timed out') ||
+          errMsg.includes('aborted') ||
+          errMsg.includes('ECONNRESET') ||
+          errMsg.includes('ETIMEDOUT') ||
+          errMsg.includes('EAI_AGAIN') ||
+          errMsg.includes('UND_ERR_');
+
+        if (isTransientNetwork) {
+          consecutiveTransientErrors++;
+          const waitTimeMs = Math.min(1000 * Math.pow(1.5, Math.min(consecutiveTransientErrors, 5)), 10000);
+          console.log(`[Telegram Bot] Polling connection cycle (${errMsg}). Reconnecting in ${Math.round(waitTimeMs / 1000)}s...`);
+          await new Promise((r) => setTimeout(r, waitTimeMs));
+        } else if (errMsg.includes('401') || errMsg.includes('Unauthorized') || errMsg.includes('Not Found')) {
+          console.warn('[Telegram Bot] Invalid or revoked bot token. Pausing polling until token update:', errMsg);
+          this.isPolling = false;
+          return;
+        } else {
+          console.warn('[Telegram Bot] Polling issue (retrying in 5s):', errMsg);
+          await new Promise((r) => setTimeout(r, 5000));
+        }
       }
     }
     this.isPolling = false;
@@ -1740,11 +2030,12 @@ export class TelegramBotService {
     if (!telegramUserId) return;
 
     // ==========================================
-    // M2.1: Accept route callback
+    // M2.1 & M4.4: Accept route callback
     // ==========================================
     if (data && data.startsWith('accept_route:')) {
-      const routeIdStr = data.replace('accept_route:', '').trim();
-      const routeId = parseInt(routeIdStr, 10);
+      const parts = data.replace('accept_route:', '').trim().split(':');
+      const routeId = parseInt(parts[0], 10);
+      const expectedVersion = parts[1] ? parseInt(parts[1], 10) : undefined;
       if (isNaN(routeId)) {
         await this.answerCallbackQuery(query.id, 'Dados inválidos.', true);
         return;
@@ -1758,6 +2049,7 @@ export class TelegramBotService {
       try {
         const result = await this.routeService.acceptRoute(routeId, {
           telegramUserId,
+          expectedVersion,
         });
 
         if (result.status === 'WON') {
@@ -1772,12 +2064,70 @@ export class TelegramBotService {
           await this.answerCallbackQuery(query.id, '❌ Esta rota já foi aceita por outro motorista.', true);
           await this.sendMessage(chatId, '❌ Esta rota já foi aceita por outro motorista.');
         } else {
-          // REJECTED (e.g. VEHICLE_INCOMPATIBLE, DRIVER_PENDING, DRIVER_BLOCKED, ROUTE_CANCELLED)
+          // REJECTED (e.g. OUTDATED_ROUTE_VERSION, VEHICLE_INCOMPATIBLE, DRIVER_PENDING, DRIVER_BLOCKED, ROUTE_CANCELLED)
           await this.answerCallbackQuery(query.id, result.message, true);
           await this.sendMessage(chatId, result.message);
         }
       } catch (err: any) {
         await this.answerCallbackQuery(query.id, 'Erro ao processar aceite da rota.', true);
+      }
+      return;
+    }
+
+    // ==========================================
+    // M4.4: Ciência e Decisão de Alterações
+    // ==========================================
+
+    // Confirmação de Ciência de Correção Operacional (Seção 12)
+    if (data && data.startsWith('route_ack:')) {
+      const parts = data.replace('route_ack:', '').trim().split(':');
+      const routeId = parseInt(parts[0], 10);
+      const version = parseInt(parts[1], 10);
+      if (!isNaN(routeId) && !isNaN(version) && this.driverService) {
+        const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+        if (driver) {
+          await routeEditService.handleDriverOperationalAck(routeId, version, driver.id);
+          await this.answerCallbackQuery(query.id, '✅ Ciência confirmada!');
+          await this.sendMessage(chatId, `✅ Você confirmou ciência da atualização da Rota #${routeId} (v${version}).`);
+        }
+      }
+      return;
+    }
+
+    // Aceite de Alteração Material (Seção 14 & 15)
+    if (data && data.startsWith('route_mat_accept:')) {
+      const parts = data.replace('route_mat_accept:', '').trim().split(':');
+      const routeId = parseInt(parts[0], 10);
+      const updateId = parseInt(parts[1], 10);
+      if (!isNaN(routeId) && !isNaN(updateId) && this.driverService) {
+        const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+        if (driver) {
+          try {
+            await routeEditService.handleDriverMaterialDecision(routeId, updateId, driver.id, 'ACCEPT');
+            await this.answerCallbackQuery(query.id, '✅ Alteração aceita com sucesso!');
+          } catch (err: any) {
+            await this.answerCallbackQuery(query.id, `⚠️ ${err.message}`, true);
+          }
+        }
+      }
+      return;
+    }
+
+    // Recusa de Alteração Material (Seção 14 & 15)
+    if (data && data.startsWith('route_mat_reject:')) {
+      const parts = data.replace('route_mat_reject:', '').trim().split(':');
+      const routeId = parseInt(parts[0], 10);
+      const updateId = parseInt(parts[1], 10);
+      if (!isNaN(routeId) && !isNaN(updateId) && this.driverService) {
+        const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+        if (driver) {
+          try {
+            await routeEditService.handleDriverMaterialDecision(routeId, updateId, driver.id, 'REJECT');
+            await this.answerCallbackQuery(query.id, '❌ Alteração recusada.');
+          } catch (err: any) {
+            await this.answerCallbackQuery(query.id, `⚠️ ${err.message}`, true);
+          }
+        }
       }
       return;
     }

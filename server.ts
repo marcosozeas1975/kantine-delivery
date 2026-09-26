@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { driverService } from './src/server/driverService.ts';
 import { deliveryService } from './src/server/deliveryService.ts';
 import { routeService } from './src/server/routeService.ts';
+import { routeEditService } from './src/server/routeEditService.ts';
 import { referralService } from './src/server/referralService.ts';
 import { deliveryConfigService } from './src/server/deliveryConfigService.ts';
 import { telegramBot } from './src/server/telegramBot.ts';
@@ -653,6 +654,59 @@ app.post('/api/admin/routes/:id/cancel', requireAdminAuth, async (req: AuthReque
   }
 });
 
+// M4.4 Preview e Classificação de Edição de Rota
+app.post('/api/admin/routes/:id/edit-preview', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+
+    const route = await routeService.getRouteById(id);
+    if (!route) return res.status(404).json({ error: 'ROUTE_NOT_FOUND' });
+
+    const analysis = routeEditService.classifyRouteEdit(route, req.body);
+    res.json(analysis);
+  } catch (err: any) {
+    if (err.message?.startsWith('CANNOT_EDIT_')) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// M4.4 Executar Edição Controlada de Rota
+app.post('/api/admin/routes/:id/edit', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+
+    const actor = req.user?.email || 'ADMIN';
+    const result = await routeEditService.executeRouteEdit(id, req.body, actor);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    if (err.message === 'ROUTE_NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.message?.startsWith('CONCURRENT_MODIFICATION_CONFLICT')) {
+      return res.status(409).json({ error: err.message });
+    }
+    if (err.message?.startsWith('CANNOT_EDIT_')) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// M4.4 Histórico de Versões e Atualizações da Rota
+app.get('/api/admin/routes/:id/updates', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+
+    const updates = await routeEditService.getRouteUpdates(id);
+    res.json(updates);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Accept Route (Atomic and exclusive acceptance in M3/M2.1)
 app.post('/api/admin/routes/:id/accept', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
@@ -1140,6 +1194,37 @@ app.get('/api/driver/routes/:id', async (req, res) => {
     const driverSafe = routeService.sanitizeRouteForDriver(route);
     res.json(driverSafe);
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Authorized Driver Route Navigation Links Endpoint (M4.3)
+app.get('/api/driver/routes/:id/navigation', async (req, res) => {
+  try {
+    const routeId = parseInt(req.params.id, 10);
+    const driverIdHeader = req.headers['x-driver-id'] as string;
+    const driverIdQuery = req.query.driver_id as string;
+    const telegramUserId = (req.query.telegram_user_id as string) || (req.headers['x-telegram-user-id'] as string);
+
+    const driverId = driverIdHeader ? parseInt(driverIdHeader, 10) : (driverIdQuery ? parseInt(driverIdQuery, 10) : undefined);
+
+    if (!driverId && !telegramUserId) {
+      return res.status(401).json({ error: 'MISSING_DRIVER_IDENTIFIER' });
+    }
+
+    const navLinks = await routeService.getRouteNavigation(routeId, { driverId, telegramUserId });
+    res.json(navLinks);
+  } catch (err: any) {
+    if (err.message === 'ROUTE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Route not found' });
+    }
+    if (
+      err.message === 'DRIVER_NOT_FOUND' ||
+      err.message === 'FORBIDDEN_PRE_ACCEPTANCE' ||
+      err.message === 'FORBIDDEN_NOT_WINNING_DRIVER'
+    ) {
+      return res.status(403).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
