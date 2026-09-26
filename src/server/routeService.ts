@@ -873,7 +873,7 @@ export class RouteService {
       });
 
       // Invalidate offer markup for all other drivers who received the offer
-      this.invalidateOtherOffers(routeId, driver.id).catch((err) => {
+      await this.invalidateOtherOffers(routeId, driver.id).catch((err) => {
         console.warn('[RouteService] Invalidate other offers error:', err.message);
       });
 
@@ -909,10 +909,35 @@ export class RouteService {
   }
 
   /**
-   * Invalidate or update offer button on other drivers' messages after route is accepted
+   * TG-ACCEPT: Invalidate offer messages on other drivers' chats after route is won.
+   * Modifies original message to indicate closed state and removes inline keyboard completely.
+   * If edit fails or message ID is missing, executes controlled fallback (short message).
+   * Safe observability logging: route_id, dispatch_id, driver_id, telegram_message_id, result.
    */
-  private async invalidateOtherOffers(routeId: number, winningDriverId: number) {
+  public async invalidateOtherOffers(routeId: number, winningDriverId: number): Promise<Array<{
+    dispatchId: number;
+    driverId: number;
+    telegramChatId: string;
+    telegramMessageId: string | null;
+    outcome: string;
+    error?: string;
+  }>> {
+    const results: Array<{
+      dispatchId: number;
+      driverId: number;
+      telegramChatId: string;
+      telegramMessageId: string | null;
+      outcome: string;
+      error?: string;
+    }> = [];
+
     try {
+      const route = await this.getRouteById(routeId);
+      if (!route) {
+        console.warn(`[RouteService.invalidateOtherOffers] Route #${routeId} not found.`);
+        return results;
+      }
+
       const otherDispatches = await db
         .select()
         .from(routeOfferDispatches)
@@ -923,14 +948,54 @@ export class RouteService {
           )
         );
 
-      for (const disp of otherDispatches) {
-        if (disp.driver_id !== winningDriverId && disp.telegram_message_id) {
-          await telegramBot.invalidateRouteOfferMarkup(disp.telegram_chat_id, disp.telegram_message_id).catch(() => {});
-        }
-      }
+      const targetDispatches = otherDispatches.filter((disp) => disp.driver_id !== winningDriverId);
+
+      await Promise.allSettled(
+        targetDispatches.map(async (disp) => {
+          try {
+            const invResult = await telegramBot.invalidateRouteOffer(
+              disp.telegram_chat_id,
+              disp.telegram_message_id,
+              route
+            );
+
+            const outcome = invResult.mode;
+            const resItem = {
+              dispatchId: disp.id,
+              driverId: disp.driver_id,
+              telegramChatId: disp.telegram_chat_id,
+              telegramMessageId: disp.telegram_message_id,
+              outcome,
+              error: invResult.error,
+            };
+            results.push(resItem);
+
+            // Safe observability log (minimum required fields, NO token, NO sensitive data)
+            console.info(
+              `[RouteService.invalidateOffer] route_id=${routeId} dispatch_id=${disp.id} driver_id=${disp.driver_id} telegram_message_id=${disp.telegram_message_id} result=${outcome}` +
+              (invResult.error ? ` error=${invResult.error}` : '')
+            );
+          } catch (err: any) {
+            const errorMsg = err.message || 'UNKNOWN_ERROR';
+            results.push({
+              dispatchId: disp.id,
+              driverId: disp.driver_id,
+              telegramChatId: disp.telegram_chat_id,
+              telegramMessageId: disp.telegram_message_id,
+              outcome: 'FAILED',
+              error: errorMsg,
+            });
+            console.error(
+              `[RouteService.invalidateOffer] route_id=${routeId} dispatch_id=${disp.id} driver_id=${disp.driver_id} telegram_message_id=${disp.telegram_message_id} result=FAILED error=${errorMsg}`
+            );
+          }
+        })
+      );
     } catch (err: any) {
-      console.warn('[RouteService.invalidateOtherOffers] Error:', err.message);
+      console.error('[RouteService.invalidateOtherOffers] Fatal error:', err.message);
     }
+
+    return results;
   }
 
   // ==========================================

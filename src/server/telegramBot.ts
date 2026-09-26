@@ -33,6 +33,51 @@ export function isMockChatId(chatId: any): boolean {
   return false;
 }
 
+/**
+ * TG-ACCEPT & TG-PRIVACY:
+ * Build closed route offer message for non-winning drivers.
+ * Keeps route stops, deadline, and pickup visible as history,
+ * but clearly indicates that the route is already accepted by another driver.
+ * NEVER reveals winner's name, phone, telegram, vehicle, pix or personal data.
+ */
+export function buildRouteOfferClosedText(route: Route): string {
+  const stopsCount = route.stops?.length || 1;
+  const stopsHeader = stopsCount === 1 ? '1 ENTREGA' : `${stopsCount} ENTREGAS`;
+  const numberEmojis = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+  let stopsText = '';
+  if (route.stops && route.stops.length > 0) {
+    stopsText = route.stops
+      .map((s, idx) => {
+        const numEmoji = idx + 1 <= 10 ? numberEmojis[idx + 1] : `#${idx + 1}`;
+        const deadlineLine = s.desired_deadline?.trim()
+          ? `\n⏱️ Desejável: ${s.desired_deadline.trim()}`
+          : '';
+        return `${numEmoji} ${s.destination_neighborhood}${deadlineLine}`;
+      })
+      .join('\n\n');
+  }
+
+  let feeStr = (route.total_fee || '').trim();
+  if (!feeStr.includes(',')) {
+    const num = parseFloat(feeStr);
+    if (!isNaN(num)) feeStr = num.toFixed(2).replace('.', ',');
+  }
+
+  const pickupNeighborhood = route.pickup_neighborhood_snapshot?.trim();
+  const pickupNeighborhoodLine = pickupNeighborhood ? `\nBairro: ${pickupNeighborhood}` : '';
+
+  return (
+    `🔒 *ROTA #${route.id} — JÁ ACEITA POR OUTRO MOTORISTA*\n\n` +
+    `📍 *RETIRADA:*\n${route.pickup_name}${pickupNeighborhoodLine}\n\n` +
+    `📦 *${stopsHeader}*\n\n` +
+    `${stopsText}\n\n` +
+    `🏁 *ENCERRAMENTO MÁXIMO:*\n${route.final_deadline}\n\n` +
+    `💰 *FRETE TOTAL:*\nR$ ${feeStr}\n\n` +
+    `🔒 ROTA JÁ ACEITA POR OUTRO MOTORISTA`
+  );
+}
+
 interface WizardState {
   step: 'NAME' | 'PHONE' | 'VEHICLE' | 'PIX_TYPE' | 'PIX_VALUE' | 'CONFIRM';
   data: {
@@ -96,7 +141,14 @@ export class TelegramBotService {
   private deliveryService: any = null;
   private routeService: any = null;
   private referralService: any = null;
-  private recentDispatches: Array<{ chatId: string | number; text: string; markup?: any; timestamp: number }> = [];
+  private recentDispatches: Array<{
+    method?: string;
+    chatId: string | number;
+    messageId?: string | number;
+    text: string;
+    markup?: any;
+    timestamp: number;
+  }> = [];
 
   constructor() {
     this.updateTokenFromEnv();
@@ -110,7 +162,14 @@ export class TelegramBotService {
     this.recentDispatches = [];
   }
 
-  private recordRecentDispatch(entry: { chatId: string | number; text: string; markup?: any; timestamp: number }) {
+  private recordRecentDispatch(entry: {
+    method?: string;
+    chatId: string | number;
+    messageId?: string | number;
+    text: string;
+    markup?: any;
+    timestamp: number;
+  }) {
     this.recentDispatches.push(entry);
     if (this.recentDispatches.length > 200) {
       this.recentDispatches.shift();
@@ -177,9 +236,11 @@ export class TelegramBotService {
    * Never prints or leaks the token in logs or exceptions
    */
   private async callTelegramApi(method: string, body?: any, timeoutMs: number = 15000): Promise<any> {
-    if (method === 'sendMessage' && body?.chat_id) {
+    if ((method === 'sendMessage' || method === 'editMessageText' || method === 'editMessageReplyMarkup') && body?.chat_id) {
       this.recordRecentDispatch({
+        method,
         chatId: body.chat_id,
+        messageId: body.message_id,
         text: body.text || '',
         markup: body.reply_markup,
         timestamp: Date.now(),
@@ -187,8 +248,12 @@ export class TelegramBotService {
     }
 
     if (body?.chat_id && isMockChatId(body.chat_id)) {
+      const parsedMsgId = body.message_id
+        ? (typeof body.message_id === 'number' ? body.message_id : parseInt(String(body.message_id), 10))
+        : Math.floor(100000 + Math.random() * 900000);
+
       return {
-        message_id: Math.floor(100000 + Math.random() * 900000),
+        message_id: !isNaN(parsedMsgId) ? parsedMsgId : Math.floor(100000 + Math.random() * 900000),
         chat: { id: body.chat_id, type: 'private' },
         date: Math.floor(Date.now() / 1000),
         text: body.text || '',
@@ -465,6 +530,15 @@ export class TelegramBotService {
   // ==========================================
   // M2.1: Multi-Stop Routes Messaging
   // ==========================================
+
+  /**
+   * TG-ACCEPT: Build closed message text for losing drivers.
+   * Keeps route history visible, clearly indicates closed/accepted status,
+   * and preserves strict winner privacy (NO winner name, phone, telegram, pix, vehicle).
+   */
+  public buildRouteOfferClosedText(route: Route): string {
+    return buildRouteOfferClosedText(route);
+  }
 
   /**
    * M2.1: Send route offer to eligible driver
@@ -874,7 +948,91 @@ export class TelegramBotService {
   }
 
   /**
-   * M2.1 & M3: Invalidate or update offer button on other drivers' messages after route is accepted
+   * TG-ACCEPT: Invalidate route offer for losing driver.
+   * Primary: editMessageText to display closed message & remove inline keyboard completely.
+   * Fallback: if editMessageText fails or messageId is not available:
+   *   1. try editMessageReplyMarkup with empty keyboard ({ inline_keyboard: [] })
+   *   2. send short message: "🔒 A Rota #X já foi aceita por outro motorista."
+   */
+  public async invalidateRouteOffer(
+    chatId: string | number,
+    messageId: string | number | null | undefined,
+    route: Route
+  ): Promise<{
+    success: boolean;
+    mode: 'EDITED_TEXT' | 'FALLBACK_SENT' | 'FALLBACK_SENT_NO_MESSAGE_ID' | 'FAILED';
+    error?: string;
+  }> {
+    if (!this.token && !isMockChatId(chatId)) {
+      return { success: false, mode: 'FAILED', error: 'TELEGRAM_BOT_TOKEN_NOT_CONFIGURED' };
+    }
+
+    const numMessageId = messageId ? parseInt(String(messageId), 10) : null;
+    const closedText = buildRouteOfferClosedText(route);
+
+    // Primary: try editMessageText with empty reply markup (removes inline keyboard completely)
+    if (numMessageId && !isNaN(numMessageId)) {
+      try {
+        await this.callTelegramApi('editMessageText', {
+          chat_id: chatId,
+          message_id: numMessageId,
+          text: closedText,
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [],
+          },
+        });
+        return { success: true, mode: 'EDITED_TEXT' };
+      } catch (primaryErr: any) {
+        console.warn(
+          `[TelegramBot] Primary editMessageText failed for route #${route.id} (chat ${chatId}, msg ${messageId}): ${primaryErr.message}. Executing fallback...`
+        );
+
+        // Fallback Step 1: try removing inline keyboard on the original message
+        try {
+          await this.callTelegramApi('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: numMessageId,
+            reply_markup: {
+              inline_keyboard: [],
+            },
+          });
+        } catch (markupErr: any) {
+          console.warn(
+            `[TelegramBot] Fallback editMessageReplyMarkup failed for route #${route.id} (chat ${chatId}): ${markupErr.message}`
+          );
+        }
+
+        // Fallback Step 2: send short fallback message
+        try {
+          const fallbackText = `🔒 A Rota #${route.id} já foi aceita por outro motorista.`;
+          await this.sendMessage(chatId, fallbackText);
+          return { success: true, mode: 'FALLBACK_SENT', error: primaryErr.message };
+        } catch (fallbackErr: any) {
+          console.error(
+            `[TelegramBot] Fallback sendMessage failed for route #${route.id} (chat ${chatId}): ${fallbackErr.message}`
+          );
+          return { success: false, mode: 'FAILED', error: fallbackErr.message };
+        }
+      }
+    } else {
+      // No message ID available to edit -> send short fallback message directly
+      try {
+        const fallbackText = `🔒 A Rota #${route.id} já foi aceita por outro motorista.`;
+        await this.sendMessage(chatId, fallbackText);
+        return { success: true, mode: 'FALLBACK_SENT_NO_MESSAGE_ID' };
+      } catch (err: any) {
+        console.error(
+          `[TelegramBot] Fallback notification failed for route #${route.id} (chat ${chatId}, no message_id): ${err.message}`
+        );
+        return { success: false, mode: 'FAILED', error: err.message };
+      }
+    }
+  }
+
+  /**
+   * M2.1 & M3: Invalidate or update offer button on other drivers' messages after route is accepted.
+   * Completely removes inline keyboard ({ inline_keyboard: [] }) so no actionable button remains.
    */
   public async invalidateRouteOfferMarkup(
     chatId: string | number,
@@ -882,23 +1040,19 @@ export class TelegramBotService {
   ): Promise<boolean> {
     if (!this.token && !isMockChatId(chatId)) return false;
     if (!messageId) return false;
+    const numMessageId = parseInt(String(messageId), 10);
+    if (isNaN(numMessageId)) return false;
     try {
       await this.callTelegramApi('editMessageReplyMarkup', {
         chat_id: chatId,
-        message_id: messageId,
+        message_id: numMessageId,
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '🔒 Rota já aceita',
-                callback_data: 'noop_route_accepted',
-              },
-            ],
-          ],
+          inline_keyboard: [],
         },
       });
       return true;
-    } catch {
+    } catch (err: any) {
+      console.warn(`[TelegramBot.invalidateRouteOfferMarkup] Error for chat ${chatId}, msg ${messageId}:`, err.message);
       return false;
     }
   }
@@ -2089,10 +2243,21 @@ export class TelegramBotService {
         } else if (result.status === 'LOST') {
           await this.answerCallbackQuery(query.id, '❌ Esta rota já foi aceita por outro motorista.', true);
           await this.sendMessage(chatId, '❌ Esta rota já foi aceita por outro motorista.');
+          if (query.message?.message_id) {
+            const currentRoute = await this.routeService.getRouteById(routeId);
+            if (currentRoute) {
+              await this.invalidateRouteOffer(chatId, query.message.message_id, currentRoute).catch(() => {});
+            } else {
+              await this.invalidateRouteOfferMarkup(chatId, query.message.message_id).catch(() => {});
+            }
+          }
         } else {
           // REJECTED (e.g. OUTDATED_ROUTE_VERSION, VEHICLE_INCOMPATIBLE, DRIVER_PENDING, DRIVER_BLOCKED, ROUTE_CANCELLED)
           await this.answerCallbackQuery(query.id, result.message, true);
           await this.sendMessage(chatId, result.message);
+          if (result.error === 'OUTDATED_ROUTE_VERSION' && query.message?.message_id) {
+            await this.invalidateRouteOfferMarkup(chatId, query.message.message_id).catch(() => {});
+          }
         }
       } catch (err: any) {
         await this.answerCallbackQuery(query.id, 'Erro ao processar aceite da rota.', true);
