@@ -38,11 +38,11 @@ app.use((_req, res, next) => {
 
 // Admin API Routes
 
-// 1. List drivers (filtered by status: PENDING, ACTIVE, BLOCKED)
+// 1. List drivers (filtered by status: PENDING, ACTIVE, BLOCKED, EXCLUDED)
 app.get('/api/admin/drivers', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const status = req.query.status as DriverStatus | undefined;
-    if (status && !['PENDING', 'ACTIVE', 'BLOCKED'].includes(status)) {
+    if (status && !['PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED'].includes(status)) {
       return res.status(400).json({ error: 'INVALID_STATUS_FILTER' });
     }
     const driversList = await driverService.getDrivers(status);
@@ -136,6 +136,78 @@ app.post('/api/admin/drivers/:id/reactivate', requireAdminAuth, async (req: Auth
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: 'Failed to reactivate driver' });
+  }
+});
+
+// 5b. Reject reactivation request for BLOCKED driver
+app.post('/api/admin/drivers/:id/reject-reactivation', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DRIVER_ID' });
+
+    const { reason } = req.body;
+    const actor = req.user?.email || 'ADMIN';
+    const driver = await driverService.rejectReactivation(id, reason || '', actor);
+    res.json({ success: true, driver });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reject-reactivation failed]`, err.message);
+    if (err.message === 'DRIVER_NOT_FOUND') return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to reject reactivation' });
+  }
+});
+
+// 5c. Exclude driver (Deactivate and archive with reason and historical memory)
+app.post('/api/admin/drivers/:id/exclude', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DRIVER_ID' });
+
+    const { reason } = req.body;
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
+      return res.status(400).json({ error: 'Motivo da exclusão é obrigatório (mínimo 3 caracteres).' });
+    }
+
+    const actor = req.user?.email || 'ADMIN';
+    const driver = await driverService.excludeDriver(id, reason.trim(), actor);
+    res.json({ success: true, driver });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/exclude failed]`, err.message);
+    if (err.message === 'DRIVER_NOT_FOUND') return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to exclude driver' });
+  }
+});
+
+// 5d. Approve reinclusion request for EXCLUDED driver
+app.post('/api/admin/drivers/:id/reinclusion/approve', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DRIVER_ID' });
+
+    const { targetStatus, notes } = req.body;
+    const actor = req.user?.email || 'ADMIN';
+    const driver = await driverService.approveReinclusion(id, { targetStatus, notes }, actor);
+    res.json({ success: true, driver });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reinclusion/approve failed]`, err.message);
+    if (err.message === 'DRIVER_NOT_FOUND') return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to approve reinclusion' });
+  }
+});
+
+// 5e. Reject reinclusion request for EXCLUDED driver
+app.post('/api/admin/drivers/:id/reinclusion/reject', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DRIVER_ID' });
+
+    const { reason } = req.body;
+    const actor = req.user?.email || 'ADMIN';
+    const driver = await driverService.rejectReinclusion(id, reason || '', actor);
+    res.json({ success: true, driver });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reinclusion/reject failed]`, err.message);
+    if (err.message === 'DRIVER_NOT_FOUND') return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to reject reinclusion' });
   }
 });
 

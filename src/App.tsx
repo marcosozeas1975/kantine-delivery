@@ -57,9 +57,10 @@ import {
 } from 'firebase/auth';
 import { RouteEditModal } from './components/RouteEditModal.tsx';
 import { RouteUpdatesHistory } from './components/RouteUpdatesHistory.tsx';
+import { KantineLogo } from './components/KantineLogo.tsx';
 
-// Types for Driver (M1 & M1.1)
-type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED';
+// Types for Driver (M1 & M1.1 & Lifecycle)
+type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED' | 'EXCLUDED';
 type VehicleType =
   | 'CAR_HATCH'
   | 'CAR_SEDAN'
@@ -196,6 +197,21 @@ interface Driver {
   pix_key_type?: string;
   pix_key_value?: string;
   status: DriverStatus;
+  // Exclusion fields & historical memory
+  is_excluded?: boolean;
+  excluded_at?: string | null;
+  exclusion_reason?: string | null;
+  excluded_by?: string | null;
+  previous_exclusion_reason?: string | null;
+  exclusion_count?: number;
+  // Blocked Reactivation Request fields
+  reactivation_requested?: boolean;
+  reactivation_requested_at?: string | null;
+  reactivation_reason?: string | null;
+  // Excluded Reinclusion Request fields
+  reinclusion_requested?: boolean;
+  reinclusion_requested_at?: string | null;
+  reinclusion_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -614,14 +630,29 @@ export default function App() {
   const [rejectingReferralId, setRejectingReferralId] = useState<number | null>(null);
   const [rejectionReasonInput, setRejectionReasonInput] = useState<string>('');
 
-  // Drivers State (M1 & M1.1)
+  // Drivers State (M1 & M1.1 & Lifecycle)
   const [drivers, setDrivers] = useState<Driver[]>([]);
-  const [driverFilter, setDriverFilter] = useState<'ALL' | DriverStatus>('ALL');
+  const [driverFilter, setDriverFilter] = useState<
+    'ALL' | DriverStatus | 'REACTIVATION_REQUESTED' | 'REINCLUSION_REQUESTED'
+  >('ALL');
   const [loadingDrivers, setLoadingDrivers] = useState<boolean>(true);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
   const [selectedDriver, setSelectedDriver] = useState<Driver | null>(null);
   const [driverEvents, setDriverEvents] = useState<DriverEvent[]>([]);
   const [loadingDriverEvents, setLoadingDriverEvents] = useState<boolean>(false);
+
+  // Exclusion & Decision Modal States
+  const [excludingDriver, setExcludingDriver] = useState<Driver | null>(null);
+  const [exclusionReasonInput, setExclusionReasonInput] = useState<string>('');
+  const [submittingExclusion, setSubmittingExclusion] = useState<boolean>(false);
+
+  const [decisionDriver, setDecisionDriver] = useState<Driver | null>(null);
+  const [decisionType, setDecisionType] = useState<
+    'REJECT_REACTIVATION' | 'APPROVE_REINCLUSION' | 'REJECT_REINCLUSION' | null
+  >(null);
+  const [decisionReasonInput, setDecisionReasonInput] = useState<string>('');
+  const [decisionTargetStatus, setDecisionTargetStatus] = useState<'ACTIVE' | 'PENDING'>('ACTIVE');
+  const [submittingDecision, setSubmittingDecision] = useState<boolean>(false);
 
   // Driver Editing State (M1.1)
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
@@ -813,14 +844,24 @@ export default function App() {
     setLoadingDrivers(true);
     try {
       const headers = await getAuthHeaders();
-      const url =
-        driverFilter === 'ALL'
-          ? '/api/admin/drivers'
-          : `/api/admin/drivers?status=${driverFilter}`;
+      let url = '/api/admin/drivers';
+      if (
+        driverFilter === 'PENDING' ||
+        driverFilter === 'ACTIVE' ||
+        driverFilter === 'BLOCKED' ||
+        driverFilter === 'EXCLUDED'
+      ) {
+        url = `/api/admin/drivers?status=${driverFilter}`;
+      }
       const res = await fetch(url, { headers });
 
       if (res.ok) {
-        const data = await res.json();
+        let data: Driver[] = await res.json();
+        if (driverFilter === 'REACTIVATION_REQUESTED') {
+          data = data.filter((d) => d.reactivation_requested);
+        } else if (driverFilter === 'REINCLUSION_REQUESTED') {
+          data = data.filter((d) => d.reinclusion_requested);
+        }
         setDrivers(data);
       }
     } catch (err: any) {
@@ -1324,6 +1365,87 @@ export default function App() {
       setErrorMessage(err.message);
     } finally {
       setActionLoadingId(null);
+    }
+  };
+
+  const handleExcludeDriver = async () => {
+    if (!excludingDriver) return;
+    if (!exclusionReasonInput.trim() || exclusionReasonInput.trim().length < 3) {
+      setErrorMessage('Por favor, informe o motivo da exclusão (mínimo 3 caracteres).');
+      return;
+    }
+    setSubmittingExclusion(true);
+    setErrorMessage(null);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/admin/drivers/${excludingDriver.id}/exclude`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: exclusionReasonInput.trim() }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao excluir motorista');
+      }
+
+      const excludedId = excludingDriver.id;
+      setExcludingDriver(null);
+      setExclusionReasonInput('');
+      await fetchDrivers();
+      if (selectedDriver?.id === excludedId) {
+        openDriverDetails(excludedId);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setSubmittingExclusion(false);
+    }
+  };
+
+  const handleDecisionSubmit = async () => {
+    if (!decisionDriver || !decisionType) return;
+    setSubmittingDecision(true);
+    setErrorMessage(null);
+    try {
+      const headers = await getAuthHeaders();
+      let url = '';
+      let body: any = {};
+
+      if (decisionType === 'REJECT_REACTIVATION') {
+        url = `/api/admin/drivers/${decisionDriver.id}/reject-reactivation`;
+        body = { reason: decisionReasonInput.trim() };
+      } else if (decisionType === 'APPROVE_REINCLUSION') {
+        url = `/api/admin/drivers/${decisionDriver.id}/reinclusion/approve`;
+        body = { targetStatus: decisionTargetStatus, notes: decisionReasonInput.trim() };
+      } else if (decisionType === 'REJECT_REINCLUSION') {
+        url = `/api/admin/drivers/${decisionDriver.id}/reinclusion/reject`;
+        body = { reason: decisionReasonInput.trim() };
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao processar decisão');
+      }
+
+      const dId = decisionDriver.id;
+      setDecisionDriver(null);
+      setDecisionType(null);
+      setDecisionReasonInput('');
+      await fetchDrivers();
+      if (selectedDriver?.id === dId) {
+        openDriverDetails(dId);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setSubmittingDecision(false);
     }
   };
 
@@ -1989,8 +2111,8 @@ export default function App() {
       <header className="border-b border-neutral-200/80 bg-white/90 backdrop-blur sticky top-0 z-30 shadow-xs">
         <div className="w-full px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-orange-600 flex items-center justify-center text-white font-bold text-xl shadow-md shadow-orange-500/20">
-              K
+            <div className="w-10 h-10 rounded-xl bg-white border border-neutral-200/90 flex items-center justify-center p-1.5 shadow-sm shadow-neutral-900/5 hover:border-neutral-300 transition-all shrink-0">
+              <KantineLogo className="w-full h-full object-contain" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -2583,20 +2705,27 @@ export default function App() {
                 <span>Motoristas Cadastrados (Telegram & App)</span>
               </h2>
               <div className="flex flex-wrap items-center gap-2 mt-2">
-                {(['ALL', 'PENDING', 'ACTIVE', 'BLOCKED'] as const).map((filter) => (
+                {(
+                  [
+                    { key: 'ALL', label: 'Todos' },
+                    { key: 'PENDING', label: '⏳ Pendentes' },
+                    { key: 'ACTIVE', label: '✅ Ativos' },
+                    { key: 'BLOCKED', label: '🚫 Bloqueados' },
+                    { key: 'EXCLUDED', label: '📁 Excluídos' },
+                    { key: 'REACTIVATION_REQUESTED', label: '🔄 Pedidos Reativação' },
+                    { key: 'REINCLUSION_REQUESTED', label: '📝 Pedidos Reinclusão' },
+                  ] as const
+                ).map((item) => (
                   <button
-                    key={filter}
-                    onClick={() => setDriverFilter(filter)}
+                    key={item.key}
+                    onClick={() => setDriverFilter(item.key as any)}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                      driverFilter === filter
+                      driverFilter === item.key
                         ? 'bg-neutral-900 text-white shadow-xs'
                         : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                     }`}
                   >
-                    {filter === 'ALL' && 'Todos'}
-                    {filter === 'PENDING' && '⏳ Pendentes'}
-                    {filter === 'ACTIVE' && '✅ Ativos'}
-                    {filter === 'BLOCKED' && '🚫 Bloqueados'}
+                    {item.label}
                   </button>
                 ))}
               </div>
@@ -2693,99 +2822,217 @@ export default function App() {
                     </td>
                   </tr>
                 ) : (
-                  drivers.map((driver) => (
-                    <tr key={driver.id} className="hover:bg-neutral-50/50 transition-colors">
-                      <td className="px-4 py-3.5">
-                        <div className="font-bold text-neutral-900">{driver.name}</div>
-                        <div className="text-[10px] text-neutral-500 font-mono">
-                          ID: #{driver.id} • Telegram: @{driver.telegram_user_id || 'N/D'}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 font-medium text-neutral-700">
-                        {driver.phone}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-100 text-neutral-800 font-medium text-[11px] border border-neutral-200">
-                          <span>{VEHICLE_DISPLAY[driver.vehicle_type]?.icon}</span>
-                          <span>{VEHICLE_DISPLAY[driver.vehicle_type]?.label || driver.vehicle_type}</span>
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        {driver.status === 'ACTIVE' && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            ATIVO
-                          </span>
-                        )}
-                        {driver.status === 'PENDING' && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                            PENDENTE
-                          </span>
-                        )}
-                        {driver.status === 'BLOCKED' && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                            BLOQUEADO
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5 text-neutral-700">
-                        {driver.pix_key_type === 'REQUIRES_UPDATE' ? (
-                          <span className="text-amber-700 font-semibold text-[11px]">
-                            ⚠️ Requer atualização
-                          </span>
-                        ) : driver.pix_key_value || driver.pix_key ? (
-                          <div className="text-[11px] font-mono">
-                            <span className="text-neutral-400 mr-1">{driver.pix_key_type || 'PIX'}:</span>
-                            <span>{driver.pix_key_value || driver.pix_key}</span>
+                  drivers.map((driver) => {
+                    const isDriverExcluded = driver.status === 'EXCLUDED' || driver.is_excluded;
+                    return (
+                      <tr key={driver.id} className="hover:bg-neutral-50/50 transition-colors">
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-neutral-900">{driver.name}</span>
+                            {driver.previous_exclusion_reason && !isDriverExcluded && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300"
+                                title={`Memória Histórica: Motorista já foi excluído anteriormente pelo motivo: "${driver.previous_exclusion_reason}"`}
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 text-amber-700" />
+                                <span>Já foi excluído</span>
+                              </span>
+                            )}
                           </div>
-                        ) : (
-                          <span className="text-neutral-400">Não informado</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => openDriverDetails(driver.id)}
-                            className="px-2.5 py-1 rounded-lg border border-neutral-200 text-[11px] font-semibold hover:bg-neutral-100"
-                          >
-                            Auditoria
-                          </button>
-                          <button
-                            onClick={() => openEditDriverModal(driver)}
-                            className="px-2.5 py-1 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-[11px] font-semibold"
-                          >
-                            Editar
-                          </button>
-                          {driver.status === 'PENDING' && (
-                            <button
-                              onClick={() => handleApproveDriver(driver.id)}
-                              disabled={actionLoadingId === driver.id}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold"
-                            >
-                              Aprovar
-                            </button>
+                          <div className="text-[10px] text-neutral-500 font-mono">
+                            ID: #{driver.id} • Telegram: @{driver.telegram_user_id || 'N/D'}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 font-medium text-neutral-700">
+                          {driver.phone}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-100 text-neutral-800 font-medium text-[11px] border border-neutral-200">
+                            <span>{VEHICLE_DISPLAY[driver.vehicle_type]?.icon}</span>
+                            <span>{VEHICLE_DISPLAY[driver.vehicle_type]?.label || driver.vehicle_type}</span>
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="space-y-1">
+                            {driver.status === 'ACTIVE' && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                ATIVO
+                              </span>
+                            )}
+                            {driver.status === 'PENDING' && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                PENDENTE
+                              </span>
+                            )}
+                            {driver.status === 'BLOCKED' && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                BLOQUEADO
+                              </span>
+                            )}
+                            {isDriverExcluded && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-neutral-900 text-neutral-100 border border-neutral-700">
+                                🚫 EXCLUÍDO
+                              </span>
+                            )}
+
+                            {driver.reactivation_requested && (
+                              <div>
+                                <span
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-100 text-orange-900 border border-orange-300 animate-pulse cursor-pointer"
+                                  title={`Solicitação de reativação: "${driver.reactivation_reason}"`}
+                                  onClick={() => openDriverDetails(driver.id)}
+                                >
+                                  🔄 Pediu Reativação
+                                </span>
+                              </div>
+                            )}
+
+                            {driver.reinclusion_requested && (
+                              <div>
+                                <span
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 text-purple-900 border border-purple-300 animate-pulse cursor-pointer"
+                                  title={`Solicitação de reinclusão: "${driver.reinclusion_reason}"`}
+                                  onClick={() => openDriverDetails(driver.id)}
+                                >
+                                  📝 Pediu Reinclusão
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 text-neutral-700">
+                          {driver.pix_key_type === 'REQUIRES_UPDATE' ? (
+                            <span className="text-amber-700 font-semibold text-[11px]">
+                              ⚠️ Requer atualização
+                            </span>
+                          ) : driver.pix_key_value || driver.pix_key ? (
+                            <div className="text-[11px] font-mono">
+                              <span className="text-neutral-400 mr-1">{driver.pix_key_type || 'PIX'}:</span>
+                              <span>{driver.pix_key_value || driver.pix_key}</span>
+                            </div>
+                          ) : (
+                            <span className="text-neutral-400">Não informado</span>
                           )}
-                          {driver.status === 'ACTIVE' && (
+                        </td>
+                        <td className="px-4 py-3.5 text-right">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
                             <button
-                              onClick={() => handleBlockDriver(driver.id)}
-                              disabled={actionLoadingId === driver.id}
-                              className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold"
+                              onClick={() => openDriverDetails(driver.id)}
+                              className="px-2.5 py-1 rounded-lg border border-neutral-200 text-[11px] font-semibold hover:bg-neutral-100"
                             >
-                              Bloquear
+                              Auditoria
                             </button>
-                          )}
-                          {driver.status === 'BLOCKED' && (
-                            <button
-                              onClick={() => handleReactivateDriver(driver.id)}
-                              disabled={actionLoadingId === driver.id}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold"
-                            >
-                              Reativar
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+
+                            {!isDriverExcluded && (
+                              <button
+                                onClick={() => openEditDriverModal(driver)}
+                                className="px-2.5 py-1 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-[11px] font-semibold"
+                              >
+                                Editar
+                              </button>
+                            )}
+
+                            {driver.status === 'PENDING' && (
+                              <button
+                                onClick={() => handleApproveDriver(driver.id)}
+                                disabled={actionLoadingId === driver.id}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+                              >
+                                Aprovar
+                              </button>
+                            )}
+
+                            {driver.status === 'ACTIVE' && (
+                              <button
+                                onClick={() => handleBlockDriver(driver.id)}
+                                disabled={actionLoadingId === driver.id}
+                                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-semibold cursor-pointer"
+                              >
+                                Bloquear
+                              </button>
+                            )}
+
+                            {driver.status === 'BLOCKED' && (
+                              <>
+                                <button
+                                  onClick={() => handleReactivateDriver(driver.id)}
+                                  disabled={actionLoadingId === driver.id}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+                                  title="Reativar motorista para ativo"
+                                >
+                                  Reativar
+                                </button>
+                                {driver.reactivation_requested && (
+                                  <button
+                                    onClick={() => {
+                                      setDecisionDriver(driver);
+                                      setDecisionType('REJECT_REACTIVATION');
+                                      setDecisionReasonInput('');
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 text-[11px] font-semibold cursor-pointer"
+                                    title="Recusar pedido de reativação"
+                                  >
+                                    Recusar Pedido
+                                  </button>
+                                )}
+                              </>
+                            )}
+
+                            {isDriverExcluded ? (
+                              driver.reinclusion_requested ? (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setDecisionDriver(driver);
+                                      setDecisionType('APPROVE_REINCLUSION');
+                                      setDecisionReasonInput('');
+                                      setDecisionTargetStatus('ACTIVE');
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+                                  >
+                                    Aprovar Reinclusão
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setDecisionDriver(driver);
+                                      setDecisionType('REJECT_REINCLUSION');
+                                      setDecisionReasonInput('');
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 text-[11px] font-semibold cursor-pointer"
+                                  >
+                                    Recusar Reinclusão
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    setDecisionDriver(driver);
+                                    setDecisionType('APPROVE_REINCLUSION');
+                                    setDecisionReasonInput('');
+                                    setDecisionTargetStatus('ACTIVE');
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-semibold cursor-pointer"
+                                >
+                                  Reincluir
+                                </button>
+                              )
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setExcludingDriver(driver);
+                                  setExclusionReasonInput('');
+                                }}
+                                className="px-2 py-1 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-[11px] font-semibold cursor-pointer"
+                                title="Excluir/desativar cadastro do motorista"
+                              >
+                                Excluir
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -5337,9 +5584,121 @@ export default function App() {
               <div><strong>Chave Pix:</strong> {selectedDriver.pix_key_value || selectedDriver.pix_key || 'Não informada'}</div>
             </div>
 
+            {/* Memória Histórica de Exclusão */}
+            {(selectedDriver.previous_exclusion_reason || selectedDriver.is_excluded || (selectedDriver.exclusion_count && selectedDriver.exclusion_count > 0)) && (
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-xs space-y-2">
+                <div className="flex items-center gap-2 font-bold text-amber-950">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>MEMÓRIA HISTÓRICA: MOTORISTA JÁ FOI EXCLUÍDO ANTERIORMENTE</span>
+                </div>
+                <div className="text-amber-900 text-[11px] space-y-1 bg-white/70 p-2.5 rounded-lg border border-amber-200">
+                  <div>
+                    <strong>Total de vezes excluído:</strong> {selectedDriver.exclusion_count || 1}x
+                  </div>
+                  <div>
+                    <strong>Motivo do Desligamento:</strong>{' '}
+                    <span className="font-semibold text-neutral-900">
+                      {selectedDriver.exclusion_reason || selectedDriver.previous_exclusion_reason || 'Desativação administrativa'}
+                    </span>
+                  </div>
+                  {selectedDriver.excluded_at && (
+                    <div className="text-[10px] text-amber-800">
+                      <strong>Data da Exclusão:</strong> {new Date(selectedDriver.excluded_at).toLocaleString('pt-BR')}
+                    </div>
+                  )}
+                  {selectedDriver.excluded_by && (
+                    <div className="text-[10px] text-amber-800">
+                      <strong>Registrado por:</strong> {selectedDriver.excluded_by}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Pedido de Reativação Pendente */}
+            {selectedDriver.reactivation_requested && (
+              <div className="p-4 rounded-xl bg-orange-50 border border-orange-300 text-xs space-y-2">
+                <div className="flex items-center gap-2 font-bold text-orange-950">
+                  <RefreshCw className="w-4 h-4 text-orange-600 shrink-0 animate-spin" />
+                  <span>SOLICITAÇÃO DE REATIVAÇÃO ENVIADA PELO MOTORISTA</span>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-lg border border-orange-200 text-orange-950 text-[11px] space-y-1">
+                  <div>
+                    <strong>Justificativa do Motorista:</strong> &ldquo;{selectedDriver.reactivation_reason}&rdquo;
+                  </div>
+                  {selectedDriver.reactivation_requested_at && (
+                    <div className="text-[10px] text-orange-700">
+                      Enviada em: {new Date(selectedDriver.reactivation_requested_at).toLocaleString('pt-BR')}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => handleReactivateDriver(selectedDriver.id)}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+                  >
+                    Aprovar Reativação
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDecisionDriver(selectedDriver);
+                      setDecisionType('REJECT_REACTIVATION');
+                      setDecisionReasonInput('');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs"
+                  >
+                    Recusar Reativação
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Pedido de Reinclusão Pendente */}
+            {selectedDriver.reinclusion_requested && (
+              <div className="p-4 rounded-xl bg-purple-50 border border-purple-300 text-xs space-y-2">
+                <div className="flex items-center gap-2 font-bold text-purple-950">
+                  <UserCheck className="w-4 h-4 text-purple-600 shrink-0" />
+                  <span>PEDIDO DE REINCLUSÃO FUTURA DE MOTORISTA EXCLUÍDO</span>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-lg border border-purple-200 text-purple-950 text-[11px] space-y-1">
+                  <div>
+                    <strong>Justificativa para Reinclusão:</strong> &ldquo;{selectedDriver.reinclusion_reason}&rdquo;
+                  </div>
+                  {selectedDriver.reinclusion_requested_at && (
+                    <div className="text-[10px] text-purple-700">
+                      Enviada em: {new Date(selectedDriver.reinclusion_requested_at).toLocaleString('pt-BR')}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => {
+                      setDecisionDriver(selectedDriver);
+                      setDecisionType('APPROVE_REINCLUSION');
+                      setDecisionReasonInput('');
+                      setDecisionTargetStatus('ACTIVE');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+                  >
+                    Aprovar Reinclusão
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDecisionDriver(selectedDriver);
+                      setDecisionType('REJECT_REINCLUSION');
+                      setDecisionReasonInput('');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs"
+                  >
+                    Recusar Reinclusão
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div>
               <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
-                Eventos Registrados
+                Eventos e Histórico Completo
               </h4>
               <div className="space-y-1.5 max-h-60 overflow-y-auto">
                 {loadingDriverEvents ? (
@@ -5348,26 +5707,237 @@ export default function App() {
                   <p className="text-xs text-neutral-400">Nenhum evento registrado.</p>
                 ) : (
                   driverEvents.map((e) => (
-                    <div key={e.id} className="p-2 rounded bg-neutral-50 border border-neutral-200 text-xs flex justify-between items-center">
-                      <div>
+                    <div key={e.id} className="p-2.5 rounded-lg bg-neutral-50 border border-neutral-200 text-xs space-y-1">
+                      <div className="flex justify-between items-center">
                         <span className="font-bold text-neutral-900">{e.event_type}</span>
-                        {e.actor_type && <span className="text-neutral-500 text-[10px] ml-1">({e.actor_type})</span>}
+                        <span className="text-[10px] font-mono text-neutral-400">
+                          {new Date(e.timestamp).toLocaleString('pt-BR')}
+                        </span>
                       </div>
-                      <span className="text-[10px] font-mono text-neutral-400">
-                        {new Date(e.timestamp).toLocaleString('pt-BR')}
-                      </span>
+                      {e.actor_type && (
+                        <div className="text-[10px] text-neutral-500">
+                          Agente: {e.actor_type} {e.actor_id ? `(${e.actor_id})` : ''}
+                        </div>
+                      )}
+                      {e.details && (
+                        <div className="text-[11px] text-neutral-700 font-mono bg-white p-1.5 rounded border border-neutral-100">
+                          {typeof e.details === 'object' ? JSON.stringify(e.details) : e.details}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
               </div>
             </div>
 
-            <div className="pt-2 border-t border-neutral-200 flex justify-end">
+            <div className="pt-2 border-t border-neutral-200 flex justify-between items-center">
+              <div>
+                {!selectedDriver.is_excluded && selectedDriver.status !== 'EXCLUDED' && (
+                  <button
+                    onClick={() => {
+                      setExcludingDriver(selectedDriver);
+                      setExclusionReasonInput('');
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-semibold"
+                  >
+                    Excluir Cadastro
+                  </button>
+                )}
+              </div>
               <button
                 onClick={() => setSelectedDriver(null)}
                 className="px-4 py-2 font-semibold text-xs rounded-lg bg-neutral-900 text-white"
               >
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: EXCLUIR CADASTRO DE MOTORISTA (COM MOTIVO OBRIGATÓRIO)  */}
+      {/* ============================================================== */}
+      {excludingDriver && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-200 space-y-4">
+            <div className="flex items-start justify-between pb-3 border-b border-neutral-200">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-neutral-950">
+                    Excluir Cadastro de Motorista
+                  </h3>
+                  <p className="text-xs text-neutral-500">{excludingDriver.name} (#{excludingDriver.id})</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setExcludingDriver(null)}
+                className="text-neutral-400 hover:text-neutral-700 text-xl font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
+              <p className="font-bold">⚠️ Atenção: Ação com registro histórico auditável</p>
+              <p className="text-[11px] text-rose-800">
+                O motorista será desativado e desvinculado do recebimento de ofertas de entrega. Todo o histórico de rotas, eventos e o motivo da exclusão ficarão salvos para consultas futuras e análise de eventual solicitação de retorno.
+              </p>
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              <label className="block font-bold text-neutral-800">
+                Motivo da Exclusão <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                value={exclusionReasonInput}
+                onChange={(e) => setExclusionReasonInput(e.target.value)}
+                placeholder="Descreva detalhadamente o motivo (ex: desistência voluntária, reclamação de clientes, infração de regras operacionais, veículo impróprio, etc.)..."
+                className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none min-h-[90px]"
+                required
+              />
+              <p className="text-[10px] text-neutral-500">
+                Este motivo será exibido na memória histórica de auditoria da Kantine e informado ao motorista.
+              </p>
+            </div>
+
+            <div className="pt-2 border-t border-neutral-200 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setExcludingDriver(null)}
+                disabled={submittingExclusion}
+                className="px-4 py-2 font-semibold text-xs rounded-lg border border-neutral-300 hover:bg-neutral-50 text-neutral-700"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleExcludeDriver}
+                disabled={submittingExclusion || !exclusionReasonInput.trim()}
+                className="px-4 py-2 font-bold text-xs rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm disabled:opacity-50"
+              >
+                {submittingExclusion ? 'Excluindo...' : 'Confirmar Exclusão'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: DECISÃO DE REATIVAÇÃO / REINCLUSÃO                     */}
+      {/* ============================================================== */}
+      {decisionDriver && decisionType && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-200 space-y-4">
+            <div className="flex items-start justify-between pb-3 border-b border-neutral-200">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-neutral-100 text-neutral-800 flex items-center justify-center shrink-0">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-neutral-950">
+                    {decisionType === 'REJECT_REACTIVATION' && 'Recusar Solicitação de Reativação'}
+                    {decisionType === 'APPROVE_REINCLUSION' && 'Aprovar Reinclusão de Motorista'}
+                    {decisionType === 'REJECT_REINCLUSION' && 'Recusar Pedido de Reinclusão'}
+                  </h3>
+                  <p className="text-xs text-neutral-500">{decisionDriver.name} (#{decisionDriver.id})</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setDecisionDriver(null);
+                  setDecisionType(null);
+                }}
+                className="text-neutral-400 hover:text-neutral-700 text-xl font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Dossiê Histórico destacado para facilitar a decisão */}
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs space-y-1.5 text-amber-950">
+              <div className="font-bold flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                <span>Memória Histórica de Decisão</span>
+              </div>
+              {decisionDriver.exclusion_reason || decisionDriver.previous_exclusion_reason ? (
+                <div className="text-[11px]">
+                  <strong>Motivo da Exclusão Anterior:</strong> &ldquo;{decisionDriver.exclusion_reason || decisionDriver.previous_exclusion_reason}&rdquo;
+                </div>
+              ) : null}
+              {decisionType === 'REJECT_REACTIVATION' && decisionDriver.reactivation_reason && (
+                <div className="text-[11px]">
+                  <strong>Justificativa do Pedido de Reativação:</strong> &ldquo;{decisionDriver.reactivation_reason}&rdquo;
+                </div>
+              )}
+              {(decisionType === 'APPROVE_REINCLUSION' || decisionType === 'REJECT_REINCLUSION') && decisionDriver.reinclusion_reason && (
+                <div className="text-[11px]">
+                  <strong>Justificativa do Pedido de Reinclusão:</strong> &ldquo;{decisionDriver.reinclusion_reason}&rdquo;
+                </div>
+              )}
+            </div>
+
+            {decisionType === 'APPROVE_REINCLUSION' && (
+              <div className="space-y-1 text-xs">
+                <label className="block font-bold text-neutral-800">Status de Retorno</label>
+                <select
+                  value={decisionTargetStatus}
+                  onChange={(e) => setDecisionTargetStatus(e.target.value as any)}
+                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:ring-2 focus:ring-neutral-900"
+                >
+                  <option value="ACTIVE">ATIVO — Habilitado para receber ofertas imediatamente</option>
+                  <option value="PENDING">PENDENTE — Requer conferência cadastral prévia</option>
+                </select>
+              </div>
+            )}
+
+            <div className="space-y-1.5 text-xs">
+              <label className="block font-bold text-neutral-800">
+                {decisionType === 'APPROVE_REINCLUSION' ? 'Observações da Aprovação' : 'Motivo da Recusa *'}
+              </label>
+              <textarea
+                value={decisionReasonInput}
+                onChange={(e) => setDecisionReasonInput(e.target.value)}
+                placeholder={
+                  decisionType === 'APPROVE_REINCLUSION'
+                    ? 'Observações internas sobre a decisão de reinclusão...'
+                    : 'Explique o motivo da recusa para notificação do motorista...'
+                }
+                className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:outline-none min-h-[80px]"
+                required={decisionType !== 'APPROVE_REINCLUSION'}
+              />
+            </div>
+
+            <div className="pt-2 border-t border-neutral-200 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDecisionDriver(null);
+                  setDecisionType(null);
+                }}
+                disabled={submittingDecision}
+                className="px-4 py-2 font-semibold text-xs rounded-lg border border-neutral-300 hover:bg-neutral-50 text-neutral-700"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleDecisionSubmit}
+                disabled={submittingDecision || (decisionType !== 'APPROVE_REINCLUSION' && !decisionReasonInput.trim())}
+                className={`px-4 py-2 font-bold text-xs rounded-lg text-white shadow-sm disabled:opacity-50 ${
+                  decisionType === 'APPROVE_REINCLUSION'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                {submittingDecision
+                  ? 'Processando...'
+                  : decisionType === 'APPROVE_REINCLUSION'
+                  ? 'Aprovar Reinclusão'
+                  : 'Confirmar Recusa'}
               </button>
             </div>
           </div>

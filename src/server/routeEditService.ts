@@ -269,6 +269,7 @@ export class RouteEditService {
     update_id?: number;
     diff_summary: string;
     change_type: RouteChangeType;
+    reoffer_stats?: any;
   }> {
     const existingRoute = await routeService.getRouteById(routeId);
     if (!existingRoute) {
@@ -419,8 +420,21 @@ export class RouteEditService {
       );
     }
 
-    // Atualizar paradas se fornecidas
+    // Atualizar / Adicionar / Remover paradas
     if (editData.stops && editData.stops.length > 0) {
+      const incomingStopIds = editData.stops.filter((s) => !!s.id).map((s) => s.id!);
+      const existingStops = existingRoute.stops || [];
+
+      // 1. Remover paradas que foram excluídas (apenas se PENDING)
+      for (const exStop of existingStops) {
+        if (!incomingStopIds.includes(exStop.id) && exStop.status === 'PENDING') {
+          await db
+            .delete(routeStops)
+            .where(and(eq(routeStops.id, exStop.id), eq(routeStops.route_id, routeId)));
+        }
+      }
+
+      // 2. Atualizar existentes e Inserir novas
       for (let i = 0; i < editData.stops.length; i++) {
         const s = editData.stops[i];
         if (s.id) {
@@ -437,6 +451,21 @@ export class RouteEditService {
             .update(routeStops)
             .set(stopUpdateData)
             .where(eq(routeStops.id, s.id));
+        } else {
+          // Nova parada adicionada! Inserir no banco
+          const randomPin = Math.floor(1000 + Math.random() * 9000).toString();
+          await db.insert(routeStops).values({
+            route_id: routeId,
+            sequence: s.sequence || i + 1,
+            destination_address: s.destination_address.trim(),
+            destination_neighborhood: s.destination_neighborhood.trim(),
+            cargo_description: s.cargo_description.trim(),
+            observations: s.observations?.trim() || null,
+            desired_deadline: s.desired_deadline?.trim() || null,
+            delivery_mode: s.delivery_mode || 'IN_PERSON',
+            pin_code: randomPin,
+            status: 'PENDING',
+          });
         }
       }
     }
@@ -472,29 +501,82 @@ export class RouteEditService {
     // AÇÕES PÓS-EDIÇÃO CONFORME STATUS
     // =========================================================================
 
-    // Seção 4: OFFERED — Invalidar ofertas antigas e reenviar para motoristas
+    let reofferStats: any = undefined;
+
+    // Seção 4: OFFERED — Invalidar ofertas antigas da versão anterior e reenviar para motoristas
     if (existingRoute.status === 'OFFERED') {
-      // Invalidação das mensagens anteriores
-      const dispatches = await db
+      // 1. Invalidação das mensagens da versão imediatamente anterior (oldVersion)
+      const oldDispatches = await db
         .select()
         .from(routeOfferDispatches)
         .where(
           and(
             eq(routeOfferDispatches.route_id, routeId),
+            eq(routeOfferDispatches.route_version, oldVersion),
             eq(routeOfferDispatches.status, 'SENT')
           )
         );
 
-      for (const disp of dispatches) {
-        if (disp.telegram_message_id) {
-          await telegramBot
-            .invalidateRouteOfferMarkup(disp.telegram_chat_id, disp.telegram_message_id)
-            .catch(() => {});
-        }
-      }
+      let oldInvalidated = 0;
+      let oldFailed = 0;
 
-      // Reenviar oferta atualizada para motoristas elegíveis (com nova versão)
-      await routeService.publishRoute(routeId, actor, { isRepublish: true });
+      await Promise.allSettled(
+        oldDispatches.map(async (disp) => {
+          try {
+            const invRes = await telegramBot.invalidateRouteOfferForVersion(
+              disp.telegram_chat_id,
+              disp.telegram_message_id,
+              routeId,
+              oldVersion,
+              newVersion
+            );
+            if (invRes.success) {
+              oldInvalidated++;
+            } else {
+              oldFailed++;
+            }
+            console.info(
+              `[RouteEdit.invalidateOldOffer] route_id=${routeId} old_version=${oldVersion} new_version=${newVersion} dispatch_id=${disp.id} driver_id=${disp.driver_id} result=${invRes.mode}` +
+                (invRes.error ? ` error=${invRes.error}` : '')
+            );
+          } catch (err: any) {
+            oldFailed++;
+            console.error(
+              `[RouteEdit.invalidateOldOffer] route_id=${routeId} old_version=${oldVersion} new_version=${newVersion} dispatch_id=${disp.id} driver_id=${disp.driver_id} result=FAILED error=${err.message}`
+            );
+          }
+        })
+      );
+
+      // Registrar auditoria de invalidação das ofertas anteriores
+      await db.insert(routeEvents).values({
+        route_id: routeId,
+        event_type: 'OLD_ROUTE_OFFER_INVALIDATED',
+        actor,
+        details: `Version ${oldVersion} invalidated for ${oldDispatches.length} driver(s): ${oldInvalidated} successfully invalidated, ${oldFailed} failed`,
+      });
+
+      // 2. Reenviar oferta atualizada para motoristas elegíveis (recalculando elegibilidade na nova versão)
+      const pubResult = await routeService.publishRoute(routeId, actor, { isRepublish: true });
+
+      // Registrar auditoria de republicação
+      await db.insert(routeEvents).values({
+        route_id: routeId,
+        event_type: 'ROUTE_REOFFERED',
+        actor,
+        details: `Reoffered v${newVersion} to ${pubResult.dispatches.length} eligible driver(s): ${pubResult.stats.sent} sent, ${pubResult.stats.failed} failed`,
+      });
+
+      reofferStats = {
+        old_version: oldVersion,
+        new_version: newVersion,
+        old_dispatches_count: oldDispatches.length,
+        old_dispatches_invalidated: oldInvalidated,
+        old_dispatches_failed: oldFailed,
+        eligible_drivers_count: pubResult.dispatches.length,
+        new_offers_sent: pubResult.stats.sent,
+        new_offers_failed: pubResult.stats.failed,
+      };
     }
 
     // Seção 6 & 11: ACCEPTED (Correção Operacional) — Avisar motorista vencedor
@@ -519,6 +601,7 @@ export class RouteEditService {
       update_id: updateRecord.id,
       diff_summary: analysis.diff_summary,
       change_type: analysis.change_type,
+      reoffer_stats: reofferStats,
     };
   }
 

@@ -78,6 +78,25 @@ export function buildRouteOfferClosedText(route: Route): string {
   );
 }
 
+/**
+ * M4.4B: Build replaced route offer message when an OFFERED route is edited.
+ * Transforms the old card to clearly show it has been replaced by a new version,
+ * displaying both old and new versions.
+ */
+export function buildRouteOfferReplacedText(
+  routeId: number,
+  oldVersion: number,
+  newVersion: number
+): string {
+  return (
+    `🔄 *ROTA #${routeId} — OFERTA ATUALIZADA*\n\n` +
+    `Esta versão da oferta foi substituída por uma nova versão.\n` +
+    `Consulte a nova oferta enviada abaixo.\n\n` +
+    `• *Versão anterior:* v${oldVersion}\n` +
+    `• *Nova versão:* v${newVersion}`
+  );
+}
+
 interface WizardState {
   step: 'NAME' | 'PHONE' | 'VEHICLE' | 'PIX_TYPE' | 'PIX_VALUE' | 'CONFIRM';
   data: {
@@ -119,6 +138,11 @@ interface ReferralSession {
   };
 }
 
+interface ReactivationSession {
+  driverId: number;
+  type: 'REACTIVATION' | 'REINCLUSION';
+}
+
 export function escapeHtml(str: string | null | undefined): string {
   if (!str) return '';
   return String(str)
@@ -136,6 +160,7 @@ export class TelegramBotService {
   private editSessions = new Map<string, EditProfileState>();
   private m4DriverSessions = new Map<string, M4DriverSession>();
   private referralSessions = new Map<string, ReferralSession>();
+  private reactivationSessions = new Map<string, ReactivationSession>();
   private botInfo: { id: number; username: string; first_name: string } | null = null;
   private driverService: any = null;
   private deliveryService: any = null;
@@ -581,8 +606,13 @@ export class TelegramBotService {
     const pickupNeighborhood = route.pickup_neighborhood_snapshot?.trim();
     const pickupNeighborhoodLine = pickupNeighborhood ? `\nBairro: ${pickupNeighborhood}` : '';
 
+    const updatedVersionHeader =
+      route.route_version && route.route_version > 1
+        ? `\n🔄 *OFERTA ATUALIZADA — v${route.route_version}*`
+        : '';
+
     const text =
-      `🛵 *NOVA ROTA #${route.id}*\n\n` +
+      `🛵 *NOVA ROTA #${route.id}*${updatedVersionHeader}\n\n` +
       `📍 *RETIRADA:*\n${route.pickup_name}${pickupNeighborhoodLine}\n\n` +
       `📦 *${stopsHeader}*\n\n` +
       `${stopsText}\n\n` +
@@ -1031,6 +1061,90 @@ export class TelegramBotService {
   }
 
   /**
+   * M4.4B: Invalidate previous route offer when a new version is published.
+   * Modifies the previous card to show "ROTA #X — OFERTA ATUALIZADA (vOld -> vNew)"
+   * and completely removes inline keyboard ({ inline_keyboard: [] }).
+   * Fallback: if editMessageText fails, removes keyboard via editMessageReplyMarkup
+   * and sends short fallback message.
+   */
+  public async invalidateRouteOfferForVersion(
+    chatId: string | number,
+    messageId: string | number | null | undefined,
+    routeId: number,
+    oldVersion: number,
+    newVersion: number
+  ): Promise<{
+    success: boolean;
+    mode: 'EDITED_TEXT' | 'FALLBACK_SENT' | 'FALLBACK_SENT_NO_MESSAGE_ID' | 'FAILED';
+    error?: string;
+  }> {
+    if (!this.token && !isMockChatId(chatId)) {
+      return { success: false, mode: 'FAILED', error: 'TELEGRAM_BOT_TOKEN_NOT_CONFIGURED' };
+    }
+
+    const numMessageId = messageId ? parseInt(String(messageId), 10) : null;
+    const replacedText = buildRouteOfferReplacedText(routeId, oldVersion, newVersion);
+
+    if (numMessageId && !isNaN(numMessageId)) {
+      try {
+        await this.callTelegramApi('editMessageText', {
+          chat_id: chatId,
+          message_id: numMessageId,
+          text: replacedText,
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [],
+          },
+        });
+        return { success: true, mode: 'EDITED_TEXT' };
+      } catch (primaryErr: any) {
+        console.warn(
+          `[TelegramBot] Primary editMessageText for replaced offer #${routeId} (v${oldVersion} -> v${newVersion}) failed for chat ${chatId}, msg ${messageId}: ${primaryErr.message}. Executing fallback...`
+        );
+
+        // Fallback Step 1: Remove inline keyboard
+        try {
+          await this.callTelegramApi('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: numMessageId,
+            reply_markup: {
+              inline_keyboard: [],
+            },
+          });
+        } catch (markupErr: any) {
+          console.warn(
+            `[TelegramBot] Fallback editMessageReplyMarkup failed for chat ${chatId}: ${markupErr.message}`
+          );
+        }
+
+        // Fallback Step 2: Send short notification
+        try {
+          const fallbackText = `🔄 A Rota #${routeId} foi atualizada de v${oldVersion} para v${newVersion}. Verifique a nova oferta.`;
+          await this.sendMessage(chatId, fallbackText);
+          return { success: true, mode: 'FALLBACK_SENT', error: primaryErr.message };
+        } catch (fallbackErr: any) {
+          console.error(
+            `[TelegramBot] Fallback sendMessage failed for chat ${chatId}: ${fallbackErr.message}`
+          );
+          return { success: false, mode: 'FAILED', error: fallbackErr.message };
+        }
+      }
+    } else {
+      // No message ID available -> send short fallback notification
+      try {
+        const fallbackText = `🔄 A Rota #${routeId} foi atualizada de v${oldVersion} para v${newVersion}. Verifique a nova oferta.`;
+        await this.sendMessage(chatId, fallbackText);
+        return { success: true, mode: 'FALLBACK_SENT_NO_MESSAGE_ID' };
+      } catch (err: any) {
+        console.error(
+          `[TelegramBot] Fallback notification failed for chat ${chatId} (no message_id): ${err.message}`
+        );
+        return { success: false, mode: 'FAILED', error: err.message };
+      }
+    }
+  }
+
+  /**
    * M2.1 & M3: Invalidate or update offer button on other drivers' messages after route is accepted.
    * Completely removes inline keyboard ({ inline_keyboard: [] }) so no actionable button remains.
    */
@@ -1241,6 +1355,13 @@ export class TelegramBotService {
       return;
     }
 
+    // Check if user has an active reactivation or reinclusion session
+    const reactivationSession = this.reactivationSessions.get(telegramUserId);
+    if (reactivationSession) {
+      await this.processReactivationInput(telegramUserId, chatId, rawText, reactivationSession);
+      return;
+    }
+
     // Check if user has an active profile editing session
     const editSession = this.editSessions.get(telegramUserId);
     if (editSession) {
@@ -1292,6 +1413,7 @@ export class TelegramBotService {
     this.sessions.delete(telegramUserId);
     this.editSessions.delete(telegramUserId);
     this.referralSessions.delete(telegramUserId);
+    this.reactivationSessions.delete(telegramUserId);
 
     // M1.1 & M1.2 Section 21: Existing drivers are NEVER asked for invite
     if (this.driverService) {
@@ -1414,28 +1536,56 @@ export class TelegramBotService {
 
   private async sendMainMenu(chatId: string, driver: Driver) {
     const firstName = driver.name.split(' ')[0] || driver.name;
-    const statusLabel =
-      driver.status === 'ACTIVE'
-        ? 'ATIVO'
-        : driver.status === 'PENDING'
-        ? 'AGUARDANDO APROVAÇÃO'
-        : 'BLOQUEADO';
+    const isExcluded = driver.status === 'EXCLUDED' || driver.is_excluded;
 
-    const msg =
+    let statusLabel = 'BLOQUEADO';
+    if (driver.status === 'ACTIVE') statusLabel = 'ATIVO';
+    else if (driver.status === 'PENDING') statusLabel = 'AGUARDANDO APROVAÇÃO';
+    else if (isExcluded) statusLabel = 'CADASTRO DESATIVADO / EXCLUÍDO';
+
+    let msg =
       `<b>KANTINE ENTREGAS</b>\n\n` +
       `Olá, ${escapeHtml(firstName)}.\n\n` +
       `<b>Status:</b> ${escapeHtml(statusLabel)}`;
 
-    const buttons: any[] = [
-      [{ text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' }],
-    ];
+    const buttons: any[] = [];
 
-    if (driver.status === 'ACTIVE') {
+    if (isExcluded) {
+      const reason = driver.exclusion_reason || driver.previous_exclusion_reason || 'Desativação administrativa';
+      msg += `\n• <b>Motivo do desligamento:</b> ${escapeHtml(reason)}`;
+      if (driver.reinclusion_requested) {
+        msg += `\n\n⏳ <b>Solicitação de reinclusão em análise.</b>\n` +
+               `Justificativa informada: <i>"${escapeHtml(driver.reinclusion_reason || '')}"</i>`;
+      } else {
+        msg += `\n\nCaso queira retornar ao quadro de entregadores da Kantine, você pode enviar um pedido de reinclusão com sua justificativa.`;
+        buttons.push([{ text: '📝 SOLICITAR REINCLUSÃO', callback_data: 'req_reinclusion' }]);
+      }
+      buttons.push([{ text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' }]);
+    } else if (driver.status === 'BLOCKED') {
+      if (driver.reactivation_requested) {
+        msg += `\n\n⏳ <b>Solicitação de reativação em análise pela equipe Kantine.</b>\n` +
+               `Justificativa informada: <i>"${escapeHtml(driver.reactivation_reason || '')}"</i>`;
+      } else {
+        msg += `\n\nSeu cadastro está bloqueado no momento. Você pode enviar uma solicitação de reativação para análise da administração.`;
+        buttons.push([{ text: '🔄 SOLICITAR REATIVAÇÃO', callback_data: 'req_reactivation' }]);
+      }
+      buttons.push([
+        { text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' },
+        { text: '📋 MINHAS INDICAÇÕES', callback_data: 'menu_my_referrals' },
+      ]);
+    } else if (driver.status === 'ACTIVE') {
+      buttons.push([
+        { text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' },
+      ]);
       buttons.push([
         { text: '👥 INDICAR MOTORISTA', callback_data: 'menu_refer_driver' },
         { text: '📋 MINHAS INDICAÇÕES', callback_data: 'menu_my_referrals' },
       ]);
     } else {
+      // PENDING
+      buttons.push([
+        { text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' },
+      ]);
       buttons.push([
         { text: '📋 MINHAS INDICAÇÕES', callback_data: 'menu_my_referrals' },
       ]);
@@ -1447,6 +1597,61 @@ export class TelegramBotService {
         inline_keyboard: buttons,
       },
     });
+  }
+
+  private async processReactivationInput(
+    telegramUserId: string,
+    chatId: string,
+    rawText: string,
+    session: ReactivationSession
+  ) {
+    if (rawText.toLowerCase() === '/cancelar' || rawText.toLowerCase() === 'cancelar') {
+      this.reactivationSessions.delete(telegramUserId);
+      await this.sendMessage(chatId, '❌ Solicitação cancelada.');
+      if (this.driverService) {
+        const driver = await this.driverService.getDriverById(session.driverId);
+        if (driver) await this.sendMainMenu(chatId, driver);
+      }
+      return;
+    }
+
+    if (rawText.trim().length < 3) {
+      await this.sendMessage(
+        chatId,
+        '⚠️ Por favor, informe uma justificativa com no mínimo 3 caracteres.\n\nOu envie /cancelar para desistir.'
+      );
+      return;
+    }
+
+    this.reactivationSessions.delete(telegramUserId);
+
+    try {
+      if (session.type === 'REACTIVATION') {
+        const updated = await this.driverService.requestReactivation(session.driverId, rawText.trim());
+        await this.sendMessage(
+          chatId,
+          '✅ *Solicitação de Reativação Enviada!*\n\n' +
+            'Sua justificativa foi registrada com sucesso e será analisada pelos administradores da Kantine.\n' +
+            'Você receberá uma notificação assim que for avaliada.'
+        );
+        await this.sendMainMenu(chatId, updated);
+      } else {
+        const updated = await this.driverService.requestReinclusion(session.driverId, rawText.trim());
+        await this.sendMessage(
+          chatId,
+          '✅ *Pedido de Reinclusão Enviado!*\n\n' +
+            'Sua justificativa foi registrada com sucesso e encaminhada para a decisão da administração da Kantine com todo o seu histórico preservado.\n' +
+            'Você será notificado assim que houver uma deliberação.'
+        );
+        await this.sendMainMenu(chatId, updated);
+      }
+    } catch (err: any) {
+      console.error('[processReactivationInput failed]', err);
+      await this.sendMessage(
+        chatId,
+        '❌ Ocorreu um erro ao registrar sua solicitação. Por favor, tente novamente enviando /start.'
+      );
+    }
   }
 
   private async sendMyProfile(chatId: string, telegramUserId: string) {
@@ -2252,11 +2457,22 @@ export class TelegramBotService {
             }
           }
         } else {
-          // REJECTED (e.g. OUTDATED_ROUTE_VERSION, VEHICLE_INCOMPATIBLE, DRIVER_PENDING, DRIVER_BLOCKED, ROUTE_CANCELLED)
+          // REJECTED (e.g. STALE_ROUTE_VERSION, OUTDATED_ROUTE_VERSION, VEHICLE_INCOMPATIBLE, DRIVER_PENDING, DRIVER_BLOCKED, ROUTE_CANCELLED)
           await this.answerCallbackQuery(query.id, result.message, true);
           await this.sendMessage(chatId, result.message);
-          if (result.error === 'OUTDATED_ROUTE_VERSION' && query.message?.message_id) {
-            await this.invalidateRouteOfferMarkup(chatId, query.message.message_id).catch(() => {});
+          if ((result.error === 'OUTDATED_ROUTE_VERSION' || result.error === 'STALE_ROUTE_VERSION') && query.message?.message_id) {
+            const currentRoute = await this.routeService.getRouteById(routeId);
+            if (currentRoute) {
+              await this.invalidateRouteOfferForVersion(
+                chatId,
+                query.message.message_id,
+                routeId,
+                expectedVersion || 1,
+                currentRoute.route_version
+              ).catch(() => {});
+            } else {
+              await this.invalidateRouteOfferMarkup(chatId, query.message.message_id).catch(() => {});
+            }
           }
         }
       } catch (err: any) {
@@ -2687,6 +2903,45 @@ export class TelegramBotService {
     if (data === 'menu_my_profile') {
       this.editSessions.delete(telegramUserId);
       await this.sendMyProfile(chatId, telegramUserId);
+      return;
+    }
+
+    // ==========================================
+    // Lifecycle: Reactivation & Reinclusion Requests
+    // ==========================================
+    if (data === 'req_reactivation') {
+      await this.answerCallbackQuery(query.id);
+      if (!this.driverService) return;
+      const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+      if (!driver || driver.status !== 'BLOCKED') {
+        await this.sendMessage(chatId, 'Solicitação de reativação não aplicável ao seu status atual.');
+        return;
+      }
+      this.reactivationSessions.set(telegramUserId, { driverId: driver.id, type: 'REACTIVATION' });
+      await this.sendMessage(
+        chatId,
+        '🔄 *Solicitar Reativação de Cadastro*\n\n' +
+          'Por favor, digite o motivo ou justificativa do seu pedido de reativação para a equipe da Kantine:\n\n' +
+          '_(Envie /cancelar para desistir)_'
+      );
+      return;
+    }
+
+    if (data === 'req_reinclusion') {
+      await this.answerCallbackQuery(query.id);
+      if (!this.driverService) return;
+      const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+      if (!driver || (driver.status !== 'EXCLUDED' && !driver.is_excluded)) {
+        await this.sendMessage(chatId, 'Solicitação de reinclusão não aplicável ao seu status atual.');
+        return;
+      }
+      this.reactivationSessions.set(telegramUserId, { driverId: driver.id, type: 'REINCLUSION' });
+      await this.sendMessage(
+        chatId,
+        '📝 *Solicitar Reinclusão de Cadastro*\n\n' +
+          'Por favor, digite a sua justificativa para solicitar a reinclusão no sistema de entregas da Kantine:\n\n' +
+          '_(Envie /cancelar para desistir)_'
+      );
       return;
     }
 

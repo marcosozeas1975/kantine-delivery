@@ -1,4 +1,4 @@
-export type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED';
+export type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED' | 'EXCLUDED';
 
 export type VehicleType =
   | 'CAR_HATCH'
@@ -73,6 +73,21 @@ export interface Driver {
   pix_key_type: PixKeyType;
   pix_key_value?: string | null;
   status: DriverStatus;
+  // Exclusion fields & historical memory
+  is_excluded?: boolean;
+  excluded_at?: Date | null;
+  exclusion_reason?: string | null;
+  excluded_by?: string | null;
+  previous_exclusion_reason?: string | null;
+  exclusion_count?: number;
+  // Blocked Reactivation Request fields
+  reactivation_requested?: boolean;
+  reactivation_requested_at?: Date | null;
+  reactivation_reason?: string | null;
+  // Excluded Reinclusion Request fields
+  reinclusion_requested?: boolean;
+  reinclusion_requested_at?: Date | null;
+  reinclusion_reason?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -82,7 +97,13 @@ export type DriverEventType =
   | 'DRIVER_APPROVED'
   | 'DRIVER_BLOCKED'
   | 'DRIVER_REACTIVATED'
-  | 'DRIVER_PROFILE_UPDATED';
+  | 'DRIVER_PROFILE_UPDATED'
+  | 'DRIVER_EXCLUDED'
+  | 'REACTIVATION_REQUESTED'
+  | 'REACTIVATION_REJECTED'
+  | 'REINCLUSION_REQUESTED'
+  | 'REINCLUSION_APPROVED'
+  | 'REINCLUSION_REJECTED';
 
 export interface DriverEvent {
   id: number;

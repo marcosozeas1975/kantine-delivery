@@ -620,6 +620,7 @@ export class RouteService {
           .insert(routeOfferDispatches)
           .values({
             route_id: id,
+            route_version: freshRoute.route_version || 1,
             driver_id: driver.id,
             telegram_chat_id: driver.telegram_chat_id,
             telegram_message_id: sendResult.messageId || null,
@@ -636,6 +637,7 @@ export class RouteService {
             .insert(routeOfferDispatches)
             .values({
               route_id: id,
+              route_version: freshRoute.route_version || 1,
               driver_id: driver.id,
               telegram_chat_id: driver.telegram_chat_id,
               status: 'FAILED',
@@ -775,12 +777,12 @@ export class RouteService {
       };
     }
 
-    // M4.4 Seção 4 & 24: Validação de versão da oferta contra callback antigo
+    // M4.4 Seção 4 & 24 & M4.4B: Validação de versão da oferta contra callback antigo
     if (identifier.expectedVersion !== undefined && identifier.expectedVersion !== route.route_version) {
       return {
         status: 'REJECTED',
-        error: 'OUTDATED_ROUTE_VERSION',
-        message: 'Esta oferta foi atualizada pela loja. Verifique a nova oferta antes de aceitar.',
+        error: 'STALE_ROUTE_VERSION',
+        message: '⚠️ Esta oferta foi atualizada e não está mais disponível. Verifique a oferta mais recente da rota.',
       };
     }
 
@@ -804,7 +806,10 @@ export class RouteService {
         )
       );
 
-    const sentDispatch = dispatches.find((d) => d.status === 'SENT');
+    const sentDispatch =
+      dispatches.find((d) => d.status === 'SENT' && d.route_version === route.route_version) ||
+      dispatches.find((d) => d.status === 'SENT');
+
     if (!sentDispatch) {
       return {
         status: 'REJECTED',
@@ -944,6 +949,7 @@ export class RouteService {
         .where(
           and(
             eq(routeOfferDispatches.route_id, routeId),
+            eq(routeOfferDispatches.route_version, route.route_version),
             eq(routeOfferDispatches.status, 'SENT')
           )
         );

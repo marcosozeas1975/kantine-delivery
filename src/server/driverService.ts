@@ -10,6 +10,11 @@ import {
   normalizeGeneralPhone,
 } from './pixValidation.ts';
 
+function escapeTelegramMarkdown(str: string): string {
+  if (!str) return '';
+  return str.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
 export class DriverService {
   public async getDrivers(statusFilter?: DriverStatus): Promise<Driver[]> {
     try {
@@ -490,6 +495,7 @@ export class DriverService {
         .update(drivers)
         .set({
           status: 'ACTIVE',
+          reactivation_requested: false,
           updated_at: new Date(),
         })
         .where(eq(drivers.id, id))
@@ -501,16 +507,330 @@ export class DriverService {
       await db.insert(driverEvents).values({
         driver_id: id,
         event_type: 'DRIVER_REACTIVATED',
+        actor_type: 'ADMIN',
       });
 
       // 12. Enviar mensagem Telegram
-      const msg = '✅ Seu cadastro de entregador foi reativado.';
+      const msg = '✅ Seu cadastro de entregador foi reativado.\n\nVocê já pode receber ofertas de entregas da Kantine.';
       await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
 
       return updatedDriver;
     } catch (err: any) {
       console.error(`[DriverService.reactivateDriver failed for #${id}]`, err);
       throw new Error(`Failed to reactivate driver #${id}`, { cause: err });
+    }
+  }
+
+  /**
+   * Driver submits reactivation request from Telegram when BLOCKED
+   */
+  public async requestReactivation(id: number, reason: string): Promise<Driver> {
+    const driver = await this.getDriverById(id);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    if (driver.status !== 'BLOCKED') {
+      throw new Error(`CANNOT_REQUEST_REACTIVATION_FOR_STATUS_${driver.status}`);
+    }
+
+    const trimmedReason = (reason || '').trim();
+    if (trimmedReason.length < 3) {
+      throw new Error('INVALID_REASON: Justificativa de reativação deve ter no mínimo 3 caracteres.');
+    }
+
+    try {
+      const updated = await db
+        .update(drivers)
+        .set({
+          reactivation_requested: true,
+          reactivation_requested_at: new Date(),
+          reactivation_reason: trimmedReason,
+          updated_at: new Date(),
+        })
+        .where(eq(drivers.id, id))
+        .returning();
+
+      const updatedDriver = updated[0] as Driver;
+
+      // Record REACTIVATION_REQUESTED
+      await db.insert(driverEvents).values({
+        driver_id: id,
+        event_type: 'REACTIVATION_REQUESTED',
+        actor_type: 'DRIVER',
+        actor_id: driver.telegram_user_id,
+        details: trimmedReason,
+      });
+
+      return updatedDriver;
+    } catch (err: any) {
+      console.error(`[DriverService.requestReactivation failed for #${id}]`, err);
+      throw new Error(`Failed to request reactivation for driver #${id}`, { cause: err });
+    }
+  }
+
+  /**
+   * Admin rejects reactivation request
+   */
+  public async rejectReactivation(id: number, rejectionReason: string, actorId?: string): Promise<Driver> {
+    const driver = await this.getDriverById(id);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    const trimmed = (rejectionReason || '').trim() || 'Solicitação de reativação não aprovada.';
+
+    try {
+      const updated = await db
+        .update(drivers)
+        .set({
+          reactivation_requested: false,
+          updated_at: new Date(),
+        })
+        .where(eq(drivers.id, id))
+        .returning();
+
+      const updatedDriver = updated[0] as Driver;
+
+      // Record REACTIVATION_REJECTED
+      await db.insert(driverEvents).values({
+        driver_id: id,
+        event_type: 'REACTIVATION_REJECTED',
+        actor_type: 'ADMIN',
+        actor_id: actorId || null,
+        details: trimmed,
+      });
+
+      // Send Telegram notification
+      const msg =
+        `❌ *Solicitação de Reativação Não Aprovada*\n\n` +
+        `Sua solicitação de reativação foi analisada pela administração da Kantine.\n\n` +
+        `• *Motivo informado:* ${escapeTelegramMarkdown(trimmed)}\n\n` +
+        `Caso queira mais informações, entre em contato com o suporte da Kantine.`;
+      await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+
+      return updatedDriver;
+    } catch (err: any) {
+      console.error(`[DriverService.rejectReactivation failed for #${id}]`, err);
+      throw new Error(`Failed to reject reactivation for driver #${id}`, { cause: err });
+    }
+  }
+
+  /**
+   * Admin excludes/archives driver with mandatory reason and historical memory
+   */
+  public async excludeDriver(id: number, reason: string, actorId?: string): Promise<Driver> {
+    const driver = await this.getDriverById(id);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    const trimmedReason = (reason || '').trim();
+    if (trimmedReason.length < 3) {
+      throw new Error('INVALID_REASON: Motivo de exclusão é obrigatório (mínimo 3 caracteres).');
+    }
+
+    const newExclusionCount = (driver.exclusion_count || 0) + 1;
+
+    try {
+      const updated = await db
+        .update(drivers)
+        .set({
+          status: 'EXCLUDED',
+          is_excluded: true,
+          excluded_at: new Date(),
+          exclusion_reason: trimmedReason,
+          excluded_by: actorId || 'ADMIN',
+          previous_exclusion_reason: trimmedReason,
+          exclusion_count: newExclusionCount,
+          reactivation_requested: false,
+          reinclusion_requested: false,
+          updated_at: new Date(),
+        })
+        .where(eq(drivers.id, id))
+        .returning();
+
+      const updatedDriver = updated[0] as Driver;
+
+      // Record DRIVER_EXCLUDED audit event
+      await db.insert(driverEvents).values({
+        driver_id: id,
+        event_type: 'DRIVER_EXCLUDED',
+        actor_type: 'ADMIN',
+        actor_id: actorId || null,
+        details: JSON.stringify({
+          reason: trimmedReason,
+          exclusion_number: newExclusionCount,
+          previous_status: driver.status,
+        }),
+      });
+
+      // Send Telegram notification
+      const msg =
+        `⚠️ *Cadastro Desativado — Kantine Entregas*\n\n` +
+        `Seu cadastro de entregador foi desativado/excluído pela administração.\n\n` +
+        `• *Motivo registrado:* ${escapeTelegramMarkdown(trimmedReason)}\n\n` +
+        `Caso queira solicitar inclusão futura, você pode enviar sua solicitação e justificativa por este canal.`;
+      await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+
+      return updatedDriver;
+    } catch (err: any) {
+      console.error(`[DriverService.excludeDriver failed for #${id}]`, err);
+      throw new Error(`Failed to exclude driver #${id}`, { cause: err });
+    }
+  }
+
+  /**
+   * Excluded driver submits request for future reinclusion via Telegram
+   */
+  public async requestReinclusion(id: number, reason: string): Promise<Driver> {
+    const driver = await this.getDriverById(id);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    if (driver.status !== 'EXCLUDED' && !driver.is_excluded) {
+      throw new Error(`CANNOT_REQUEST_REINCLUSION_FOR_STATUS_${driver.status}`);
+    }
+
+    const trimmedReason = (reason || '').trim();
+    if (trimmedReason.length < 3) {
+      throw new Error('INVALID_REASON: Justificativa de reinclusão deve ter no mínimo 3 caracteres.');
+    }
+
+    try {
+      const updated = await db
+        .update(drivers)
+        .set({
+          reinclusion_requested: true,
+          reinclusion_requested_at: new Date(),
+          reinclusion_reason: trimmedReason,
+          updated_at: new Date(),
+        })
+        .where(eq(drivers.id, id))
+        .returning();
+
+      const updatedDriver = updated[0] as Driver;
+
+      // Record REINCLUSION_REQUESTED audit event
+      await db.insert(driverEvents).values({
+        driver_id: id,
+        event_type: 'REINCLUSION_REQUESTED',
+        actor_type: 'DRIVER',
+        actor_id: driver.telegram_user_id,
+        details: trimmedReason,
+      });
+
+      return updatedDriver;
+    } catch (err: any) {
+      console.error(`[DriverService.requestReinclusion failed for #${id}]`, err);
+      throw new Error(`Failed to request reinclusion for driver #${id}`, { cause: err });
+    }
+  }
+
+  /**
+   * Admin approves reinclusion request, returning driver to ACTIVE or PENDING while preserving historical memory
+   */
+  public async approveReinclusion(
+    id: number,
+    options: { targetStatus?: DriverStatus; notes?: string },
+    actorId?: string
+  ): Promise<Driver> {
+    const driver = await this.getDriverById(id);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    const targetStatus = options.targetStatus || 'ACTIVE';
+    const notes = (options.notes || '').trim() || 'Reinclusão aprovada pela administração.';
+
+    try {
+      const updated = await db
+        .update(drivers)
+        .set({
+          status: targetStatus,
+          is_excluded: false,
+          reinclusion_requested: false,
+          // Note: previous_exclusion_reason and exclusion_count are intentionally PRESERVED for historical memory!
+          updated_at: new Date(),
+        })
+        .where(eq(drivers.id, id))
+        .returning();
+
+      const updatedDriver = updated[0] as Driver;
+
+      // Record REINCLUSION_APPROVED
+      await db.insert(driverEvents).values({
+        driver_id: id,
+        event_type: 'REINCLUSION_APPROVED',
+        actor_type: 'ADMIN',
+        actor_id: actorId || null,
+        details: JSON.stringify({
+          targetStatus,
+          notes,
+          previous_exclusion_reason: driver.exclusion_reason || driver.previous_exclusion_reason,
+        }),
+      });
+
+      // Send Telegram notification
+      const msg =
+        `🎉 *Reinclusão Aprovada — Kantine Entregas*\n\n` +
+        `Seu pedido de reinclusão foi aprovado pela administração!\n\n` +
+        `Seu cadastro agora está *${targetStatus === 'ACTIVE' ? 'ATIVO' : 'EM ANÁLISE'}*.\n` +
+        `Você já pode voltar a participar das operações da Kantine.`;
+      await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+
+      return updatedDriver;
+    } catch (err: any) {
+      console.error(`[DriverService.approveReinclusion failed for #${id}]`, err);
+      throw new Error(`Failed to approve reinclusion for driver #${id}`, { cause: err });
+    }
+  }
+
+  /**
+   * Admin rejects reinclusion request
+   */
+  public async rejectReinclusion(id: number, rejectionReason: string, actorId?: string): Promise<Driver> {
+    const driver = await this.getDriverById(id);
+    if (!driver) {
+      throw new Error('DRIVER_NOT_FOUND');
+    }
+
+    const trimmed = (rejectionReason || '').trim() || 'Pedido de reinclusão não aprovado.';
+
+    try {
+      const updated = await db
+        .update(drivers)
+        .set({
+          reinclusion_requested: false,
+          updated_at: new Date(),
+        })
+        .where(eq(drivers.id, id))
+        .returning();
+
+      const updatedDriver = updated[0] as Driver;
+
+      // Record REINCLUSION_REJECTED
+      await db.insert(driverEvents).values({
+        driver_id: id,
+        event_type: 'REINCLUSION_REJECTED',
+        actor_type: 'ADMIN',
+        actor_id: actorId || null,
+        details: trimmed,
+      });
+
+      // Send Telegram notification
+      const msg =
+        `❌ *Pedido de Reinclusão Não Aprovado*\n\n` +
+        `Seu pedido de reinclusão foi analisado pela administração da Kantine.\n\n` +
+        `• *Motivo informado:* ${escapeTelegramMarkdown(trimmed)}\n\n` +
+        `Seu cadastro permanece desativado.`;
+      await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+
+      return updatedDriver;
+    } catch (err: any) {
+      console.error(`[DriverService.rejectReinclusion failed for #${id}]`, err);
+      throw new Error(`Failed to reject reinclusion for driver #${id}`, { cause: err });
     }
   }
 

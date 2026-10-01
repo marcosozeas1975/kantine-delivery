@@ -58,6 +58,25 @@ export async function initDbConstraints() {
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
 
+      // M4.4B Versionamento de Dispatches de Ofertas
+      await client.query(`ALTER TABLE "route_offer_dispatches" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);
+
+      // Drivers Lifecycle: Exclusion, Reactivation, Reinclusion & Historical Memory
+      await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_status_check"`);
+      await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_status_check" CHECK (status IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED'))`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "is_excluded" boolean DEFAULT false NOT NULL`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "excluded_at" timestamp`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "exclusion_reason" text`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "excluded_by" text`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "previous_exclusion_reason" text`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "exclusion_count" integer DEFAULT 0 NOT NULL`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "reactivation_requested" boolean DEFAULT false NOT NULL`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "reactivation_requested_at" timestamp`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "reactivation_reason" text`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "reinclusion_requested" boolean DEFAULT false NOT NULL`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "reinclusion_requested_at" timestamp`);
+      await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "reinclusion_reason" text`);
+
       await client.query(`
         CREATE TABLE IF NOT EXISTS "route_updates" (
           "id" serial PRIMARY KEY,

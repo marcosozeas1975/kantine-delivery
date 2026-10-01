@@ -9,7 +9,7 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// Drivers Table (M1 Baseline + M1.1 Cadastral Management)
+// Drivers Table (M1 Baseline + M1.1 Cadastral Management + Exclusion & Reactivation Lifecycle)
 export const drivers = pgTable(
   'drivers',
   {
@@ -22,12 +22,27 @@ export const drivers = pgTable(
     pix_key: text('pix_key'), // Kept for backward compatibility
     pix_key_type: text('pix_key_type').notNull().default('REQUIRES_UPDATE'), // CPF | PHONE | EMAIL | RANDOM | REQUIRES_UPDATE
     pix_key_value: text('pix_key_value'),
-    status: text('status').notNull().default('PENDING'), // PENDING | ACTIVE | BLOCKED
+    status: text('status').notNull().default('PENDING'), // PENDING | ACTIVE | BLOCKED | EXCLUDED
+    // Exclusion fields & historical memory
+    is_excluded: boolean('is_excluded').default(false).notNull(),
+    excluded_at: timestamp('excluded_at'),
+    exclusion_reason: text('exclusion_reason'),
+    excluded_by: text('excluded_by'),
+    previous_exclusion_reason: text('previous_exclusion_reason'),
+    exclusion_count: integer('exclusion_count').default(0).notNull(),
+    // Blocked Reactivation Request fields
+    reactivation_requested: boolean('reactivation_requested').default(false).notNull(),
+    reactivation_requested_at: timestamp('reactivation_requested_at'),
+    reactivation_reason: text('reactivation_reason'),
+    // Excluded Reinclusion Request fields
+    reinclusion_requested: boolean('reinclusion_requested').default(false).notNull(),
+    reinclusion_requested_at: timestamp('reinclusion_requested_at'),
+    reinclusion_reason: text('reinclusion_reason'),
     created_at: timestamp('created_at').defaultNow().notNull(),
     updated_at: timestamp('updated_at').defaultNow().notNull(),
   },
   (table) => [
-    check('drivers_status_check', sql`${table.status} IN ('PENDING', 'ACTIVE', 'BLOCKED')`),
+    check('drivers_status_check', sql`${table.status} IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED')`),
     check(
       'drivers_vehicle_type_canonical_check',
       sql`${table.vehicle_type} IN ('CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITH_BAG', 'MOTO_WITHOUT_BAG', 'OTHER')`
@@ -285,6 +300,7 @@ export const routeOfferDispatches = pgTable(
   {
     id: serial('id').primaryKey(),
     route_id: integer('route_id').references(() => routes.id, { onDelete: 'cascade' }).notNull(),
+    route_version: integer('route_version').default(1).notNull(),
     driver_id: integer('driver_id').references(() => drivers.id, { onDelete: 'cascade' }).notNull(),
     telegram_chat_id: text('telegram_chat_id').notNull(),
     telegram_message_id: text('telegram_message_id'),

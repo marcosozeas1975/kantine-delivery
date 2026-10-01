@@ -687,7 +687,7 @@ async function runM44Suite() {
     expectedVersion: versionBeforeOldCallback, // Versão antiga
   });
 
-  if (oldAcceptRes.status !== 'REJECTED' || oldAcceptRes.error !== 'OUTDATED_ROUTE_VERSION') {
+  if (oldAcceptRes.status !== 'REJECTED' || (oldAcceptRes.error !== 'OUTDATED_ROUTE_VERSION' && oldAcceptRes.error !== 'STALE_ROUTE_VERSION')) {
     throw new Error(`❌ EDIT-T13: Deveria rejeitar aceite de versão antiga, obtido: ${JSON.stringify(oldAcceptRes)}`);
   }
 

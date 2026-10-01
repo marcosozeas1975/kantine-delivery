@@ -58,12 +58,27 @@ var init_schema = __esm({
         // CPF | PHONE | EMAIL | RANDOM | REQUIRES_UPDATE
         pix_key_value: text("pix_key_value"),
         status: text("status").notNull().default("PENDING"),
-        // PENDING | ACTIVE | BLOCKED
+        // PENDING | ACTIVE | BLOCKED | EXCLUDED
+        // Exclusion fields & historical memory
+        is_excluded: boolean("is_excluded").default(false).notNull(),
+        excluded_at: timestamp("excluded_at"),
+        exclusion_reason: text("exclusion_reason"),
+        excluded_by: text("excluded_by"),
+        previous_exclusion_reason: text("previous_exclusion_reason"),
+        exclusion_count: integer("exclusion_count").default(0).notNull(),
+        // Blocked Reactivation Request fields
+        reactivation_requested: boolean("reactivation_requested").default(false).notNull(),
+        reactivation_requested_at: timestamp("reactivation_requested_at"),
+        reactivation_reason: text("reactivation_reason"),
+        // Excluded Reinclusion Request fields
+        reinclusion_requested: boolean("reinclusion_requested").default(false).notNull(),
+        reinclusion_requested_at: timestamp("reinclusion_requested_at"),
+        reinclusion_reason: text("reinclusion_reason"),
         created_at: timestamp("created_at").defaultNow().notNull(),
         updated_at: timestamp("updated_at").defaultNow().notNull()
       },
       (table) => [
-        check("drivers_status_check", sql`${table.status} IN ('PENDING', 'ACTIVE', 'BLOCKED')`),
+        check("drivers_status_check", sql`${table.status} IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED')`),
         check(
           "drivers_vehicle_type_canonical_check",
           sql`${table.vehicle_type} IN ('CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITH_BAG', 'MOTO_WITHOUT_BAG', 'OTHER')`
@@ -319,6 +334,7 @@ var init_schema = __esm({
       {
         id: serial("id").primaryKey(),
         route_id: integer("route_id").references(() => routes.id, { onDelete: "cascade" }).notNull(),
+        route_version: integer("route_version").default(1).notNull(),
         driver_id: integer("driver_id").references(() => drivers.id, { onDelete: "cascade" }).notNull(),
         telegram_chat_id: text("telegram_chat_id").notNull(),
         telegram_message_id: text("telegram_message_id"),
@@ -1462,6 +1478,7 @@ var init_routeService = __esm({
             }
             const [disp] = await db.insert(routeOfferDispatches).values({
               route_id: id,
+              route_version: freshRoute.route_version || 1,
               driver_id: driver.id,
               telegram_chat_id: driver.telegram_chat_id,
               telegram_message_id: sendResult.messageId || null,
@@ -1474,6 +1491,7 @@ var init_routeService = __esm({
             try {
               const [disp] = await db.insert(routeOfferDispatches).values({
                 route_id: id,
+                route_version: freshRoute.route_version || 1,
                 driver_id: driver.id,
                 telegram_chat_id: driver.telegram_chat_id,
                 status: "FAILED",
@@ -1583,8 +1601,8 @@ var init_routeService = __esm({
         if (identifier.expectedVersion !== void 0 && identifier.expectedVersion !== route.route_version) {
           return {
             status: "REJECTED",
-            error: "OUTDATED_ROUTE_VERSION",
-            message: "Esta oferta foi atualizada pela loja. Verifique a nova oferta antes de aceitar."
+            error: "STALE_ROUTE_VERSION",
+            message: "\u26A0\uFE0F Esta oferta foi atualizada e n\xE3o est\xE1 mais dispon\xEDvel. Verifique a oferta mais recente da rota."
           };
         }
         if (route.status === "CANCELLED") {
@@ -1600,7 +1618,7 @@ var init_routeService = __esm({
             eq2(routeOfferDispatches.driver_id, driver.id)
           )
         );
-        const sentDispatch = dispatches.find((d) => d.status === "SENT");
+        const sentDispatch = dispatches.find((d) => d.status === "SENT" && d.route_version === route.route_version) || dispatches.find((d) => d.status === "SENT");
         if (!sentDispatch) {
           return {
             status: "REJECTED",
@@ -1693,6 +1711,7 @@ var init_routeService = __esm({
           const otherDispatches = await db.select().from(routeOfferDispatches).where(
             and2(
               eq2(routeOfferDispatches.route_id, routeId),
+              eq2(routeOfferDispatches.route_version, route.route_version),
               eq2(routeOfferDispatches.status, "SENT")
             )
           );
@@ -2641,6 +2660,13 @@ var init_routeEditService = __esm({
           );
         }
         if (editData.stops && editData.stops.length > 0) {
+          const incomingStopIds = editData.stops.filter((s) => !!s.id).map((s) => s.id);
+          const existingStops = existingRoute.stops || [];
+          for (const exStop of existingStops) {
+            if (!incomingStopIds.includes(exStop.id) && exStop.status === "PENDING") {
+              await db.delete(routeStops).where(and3(eq3(routeStops.id, exStop.id), eq3(routeStops.route_id, routeId)));
+            }
+          }
           for (let i = 0; i < editData.stops.length; i++) {
             const s = editData.stops[i];
             if (s.id) {
@@ -2653,6 +2679,20 @@ var init_routeEditService = __esm({
               if (s.delivery_mode) stopUpdateData.delivery_mode = s.delivery_mode;
               if (s.sequence) stopUpdateData.sequence = s.sequence;
               await db.update(routeStops).set(stopUpdateData).where(eq3(routeStops.id, s.id));
+            } else {
+              const randomPin = Math.floor(1e3 + Math.random() * 9e3).toString();
+              await db.insert(routeStops).values({
+                route_id: routeId,
+                sequence: s.sequence || i + 1,
+                destination_address: s.destination_address.trim(),
+                destination_neighborhood: s.destination_neighborhood.trim(),
+                cargo_description: s.cargo_description.trim(),
+                observations: s.observations?.trim() || null,
+                desired_deadline: s.desired_deadline?.trim() || null,
+                delivery_mode: s.delivery_mode || "IN_PERSON",
+                pin_code: randomPin,
+                status: "PENDING"
+              });
             }
           }
         }
@@ -2675,20 +2715,66 @@ var init_routeEditService = __esm({
           actor,
           details: `Version ${oldVersion} -> ${newVersion} (${analysis.change_type}): ${analysis.diff_summary}`
         });
+        let reofferStats = void 0;
         if (existingRoute.status === "OFFERED") {
-          const dispatches = await db.select().from(routeOfferDispatches).where(
+          const oldDispatches = await db.select().from(routeOfferDispatches).where(
             and3(
               eq3(routeOfferDispatches.route_id, routeId),
+              eq3(routeOfferDispatches.route_version, oldVersion),
               eq3(routeOfferDispatches.status, "SENT")
             )
           );
-          for (const disp of dispatches) {
-            if (disp.telegram_message_id) {
-              await telegramBot.invalidateRouteOfferMarkup(disp.telegram_chat_id, disp.telegram_message_id).catch(() => {
-              });
-            }
-          }
-          await routeService.publishRoute(routeId, actor, { isRepublish: true });
+          let oldInvalidated = 0;
+          let oldFailed = 0;
+          await Promise.allSettled(
+            oldDispatches.map(async (disp) => {
+              try {
+                const invRes = await telegramBot.invalidateRouteOfferForVersion(
+                  disp.telegram_chat_id,
+                  disp.telegram_message_id,
+                  routeId,
+                  oldVersion,
+                  newVersion
+                );
+                if (invRes.success) {
+                  oldInvalidated++;
+                } else {
+                  oldFailed++;
+                }
+                console.info(
+                  `[RouteEdit.invalidateOldOffer] route_id=${routeId} old_version=${oldVersion} new_version=${newVersion} dispatch_id=${disp.id} driver_id=${disp.driver_id} result=${invRes.mode}` + (invRes.error ? ` error=${invRes.error}` : "")
+                );
+              } catch (err) {
+                oldFailed++;
+                console.error(
+                  `[RouteEdit.invalidateOldOffer] route_id=${routeId} old_version=${oldVersion} new_version=${newVersion} dispatch_id=${disp.id} driver_id=${disp.driver_id} result=FAILED error=${err.message}`
+                );
+              }
+            })
+          );
+          await db.insert(routeEvents).values({
+            route_id: routeId,
+            event_type: "OLD_ROUTE_OFFER_INVALIDATED",
+            actor,
+            details: `Version ${oldVersion} invalidated for ${oldDispatches.length} driver(s): ${oldInvalidated} successfully invalidated, ${oldFailed} failed`
+          });
+          const pubResult = await routeService.publishRoute(routeId, actor, { isRepublish: true });
+          await db.insert(routeEvents).values({
+            route_id: routeId,
+            event_type: "ROUTE_REOFFERED",
+            actor,
+            details: `Reoffered v${newVersion} to ${pubResult.dispatches.length} eligible driver(s): ${pubResult.stats.sent} sent, ${pubResult.stats.failed} failed`
+          });
+          reofferStats = {
+            old_version: oldVersion,
+            new_version: newVersion,
+            old_dispatches_count: oldDispatches.length,
+            old_dispatches_invalidated: oldInvalidated,
+            old_dispatches_failed: oldFailed,
+            eligible_drivers_count: pubResult.dispatches.length,
+            new_offers_sent: pubResult.stats.sent,
+            new_offers_failed: pubResult.stats.failed
+          };
         }
         if (["ACCEPTED", "ARRIVED_PICKUP", "PICKED_UP", "IN_TRANSIT"].includes(existingRoute.status)) {
           if (existingRoute.accepted_driver_id) {
@@ -2709,7 +2795,8 @@ var init_routeEditService = __esm({
           route: updatedRoute,
           update_id: updateRecord.id,
           diff_summary: analysis.diff_summary,
-          change_type: analysis.change_type
+          change_type: analysis.change_type,
+          reoffer_stats: reofferStats
         };
       }
       /**
@@ -3392,6 +3479,15 @@ R$ ${feeStr}
 
 \u{1F512} ROTA J\xC1 ACEITA POR OUTRO MOTORISTA`;
 }
+function buildRouteOfferReplacedText(routeId, oldVersion, newVersion) {
+  return `\u{1F504} *ROTA #${routeId} \u2014 OFERTA ATUALIZADA*
+
+Esta vers\xE3o da oferta foi substitu\xEDda por uma nova vers\xE3o.
+Consulte a nova oferta enviada abaixo.
+
+\u2022 *Vers\xE3o anterior:* v${oldVersion}
+\u2022 *Nova vers\xE3o:* v${newVersion}`;
+}
 function escapeHtml(str) {
   if (!str) return "";
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -3413,6 +3509,7 @@ var init_telegramBot = __esm({
         this.editSessions = /* @__PURE__ */ new Map();
         this.m4DriverSessions = /* @__PURE__ */ new Map();
         this.referralSessions = /* @__PURE__ */ new Map();
+        this.reactivationSessions = /* @__PURE__ */ new Map();
         this.botInfo = null;
         this.driverService = null;
         this.deliveryService = null;
@@ -3766,7 +3863,9 @@ ${obsText}`;
         const pickupNeighborhood = route.pickup_neighborhood_snapshot?.trim();
         const pickupNeighborhoodLine = pickupNeighborhood ? `
 Bairro: ${pickupNeighborhood}` : "";
-        const text2 = `\u{1F6F5} *NOVA ROTA #${route.id}*
+        const updatedVersionHeader = route.route_version && route.route_version > 1 ? `
+\u{1F504} *OFERTA ATUALIZADA \u2014 v${route.route_version}*` : "";
+        const text2 = `\u{1F6F5} *NOVA ROTA #${route.id}*${updatedVersionHeader}
 
 \u{1F4CD} *RETIRADA:*
 ${route.pickup_name}${pickupNeighborhoodLine}
@@ -4149,6 +4248,72 @@ As condi\xE7\xF5es anteriores da rota continuam v\xE1lidas e vigentes.`;
         }
       }
       /**
+       * M4.4B: Invalidate previous route offer when a new version is published.
+       * Modifies the previous card to show "ROTA #X — OFERTA ATUALIZADA (vOld -> vNew)"
+       * and completely removes inline keyboard ({ inline_keyboard: [] }).
+       * Fallback: if editMessageText fails, removes keyboard via editMessageReplyMarkup
+       * and sends short fallback message.
+       */
+      async invalidateRouteOfferForVersion(chatId, messageId, routeId, oldVersion, newVersion) {
+        if (!this.token && !isMockChatId(chatId)) {
+          return { success: false, mode: "FAILED", error: "TELEGRAM_BOT_TOKEN_NOT_CONFIGURED" };
+        }
+        const numMessageId = messageId ? parseInt(String(messageId), 10) : null;
+        const replacedText = buildRouteOfferReplacedText(routeId, oldVersion, newVersion);
+        if (numMessageId && !isNaN(numMessageId)) {
+          try {
+            await this.callTelegramApi("editMessageText", {
+              chat_id: chatId,
+              message_id: numMessageId,
+              text: replacedText,
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: []
+              }
+            });
+            return { success: true, mode: "EDITED_TEXT" };
+          } catch (primaryErr) {
+            console.warn(
+              `[TelegramBot] Primary editMessageText for replaced offer #${routeId} (v${oldVersion} -> v${newVersion}) failed for chat ${chatId}, msg ${messageId}: ${primaryErr.message}. Executing fallback...`
+            );
+            try {
+              await this.callTelegramApi("editMessageReplyMarkup", {
+                chat_id: chatId,
+                message_id: numMessageId,
+                reply_markup: {
+                  inline_keyboard: []
+                }
+              });
+            } catch (markupErr) {
+              console.warn(
+                `[TelegramBot] Fallback editMessageReplyMarkup failed for chat ${chatId}: ${markupErr.message}`
+              );
+            }
+            try {
+              const fallbackText = `\u{1F504} A Rota #${routeId} foi atualizada de v${oldVersion} para v${newVersion}. Verifique a nova oferta.`;
+              await this.sendMessage(chatId, fallbackText);
+              return { success: true, mode: "FALLBACK_SENT", error: primaryErr.message };
+            } catch (fallbackErr) {
+              console.error(
+                `[TelegramBot] Fallback sendMessage failed for chat ${chatId}: ${fallbackErr.message}`
+              );
+              return { success: false, mode: "FAILED", error: fallbackErr.message };
+            }
+          }
+        } else {
+          try {
+            const fallbackText = `\u{1F504} A Rota #${routeId} foi atualizada de v${oldVersion} para v${newVersion}. Verifique a nova oferta.`;
+            await this.sendMessage(chatId, fallbackText);
+            return { success: true, mode: "FALLBACK_SENT_NO_MESSAGE_ID" };
+          } catch (err) {
+            console.error(
+              `[TelegramBot] Fallback notification failed for chat ${chatId} (no message_id): ${err.message}`
+            );
+            return { success: false, mode: "FAILED", error: err.message };
+          }
+        }
+      }
+      /**
        * M2.1 & M3: Invalidate or update offer button on other drivers' messages after route is accepted.
        * Completely removes inline keyboard ({ inline_keyboard: [] }) so no actionable button remains.
        */
@@ -4305,6 +4470,11 @@ As condi\xE7\xF5es anteriores da rota continuam v\xE1lidas e vigentes.`;
           await this.processReferralInput(telegramUserId, chatId, rawText, referralSession);
           return;
         }
+        const reactivationSession = this.reactivationSessions.get(telegramUserId);
+        if (reactivationSession) {
+          await this.processReactivationInput(telegramUserId, chatId, rawText, reactivationSession);
+          return;
+        }
         const editSession = this.editSessions.get(telegramUserId);
         if (editSession) {
           await this.processEditInput(telegramUserId, chatId, rawText, editSession);
@@ -4336,6 +4506,7 @@ As condi\xE7\xF5es anteriores da rota continuam v\xE1lidas e vigentes.`;
         this.sessions.delete(telegramUserId);
         this.editSessions.delete(telegramUserId);
         this.referralSessions.delete(telegramUserId);
+        this.reactivationSessions.delete(telegramUserId);
         if (this.driverService) {
           const existing = await this.driverService.getDriverByTelegramUserId(telegramUserId);
           if (existing) {
@@ -4439,21 +4610,61 @@ Se voc\xEA recebeu uma indica\xE7\xE3o aprovada, utilize o link de convite envia
       }
       async sendMainMenu(chatId, driver) {
         const firstName = driver.name.split(" ")[0] || driver.name;
-        const statusLabel = driver.status === "ACTIVE" ? "ATIVO" : driver.status === "PENDING" ? "AGUARDANDO APROVA\xC7\xC3O" : "BLOQUEADO";
-        const msg = `<b>KANTINE ENTREGAS</b>
+        const isExcluded = driver.status === "EXCLUDED" || driver.is_excluded;
+        let statusLabel = "BLOQUEADO";
+        if (driver.status === "ACTIVE") statusLabel = "ATIVO";
+        else if (driver.status === "PENDING") statusLabel = "AGUARDANDO APROVA\xC7\xC3O";
+        else if (isExcluded) statusLabel = "CADASTRO DESATIVADO / EXCLU\xCDDO";
+        let msg = `<b>KANTINE ENTREGAS</b>
 
 Ol\xE1, ${escapeHtml(firstName)}.
 
 <b>Status:</b> ${escapeHtml(statusLabel)}`;
-        const buttons = [
-          [{ text: "\u{1F464} MEU CADASTRO", callback_data: "menu_my_profile" }]
-        ];
-        if (driver.status === "ACTIVE") {
+        const buttons = [];
+        if (isExcluded) {
+          const reason = driver.exclusion_reason || driver.previous_exclusion_reason || "Desativa\xE7\xE3o administrativa";
+          msg += `
+\u2022 <b>Motivo do desligamento:</b> ${escapeHtml(reason)}`;
+          if (driver.reinclusion_requested) {
+            msg += `
+
+\u23F3 <b>Solicita\xE7\xE3o de reinclus\xE3o em an\xE1lise.</b>
+Justificativa informada: <i>"${escapeHtml(driver.reinclusion_reason || "")}"</i>`;
+          } else {
+            msg += `
+
+Caso queira retornar ao quadro de entregadores da Kantine, voc\xEA pode enviar um pedido de reinclus\xE3o com sua justificativa.`;
+            buttons.push([{ text: "\u{1F4DD} SOLICITAR REINCLUS\xC3O", callback_data: "req_reinclusion" }]);
+          }
+          buttons.push([{ text: "\u{1F464} MEU CADASTRO", callback_data: "menu_my_profile" }]);
+        } else if (driver.status === "BLOCKED") {
+          if (driver.reactivation_requested) {
+            msg += `
+
+\u23F3 <b>Solicita\xE7\xE3o de reativa\xE7\xE3o em an\xE1lise pela equipe Kantine.</b>
+Justificativa informada: <i>"${escapeHtml(driver.reactivation_reason || "")}"</i>`;
+          } else {
+            msg += `
+
+Seu cadastro est\xE1 bloqueado no momento. Voc\xEA pode enviar uma solicita\xE7\xE3o de reativa\xE7\xE3o para an\xE1lise da administra\xE7\xE3o.`;
+            buttons.push([{ text: "\u{1F504} SOLICITAR REATIVA\xC7\xC3O", callback_data: "req_reactivation" }]);
+          }
+          buttons.push([
+            { text: "\u{1F464} MEU CADASTRO", callback_data: "menu_my_profile" },
+            { text: "\u{1F4CB} MINHAS INDICA\xC7\xD5ES", callback_data: "menu_my_referrals" }
+          ]);
+        } else if (driver.status === "ACTIVE") {
+          buttons.push([
+            { text: "\u{1F464} MEU CADASTRO", callback_data: "menu_my_profile" }
+          ]);
           buttons.push([
             { text: "\u{1F465} INDICAR MOTORISTA", callback_data: "menu_refer_driver" },
             { text: "\u{1F4CB} MINHAS INDICA\xC7\xD5ES", callback_data: "menu_my_referrals" }
           ]);
         } else {
+          buttons.push([
+            { text: "\u{1F464} MEU CADASTRO", callback_data: "menu_my_profile" }
+          ]);
           buttons.push([
             { text: "\u{1F4CB} MINHAS INDICA\xC7\xD5ES", callback_data: "menu_my_referrals" }
           ]);
@@ -4464,6 +4675,48 @@ Ol\xE1, ${escapeHtml(firstName)}.
             inline_keyboard: buttons
           }
         });
+      }
+      async processReactivationInput(telegramUserId, chatId, rawText, session) {
+        if (rawText.toLowerCase() === "/cancelar" || rawText.toLowerCase() === "cancelar") {
+          this.reactivationSessions.delete(telegramUserId);
+          await this.sendMessage(chatId, "\u274C Solicita\xE7\xE3o cancelada.");
+          if (this.driverService) {
+            const driver = await this.driverService.getDriverById(session.driverId);
+            if (driver) await this.sendMainMenu(chatId, driver);
+          }
+          return;
+        }
+        if (rawText.trim().length < 3) {
+          await this.sendMessage(
+            chatId,
+            "\u26A0\uFE0F Por favor, informe uma justificativa com no m\xEDnimo 3 caracteres.\n\nOu envie /cancelar para desistir."
+          );
+          return;
+        }
+        this.reactivationSessions.delete(telegramUserId);
+        try {
+          if (session.type === "REACTIVATION") {
+            const updated = await this.driverService.requestReactivation(session.driverId, rawText.trim());
+            await this.sendMessage(
+              chatId,
+              "\u2705 *Solicita\xE7\xE3o de Reativa\xE7\xE3o Enviada!*\n\nSua justificativa foi registrada com sucesso e ser\xE1 analisada pelos administradores da Kantine.\nVoc\xEA receber\xE1 uma notifica\xE7\xE3o assim que for avaliada."
+            );
+            await this.sendMainMenu(chatId, updated);
+          } else {
+            const updated = await this.driverService.requestReinclusion(session.driverId, rawText.trim());
+            await this.sendMessage(
+              chatId,
+              "\u2705 *Pedido de Reinclus\xE3o Enviado!*\n\nSua justificativa foi registrada com sucesso e encaminhada para a decis\xE3o da administra\xE7\xE3o da Kantine com todo o seu hist\xF3rico preservado.\nVoc\xEA ser\xE1 notificado assim que houver uma delibera\xE7\xE3o."
+            );
+            await this.sendMainMenu(chatId, updated);
+          }
+        } catch (err) {
+          console.error("[processReactivationInput failed]", err);
+          await this.sendMessage(
+            chatId,
+            "\u274C Ocorreu um erro ao registrar sua solicita\xE7\xE3o. Por favor, tente novamente enviando /start."
+          );
+        }
       }
       async sendMyProfile(chatId, telegramUserId) {
         if (!this.driverService) return;
@@ -5176,9 +5429,21 @@ Restam: ${result.remainingCount} entregas pendentes.`
             } else {
               await this.answerCallbackQuery(query.id, result.message, true);
               await this.sendMessage(chatId, result.message);
-              if (result.error === "OUTDATED_ROUTE_VERSION" && query.message?.message_id) {
-                await this.invalidateRouteOfferMarkup(chatId, query.message.message_id).catch(() => {
-                });
+              if ((result.error === "OUTDATED_ROUTE_VERSION" || result.error === "STALE_ROUTE_VERSION") && query.message?.message_id) {
+                const currentRoute = await this.routeService.getRouteById(routeId);
+                if (currentRoute) {
+                  await this.invalidateRouteOfferForVersion(
+                    chatId,
+                    query.message.message_id,
+                    routeId,
+                    expectedVersion || 1,
+                    currentRoute.route_version
+                  ).catch(() => {
+                  });
+                } else {
+                  await this.invalidateRouteOfferMarkup(chatId, query.message.message_id).catch(() => {
+                  });
+                }
               }
             }
           } catch (err) {
@@ -5538,6 +5803,36 @@ Restam: ${result.remainingCount} entregas pendentes.`
           await this.sendMyProfile(chatId, telegramUserId);
           return;
         }
+        if (data === "req_reactivation") {
+          await this.answerCallbackQuery(query.id);
+          if (!this.driverService) return;
+          const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+          if (!driver || driver.status !== "BLOCKED") {
+            await this.sendMessage(chatId, "Solicita\xE7\xE3o de reativa\xE7\xE3o n\xE3o aplic\xE1vel ao seu status atual.");
+            return;
+          }
+          this.reactivationSessions.set(telegramUserId, { driverId: driver.id, type: "REACTIVATION" });
+          await this.sendMessage(
+            chatId,
+            "\u{1F504} *Solicitar Reativa\xE7\xE3o de Cadastro*\n\nPor favor, digite o motivo ou justificativa do seu pedido de reativa\xE7\xE3o para a equipe da Kantine:\n\n_(Envie /cancelar para desistir)_"
+          );
+          return;
+        }
+        if (data === "req_reinclusion") {
+          await this.answerCallbackQuery(query.id);
+          if (!this.driverService) return;
+          const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+          if (!driver || driver.status !== "EXCLUDED" && !driver.is_excluded) {
+            await this.sendMessage(chatId, "Solicita\xE7\xE3o de reinclus\xE3o n\xE3o aplic\xE1vel ao seu status atual.");
+            return;
+          }
+          this.reactivationSessions.set(telegramUserId, { driverId: driver.id, type: "REINCLUSION" });
+          await this.sendMessage(
+            chatId,
+            "\u{1F4DD} *Solicitar Reinclus\xE3o de Cadastro*\n\nPor favor, digite a sua justificativa para solicitar a reinclus\xE3o no sistema de entregas da Kantine:\n\n_(Envie /cancelar para desistir)_"
+          );
+          return;
+        }
         if (data === "menu_refer_driver") {
           await this.startReferralFlow(telegramUserId, chatId);
           return;
@@ -5821,6 +6116,10 @@ Restam: ${result.remainingCount} entregas pendentes.`
 
 // src/server/driverService.ts
 import { eq as eq5, desc as desc4, sql as sql6 } from "drizzle-orm";
+function escapeTelegramMarkdown(str) {
+  if (!str) return "";
+  return str.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
+}
 var DriverService, driverService;
 var init_driverService = __esm({
   "src/server/driverService.ts"() {
@@ -6153,19 +6452,260 @@ var init_driverService = __esm({
         try {
           const updated = await db.update(drivers).set({
             status: "ACTIVE",
+            reactivation_requested: false,
             updated_at: /* @__PURE__ */ new Date()
           }).where(eq5(drivers.id, id)).returning();
           const updatedDriver = updated[0];
           await db.insert(driverEvents).values({
             driver_id: id,
-            event_type: "DRIVER_REACTIVATED"
+            event_type: "DRIVER_REACTIVATED",
+            actor_type: "ADMIN"
           });
-          const msg = "\u2705 Seu cadastro de entregador foi reativado.";
+          const msg = "\u2705 Seu cadastro de entregador foi reativado.\n\nVoc\xEA j\xE1 pode receber ofertas de entregas da Kantine.";
           await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
           return updatedDriver;
         } catch (err) {
           console.error(`[DriverService.reactivateDriver failed for #${id}]`, err);
           throw new Error(`Failed to reactivate driver #${id}`, { cause: err });
+        }
+      }
+      /**
+       * Driver submits reactivation request from Telegram when BLOCKED
+       */
+      async requestReactivation(id, reason) {
+        const driver = await this.getDriverById(id);
+        if (!driver) {
+          throw new Error("DRIVER_NOT_FOUND");
+        }
+        if (driver.status !== "BLOCKED") {
+          throw new Error(`CANNOT_REQUEST_REACTIVATION_FOR_STATUS_${driver.status}`);
+        }
+        const trimmedReason = (reason || "").trim();
+        if (trimmedReason.length < 3) {
+          throw new Error("INVALID_REASON: Justificativa de reativa\xE7\xE3o deve ter no m\xEDnimo 3 caracteres.");
+        }
+        try {
+          const updated = await db.update(drivers).set({
+            reactivation_requested: true,
+            reactivation_requested_at: /* @__PURE__ */ new Date(),
+            reactivation_reason: trimmedReason,
+            updated_at: /* @__PURE__ */ new Date()
+          }).where(eq5(drivers.id, id)).returning();
+          const updatedDriver = updated[0];
+          await db.insert(driverEvents).values({
+            driver_id: id,
+            event_type: "REACTIVATION_REQUESTED",
+            actor_type: "DRIVER",
+            actor_id: driver.telegram_user_id,
+            details: trimmedReason
+          });
+          return updatedDriver;
+        } catch (err) {
+          console.error(`[DriverService.requestReactivation failed for #${id}]`, err);
+          throw new Error(`Failed to request reactivation for driver #${id}`, { cause: err });
+        }
+      }
+      /**
+       * Admin rejects reactivation request
+       */
+      async rejectReactivation(id, rejectionReason, actorId) {
+        const driver = await this.getDriverById(id);
+        if (!driver) {
+          throw new Error("DRIVER_NOT_FOUND");
+        }
+        const trimmed = (rejectionReason || "").trim() || "Solicita\xE7\xE3o de reativa\xE7\xE3o n\xE3o aprovada.";
+        try {
+          const updated = await db.update(drivers).set({
+            reactivation_requested: false,
+            updated_at: /* @__PURE__ */ new Date()
+          }).where(eq5(drivers.id, id)).returning();
+          const updatedDriver = updated[0];
+          await db.insert(driverEvents).values({
+            driver_id: id,
+            event_type: "REACTIVATION_REJECTED",
+            actor_type: "ADMIN",
+            actor_id: actorId || null,
+            details: trimmed
+          });
+          const msg = `\u274C *Solicita\xE7\xE3o de Reativa\xE7\xE3o N\xE3o Aprovada*
+
+Sua solicita\xE7\xE3o de reativa\xE7\xE3o foi analisada pela administra\xE7\xE3o da Kantine.
+
+\u2022 *Motivo informado:* ${escapeTelegramMarkdown(trimmed)}
+
+Caso queira mais informa\xE7\xF5es, entre em contato com o suporte da Kantine.`;
+          await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+          return updatedDriver;
+        } catch (err) {
+          console.error(`[DriverService.rejectReactivation failed for #${id}]`, err);
+          throw new Error(`Failed to reject reactivation for driver #${id}`, { cause: err });
+        }
+      }
+      /**
+       * Admin excludes/archives driver with mandatory reason and historical memory
+       */
+      async excludeDriver(id, reason, actorId) {
+        const driver = await this.getDriverById(id);
+        if (!driver) {
+          throw new Error("DRIVER_NOT_FOUND");
+        }
+        const trimmedReason = (reason || "").trim();
+        if (trimmedReason.length < 3) {
+          throw new Error("INVALID_REASON: Motivo de exclus\xE3o \xE9 obrigat\xF3rio (m\xEDnimo 3 caracteres).");
+        }
+        const newExclusionCount = (driver.exclusion_count || 0) + 1;
+        try {
+          const updated = await db.update(drivers).set({
+            status: "EXCLUDED",
+            is_excluded: true,
+            excluded_at: /* @__PURE__ */ new Date(),
+            exclusion_reason: trimmedReason,
+            excluded_by: actorId || "ADMIN",
+            previous_exclusion_reason: trimmedReason,
+            exclusion_count: newExclusionCount,
+            reactivation_requested: false,
+            reinclusion_requested: false,
+            updated_at: /* @__PURE__ */ new Date()
+          }).where(eq5(drivers.id, id)).returning();
+          const updatedDriver = updated[0];
+          await db.insert(driverEvents).values({
+            driver_id: id,
+            event_type: "DRIVER_EXCLUDED",
+            actor_type: "ADMIN",
+            actor_id: actorId || null,
+            details: JSON.stringify({
+              reason: trimmedReason,
+              exclusion_number: newExclusionCount,
+              previous_status: driver.status
+            })
+          });
+          const msg = `\u26A0\uFE0F *Cadastro Desativado \u2014 Kantine Entregas*
+
+Seu cadastro de entregador foi desativado/exclu\xEDdo pela administra\xE7\xE3o.
+
+\u2022 *Motivo registrado:* ${escapeTelegramMarkdown(trimmedReason)}
+
+Caso queira solicitar inclus\xE3o futura, voc\xEA pode enviar sua solicita\xE7\xE3o e justificativa por este canal.`;
+          await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+          return updatedDriver;
+        } catch (err) {
+          console.error(`[DriverService.excludeDriver failed for #${id}]`, err);
+          throw new Error(`Failed to exclude driver #${id}`, { cause: err });
+        }
+      }
+      /**
+       * Excluded driver submits request for future reinclusion via Telegram
+       */
+      async requestReinclusion(id, reason) {
+        const driver = await this.getDriverById(id);
+        if (!driver) {
+          throw new Error("DRIVER_NOT_FOUND");
+        }
+        if (driver.status !== "EXCLUDED" && !driver.is_excluded) {
+          throw new Error(`CANNOT_REQUEST_REINCLUSION_FOR_STATUS_${driver.status}`);
+        }
+        const trimmedReason = (reason || "").trim();
+        if (trimmedReason.length < 3) {
+          throw new Error("INVALID_REASON: Justificativa de reinclus\xE3o deve ter no m\xEDnimo 3 caracteres.");
+        }
+        try {
+          const updated = await db.update(drivers).set({
+            reinclusion_requested: true,
+            reinclusion_requested_at: /* @__PURE__ */ new Date(),
+            reinclusion_reason: trimmedReason,
+            updated_at: /* @__PURE__ */ new Date()
+          }).where(eq5(drivers.id, id)).returning();
+          const updatedDriver = updated[0];
+          await db.insert(driverEvents).values({
+            driver_id: id,
+            event_type: "REINCLUSION_REQUESTED",
+            actor_type: "DRIVER",
+            actor_id: driver.telegram_user_id,
+            details: trimmedReason
+          });
+          return updatedDriver;
+        } catch (err) {
+          console.error(`[DriverService.requestReinclusion failed for #${id}]`, err);
+          throw new Error(`Failed to request reinclusion for driver #${id}`, { cause: err });
+        }
+      }
+      /**
+       * Admin approves reinclusion request, returning driver to ACTIVE or PENDING while preserving historical memory
+       */
+      async approveReinclusion(id, options, actorId) {
+        const driver = await this.getDriverById(id);
+        if (!driver) {
+          throw new Error("DRIVER_NOT_FOUND");
+        }
+        const targetStatus = options.targetStatus || "ACTIVE";
+        const notes = (options.notes || "").trim() || "Reinclus\xE3o aprovada pela administra\xE7\xE3o.";
+        try {
+          const updated = await db.update(drivers).set({
+            status: targetStatus,
+            is_excluded: false,
+            reinclusion_requested: false,
+            // Note: previous_exclusion_reason and exclusion_count are intentionally PRESERVED for historical memory!
+            updated_at: /* @__PURE__ */ new Date()
+          }).where(eq5(drivers.id, id)).returning();
+          const updatedDriver = updated[0];
+          await db.insert(driverEvents).values({
+            driver_id: id,
+            event_type: "REINCLUSION_APPROVED",
+            actor_type: "ADMIN",
+            actor_id: actorId || null,
+            details: JSON.stringify({
+              targetStatus,
+              notes,
+              previous_exclusion_reason: driver.exclusion_reason || driver.previous_exclusion_reason
+            })
+          });
+          const msg = `\u{1F389} *Reinclus\xE3o Aprovada \u2014 Kantine Entregas*
+
+Seu pedido de reinclus\xE3o foi aprovado pela administra\xE7\xE3o!
+
+Seu cadastro agora est\xE1 *${targetStatus === "ACTIVE" ? "ATIVO" : "EM AN\xC1LISE"}*.
+Voc\xEA j\xE1 pode voltar a participar das opera\xE7\xF5es da Kantine.`;
+          await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+          return updatedDriver;
+        } catch (err) {
+          console.error(`[DriverService.approveReinclusion failed for #${id}]`, err);
+          throw new Error(`Failed to approve reinclusion for driver #${id}`, { cause: err });
+        }
+      }
+      /**
+       * Admin rejects reinclusion request
+       */
+      async rejectReinclusion(id, rejectionReason, actorId) {
+        const driver = await this.getDriverById(id);
+        if (!driver) {
+          throw new Error("DRIVER_NOT_FOUND");
+        }
+        const trimmed = (rejectionReason || "").trim() || "Pedido de reinclus\xE3o n\xE3o aprovado.";
+        try {
+          const updated = await db.update(drivers).set({
+            reinclusion_requested: false,
+            updated_at: /* @__PURE__ */ new Date()
+          }).where(eq5(drivers.id, id)).returning();
+          const updatedDriver = updated[0];
+          await db.insert(driverEvents).values({
+            driver_id: id,
+            event_type: "REINCLUSION_REJECTED",
+            actor_type: "ADMIN",
+            actor_id: actorId || null,
+            details: trimmed
+          });
+          const msg = `\u274C *Pedido de Reinclus\xE3o N\xE3o Aprovado*
+
+Seu pedido de reinclus\xE3o foi analisado pela administra\xE7\xE3o da Kantine.
+
+\u2022 *Motivo informado:* ${escapeTelegramMarkdown(trimmed)}
+
+Seu cadastro permanece desativado.`;
+          await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+          return updatedDriver;
+        } catch (err) {
+          console.error(`[DriverService.rejectReinclusion failed for #${id}]`, err);
+          throw new Error(`Failed to reject reinclusion for driver #${id}`, { cause: err });
         }
       }
       async getDriverEvents(driverId) {
@@ -6633,6 +7173,7 @@ var firebase_applet_config_default = {
   appId: "1:579899044551:web:bd5ffaae5e39ad3a0b84e2",
   apiKey: "AIzaSyD-eBgyAUkrckVHwVW9lXeZ0vXP4e0Zqzk",
   authDomain: "gen-lang-client-0321904259.firebaseapp.com",
+  firestoreDatabaseId: "ai-studio-kantinedelivery-9e60d45b-faa4-4727-96f3-3df43d27e5d1",
   storageBucket: "gen-lang-client-0321904259.firebasestorage.app",
   messagingSenderId: "579899044551",
   measurementId: "",
@@ -6715,7 +7256,7 @@ app.use((_req, res, next) => {
 app.get("/api/admin/drivers", requireAdminAuth, async (req, res) => {
   try {
     const status = req.query.status;
-    if (status && !["PENDING", "ACTIVE", "BLOCKED"].includes(status)) {
+    if (status && !["PENDING", "ACTIVE", "BLOCKED", "EXCLUDED"].includes(status)) {
       return res.status(400).json({ error: "INVALID_STATUS_FILTER" });
     }
     const driversList = await driverService.getDrivers(status);
@@ -6795,6 +7336,65 @@ app.post("/api/admin/drivers/:id/reactivate", requireAdminAuth, async (req, res)
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to reactivate driver" });
+  }
+});
+app.post("/api/admin/drivers/:id/reject-reactivation", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_DRIVER_ID" });
+    const { reason } = req.body;
+    const actor = req.user?.email || "ADMIN";
+    const driver = await driverService.rejectReactivation(id, reason || "", actor);
+    res.json({ success: true, driver });
+  } catch (err) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reject-reactivation failed]`, err.message);
+    if (err.message === "DRIVER_NOT_FOUND") return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || "Failed to reject reactivation" });
+  }
+});
+app.post("/api/admin/drivers/:id/exclude", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_DRIVER_ID" });
+    const { reason } = req.body;
+    if (!reason || typeof reason !== "string" || reason.trim().length < 3) {
+      return res.status(400).json({ error: "Motivo da exclus\xE3o \xE9 obrigat\xF3rio (m\xEDnimo 3 caracteres)." });
+    }
+    const actor = req.user?.email || "ADMIN";
+    const driver = await driverService.excludeDriver(id, reason.trim(), actor);
+    res.json({ success: true, driver });
+  } catch (err) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/exclude failed]`, err.message);
+    if (err.message === "DRIVER_NOT_FOUND") return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || "Failed to exclude driver" });
+  }
+});
+app.post("/api/admin/drivers/:id/reinclusion/approve", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_DRIVER_ID" });
+    const { targetStatus, notes } = req.body;
+    const actor = req.user?.email || "ADMIN";
+    const driver = await driverService.approveReinclusion(id, { targetStatus, notes }, actor);
+    res.json({ success: true, driver });
+  } catch (err) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reinclusion/approve failed]`, err.message);
+    if (err.message === "DRIVER_NOT_FOUND") return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || "Failed to approve reinclusion" });
+  }
+});
+app.post("/api/admin/drivers/:id/reinclusion/reject", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_DRIVER_ID" });
+    const { reason } = req.body;
+    const actor = req.user?.email || "ADMIN";
+    const driver = await driverService.rejectReinclusion(id, reason || "", actor);
+    res.json({ success: true, driver });
+  } catch (err) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reinclusion/reject failed]`, err.message);
+    if (err.message === "DRIVER_NOT_FOUND") return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || "Failed to reject reinclusion" });
   }
 });
 app.get("/api/admin/drivers/:id/eligibility", requireAdminAuth, async (req, res) => {

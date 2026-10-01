@@ -3,6 +3,7 @@
   "appId": "1:579899044551:web:bd5ffaae5e39ad3a0b84e2",
   "apiKey": "AIzaSyD-eBgyAUkrckVHwVW9lXeZ0vXP4e0Zqzk",
   "authDomain": "gen-lang-client-0321904259.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-kantinedelivery-9e60d45b-faa4-4727-96f3-3df43d27e5d1",
   "storageBucket": "gen-lang-client-0321904259.firebasestorage.app",
   "messagingSenderId": "579899044551",
   "measurementId": "",
