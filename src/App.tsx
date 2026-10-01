@@ -42,6 +42,7 @@ import {
   Camera,
   Image as ImageIcon,
   UserCheck,
+  ShieldAlert,
   Settings,
   Sliders,
   Tag,
@@ -62,29 +63,32 @@ import { KantineLogo } from './components/KantineLogo.tsx';
 // Types for Driver (M1 & M1.1 & Lifecycle)
 type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED' | 'EXCLUDED';
 type VehicleType =
+  | 'CAR'
+  | 'MOTO'
+  | 'MOTO_WITH_BAG'
+  // Backward compatibility
   | 'CAR_HATCH'
   | 'CAR_SEDAN'
   | 'CAR_SW'
-  | 'MOTO_WITH_BAG'
   | 'MOTO_WITHOUT_BAG'
   | 'OTHER';
 
 const VEHICLE_OPTIONS: { type: VehicleType; label: string; icon: string }[] = [
-  { type: 'CAR_HATCH', label: 'CARRO HATCH', icon: '🚗' },
-  { type: 'CAR_SEDAN', label: 'CARRO SEDAN', icon: '🚘' },
-  { type: 'CAR_SW', label: 'CARRO SW', icon: '🚙' },
-  { type: 'MOTO_WITH_BAG', label: 'MOTO COM BAG', icon: '🏍️' },
-  { type: 'MOTO_WITHOUT_BAG', label: 'MOTO SEM BAG', icon: '🏍️' },
-  { type: 'OTHER', label: 'OUTRO', icon: '🚚' },
+  { type: 'CAR', label: 'Carro', icon: '🚗' },
+  { type: 'MOTO', label: 'Moto', icon: '🏍️' },
+  { type: 'MOTO_WITH_BAG', label: 'Moto com Bag', icon: '🎒' },
 ];
 
 const VEHICLE_DISPLAY: Record<string, { label: string; icon: string }> = {
-  CAR_HATCH: { label: 'CARRO HATCH', icon: '🚗' },
-  CAR_SEDAN: { label: 'CARRO SEDAN', icon: '🚘' },
-  CAR_SW: { label: 'CARRO SW', icon: '🚙' },
-  MOTO_WITH_BAG: { label: 'MOTO COM BAG', icon: '🏍️' },
-  MOTO_WITHOUT_BAG: { label: 'MOTO SEM BAG', icon: '🏍️' },
-  OTHER: { label: 'OUTRO', icon: '🚚' },
+  CAR: { label: 'Carro', icon: '🚗' },
+  MOTO: { label: 'Moto', icon: '🏍️' },
+  MOTO_WITH_BAG: { label: 'Moto com Bag', icon: '🎒' },
+  // Backward compatibility for existing DB rows
+  CAR_HATCH: { label: 'Carro', icon: '🚗' },
+  CAR_SEDAN: { label: 'Carro', icon: '🚗' },
+  CAR_SW: { label: 'Carro', icon: '🚗' },
+  MOTO_WITHOUT_BAG: { label: 'Moto', icon: '🏍️' },
+  OTHER: { label: 'Carro', icon: '🚗' },
 };
 
 const renderCompactVehicleBadges = (types: VehicleType[]) => {
@@ -92,96 +96,35 @@ const renderCompactVehicleBadges = (types: VehicleType[]) => {
     return <span className="text-neutral-400 text-[11px]">—</span>;
   }
 
-  // All 6 accepted: clean single-row presentation without redundant badges
-  if (types.length >= 6) {
+  const canonicalTypes = Array.from(
+    new Set(
+      types.map((t) => {
+        if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER', 'CAR'].includes(t)) return 'CAR';
+        if (['MOTO_WITHOUT_BAG', 'MOTO'].includes(t)) return 'MOTO';
+        if (['MOTO_WITH_BAG'].includes(t)) return 'MOTO_WITH_BAG';
+        return t;
+      })
+    )
+  ) as VehicleType[];
+
+  if (canonicalTypes.length >= 3) {
     return (
-      <div className="flex items-center gap-1" title="Todos os veículos aceitos (Carros, Motos e Outro)">
-        <span className="text-[10px] font-semibold px-2 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap">
-          🚗 CARROS (3)
-        </span>
-        <span className="text-[10px] font-semibold px-2 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap">
-          🏍️ MOTOS (2)
-        </span>
-        <span className="text-[10px] font-bold px-1.5 py-0.5 bg-neutral-200 text-neutral-700 rounded border border-neutral-300 whitespace-nowrap" title="Outro">
-          +1
-        </span>
-      </div>
+      <span className="text-[10px] font-bold px-2 py-0.5 bg-blue-50 text-blue-800 rounded border border-blue-200 whitespace-nowrap" title="Todos os veículos aceitos: Carro, Moto e Moto com Bag">
+        🚗🏍️🎒 Todos os Veículos (3)
+      </span>
     );
   }
 
-  const badges: { key: string; label: string; icon: string; title: string }[] = [];
-
-  const cars = types.filter((t) => t.startsWith('CAR_'));
-  if (cars.length === 3) {
-    badges.push({
-      key: 'cars-all',
-      icon: '🚗',
-      label: 'CARROS (3)',
-      title: 'Carro Hatch, Sedan e SW',
-    });
-  } else {
-    for (const c of cars) {
-      badges.push({
-        key: c,
-        icon: VEHICLE_DISPLAY[c]?.icon || '🚗',
-        label: VEHICLE_DISPLAY[c]?.label || 'CARRO',
-        title: VEHICLE_DISPLAY[c]?.label || c,
-      });
-    }
-  }
-
-  const motos = types.filter((t) => t.startsWith('MOTO_'));
-  if (motos.length === 2) {
-    badges.push({
-      key: 'motos-all',
-      icon: '🏍️',
-      label: 'MOTOS (2)',
-      title: 'Moto com Bag e sem Bag',
-    });
-  } else {
-    for (const m of motos) {
-      badges.push({
-        key: m,
-        icon: VEHICLE_DISPLAY[m]?.icon || '🏍️',
-        label: VEHICLE_DISPLAY[m]?.label || 'MOTO',
-        title: VEHICLE_DISPLAY[m]?.label || m,
-      });
-    }
-  }
-
-  const others = types.filter((t) => !t.startsWith('CAR_') && !t.startsWith('MOTO_'));
-  for (const o of others) {
-    badges.push({
-      key: o,
-      icon: VEHICLE_DISPLAY[o]?.icon || '🚚',
-      label: VEHICLE_DISPLAY[o]?.label || 'OUTRO',
-      title: VEHICLE_DISPLAY[o]?.label || o,
-    });
-  }
-
-  const maxVisible = 2;
-  const visible = badges.slice(0, maxVisible);
-  const remaining = badges.length - maxVisible;
-
   return (
     <div className="flex items-center gap-1 flex-wrap">
-      {visible.map((b) => (
+      {canonicalTypes.map((t) => (
         <span
-          key={b.key}
-          className="text-[10px] font-medium px-1.5 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap"
-          title={b.title}
+          key={t}
+          className="text-[10px] font-semibold px-1.5 py-0.5 bg-neutral-100 text-neutral-700 rounded border border-neutral-200 whitespace-nowrap"
         >
-          {b.icon} {b.label}
+          {VEHICLE_DISPLAY[t]?.icon || '🚗'} {VEHICLE_DISPLAY[t]?.label || t}
         </span>
       ))}
-      {remaining > 0 && (
-        <span
-          className="text-[10px] font-bold px-1.5 py-0.5 bg-neutral-200 text-neutral-700 rounded border border-neutral-300 whitespace-nowrap cursor-help"
-          title={badges.slice(maxVisible).map((b) => `${b.label}: ${b.title}`).join(', ')}
-        >
-          +{remaining}
-        </span>
-      )}
     </div>
   );
 };
@@ -617,7 +560,7 @@ export default function App() {
   const [loadingVehicleAudit, setLoadingVehicleAudit] = useState<boolean>(false);
   const [showVehicleAuditModal, setShowVehicleAuditModal] = useState<boolean>(false);
   const [correctingVehicleDriver, setCorrectingVehicleDriver] = useState<ReferralVehicleAuditItem | null>(null);
-  const [newVehicleTypeInput, setNewVehicleTypeInput] = useState<VehicleType>('CAR_HATCH');
+  const [newVehicleTypeInput, setNewVehicleTypeInput] = useState<VehicleType>('CAR');
   const [savingVehicleCorrection, setSavingVehicleCorrection] = useState<boolean>(false);
 
   // Referrals State (M1.2 Rede Fechada de Indicação)
@@ -659,7 +602,7 @@ export default function App() {
   const [editFormData, setEditFormData] = useState({
     name: '',
     phone: '',
-    vehicle_type: 'CAR_HATCH' as VehicleType,
+    vehicle_type: 'CAR' as VehicleType,
     pix_key_type: 'CPF' as 'CPF' | 'PHONE' | 'EMAIL' | 'RANDOM',
     pix_key_value: '',
   });
@@ -679,7 +622,7 @@ export default function App() {
   }>({
     name: '',
     phone: '',
-    vehicle_type: 'CAR_HATCH',
+    vehicle_type: 'CAR',
   });
   const [generatingInvite, setGeneratingInvite] = useState<boolean>(false);
   const [generatedInvite, setGeneratedInvite] = useState<{
@@ -777,12 +720,9 @@ export default function App() {
     override_driver_fee: '',
     override_reason: '',
     accepted_vehicle_types: [
-      'CAR_HATCH',
-      'CAR_SEDAN',
-      'CAR_SW',
+      'CAR',
+      'MOTO',
       'MOTO_WITH_BAG',
-      'MOTO_WITHOUT_BAG',
-      'OTHER',
     ],
     stops: [
       {
@@ -1471,6 +1411,17 @@ export default function App() {
     } finally {
       setSubmittingDecision(false);
     }
+  };
+
+  const handleReinviteExcludedDriver = (driver: Driver) => {
+    setInviteFormData({
+      name: driver.name,
+      phone: driver.phone,
+      vehicle_type: 'CAR',
+    });
+    setGeneratedInvite(null);
+    setInviteModalTab('DIRECT');
+    setShowInviteModal(true);
   };
 
   const openDriverDetails = async (driverId: number) => {
@@ -2732,12 +2683,11 @@ export default function App() {
                 {(
                   [
                     { key: 'ALL', label: 'Todos' },
-                    { key: 'PENDING', label: '⏳ Pendentes' },
+                    { key: 'PENDING', label: '⏳ Aguardando Aprovação' },
                     { key: 'ACTIVE', label: '✅ Ativos' },
                     { key: 'BLOCKED', label: '🚫 Bloqueados' },
-                    { key: 'EXCLUDED', label: '📁 Excluídos' },
+                    { key: 'EXCLUDED', label: '📁 Excluídos (Processo Zerado)' },
                     { key: 'REACTIVATION_REQUESTED', label: '🔄 Pedidos Reativação' },
-                    { key: 'REINCLUSION_REQUESTED', label: '📝 Pedidos Reinclusão' },
                   ] as const
                 ).map((item) => (
                   <button
@@ -3042,43 +2992,13 @@ export default function App() {
                             )}
 
                             {isDriverExcluded ? (
-                              driver.reinclusion_requested ? (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      setDecisionDriver(driver);
-                                      setDecisionType('APPROVE_REINCLUSION');
-                                      setDecisionReasonInput('');
-                                      setDecisionTargetStatus('ACTIVE');
-                                    }}
-                                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
-                                  >
-                                    Aprovar Reinclusão
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setDecisionDriver(driver);
-                                      setDecisionType('REJECT_REINCLUSION');
-                                      setDecisionReasonInput('');
-                                    }}
-                                    className="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 text-[11px] font-semibold cursor-pointer"
-                                  >
-                                    Recusar Reinclusão
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setDecisionDriver(driver);
-                                    setDecisionType('APPROVE_REINCLUSION');
-                                    setDecisionReasonInput('');
-                                    setDecisionTargetStatus('ACTIVE');
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-semibold cursor-pointer"
-                                >
-                                  Reincluir
-                                </button>
-                              )
+                              <button
+                                onClick={() => handleReinviteExcludedDriver(driver)}
+                                className="px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs"
+                                title="Gerar novo convite para o motorista reiniciar o cadastro com dados atualizados (processo zerado)"
+                              >
+                                <span>✉️ Gerar Novo Convite</span>
+                              </button>
                             ) : (
                               <button
                                 onClick={() => {
@@ -5716,44 +5636,27 @@ export default function App() {
               </div>
             )}
 
-            {/* Pedido de Reinclusão Pendente */}
-            {selectedDriver.reinclusion_requested && (
-              <div className="p-4 rounded-xl bg-purple-50 border border-purple-300 text-xs space-y-2">
-                <div className="flex items-center gap-2 font-bold text-purple-950">
-                  <UserCheck className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>PEDIDO DE REINCLUSÃO FUTURA DE MOTORISTA EXCLUÍDO</span>
+            {/* Informações de Motorista Excluído & Reinclusão via Novo Convite */}
+            {(selectedDriver.is_excluded || selectedDriver.status === 'EXCLUDED') && (
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-xs space-y-2">
+                <div className="flex items-center gap-2 font-bold text-amber-950">
+                  <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>CADASTRO DESATIVADO / EXCLUÍDO (PROCESSO ZERADO)</span>
                 </div>
-                <div className="bg-white/80 p-2.5 rounded-lg border border-purple-200 text-purple-950 text-[11px] space-y-1">
-                  <div>
-                    <strong>Justificativa para Reinclusão:</strong> &ldquo;{selectedDriver.reinclusion_reason}&rdquo;
-                  </div>
-                  {selectedDriver.reinclusion_requested_at && (
-                    <div className="text-[10px] text-purple-700">
-                      Enviada em: {new Date(selectedDriver.reinclusion_requested_at).toLocaleString('pt-BR')}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 pt-1">
+                <p className="text-amber-900 text-[11px] leading-relaxed">
+                  Motoristas excluídos têm o processo zerado. Só podem retornar através de um <strong>novo convite</strong> e <strong>nova aprovação</strong>, pois podem ter mudado de veículo, telefone ou chave PIX.
+                </p>
+                <div className="pt-1">
                   <button
                     onClick={() => {
-                      setDecisionDriver(selectedDriver);
-                      setDecisionType('APPROVE_REINCLUSION');
-                      setDecisionReasonInput('');
-                      setDecisionTargetStatus('ACTIVE');
+                      const d = selectedDriver;
+                      setSelectedDriver(null);
+                      handleReinviteExcludedDriver(d);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-xs cursor-pointer"
                   >
-                    Aprovar Reinclusão
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDecisionDriver(selectedDriver);
-                      setDecisionType('REJECT_REINCLUSION');
-                      setDecisionReasonInput('');
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs"
-                  >
-                    Recusar Reinclusão
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Gerar Novo Convite para Reinclusão</span>
                   </button>
                 </div>
               </div>
@@ -6070,12 +5973,11 @@ export default function App() {
                   onChange={(e) => setEditFormData({ ...editFormData, vehicle_type: e.target.value as VehicleType })}
                   className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-white"
                 >
-                  <option value="CAR_HATCH">🚗 CARRO HATCH</option>
-                  <option value="CAR_SEDAN">🚘 CARRO SEDAN</option>
-                  <option value="CAR_SW">🚙 CARRO SW</option>
-                  <option value="MOTO_WITH_BAG">🏍️ MOTO COM BAG</option>
-                  <option value="MOTO_WITHOUT_BAG">🏍️ MOTO SEM BAG</option>
-                  <option value="OTHER">🚚 OUTRO</option>
+                  {VEHICLE_OPTIONS.map((opt) => (
+                    <option key={opt.type} value={opt.type}>
+                      {opt.icon} {opt.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -6409,12 +6311,11 @@ export default function App() {
                       }
                       className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white focus:ring-2 focus:ring-orange-500 font-semibold"
                     >
-                      <option value="CAR_HATCH">🚗 CARRO HATCH</option>
-                      <option value="CAR_SEDAN">🚘 CARRO SEDAN</option>
-                      <option value="CAR_SW">🚙 CARRO SW</option>
-                      <option value="MOTO_WITH_BAG">🏍️ MOTO COM BAG</option>
-                      <option value="MOTO_WITHOUT_BAG">🏍️ MOTO SEM BAG</option>
-                      <option value="OTHER">🚚 OUTRO</option>
+                      {VEHICLE_OPTIONS.map((opt) => (
+                        <option key={opt.type} value={opt.type}>
+                          {opt.icon} {opt.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
 

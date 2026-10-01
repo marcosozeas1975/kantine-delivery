@@ -93,6 +93,8 @@ export async function initDbConstraints() {
       // Drivers Lifecycle: Exclusion, Reactivation, Reinclusion & Historical Memory
       await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_status_check"`);
       await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_status_check" CHECK (status IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED'))`);
+      await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_vehicle_type_canonical_check"`);
+      await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_vehicle_type_canonical_check" CHECK (vehicle_type IN ('CAR', 'MOTO', 'MOTO_WITH_BAG', 'CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITHOUT_BAG', 'OTHER'))`);
       await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "is_excluded" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "excluded_at" timestamp`);
       await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "exclusion_reason" text`);

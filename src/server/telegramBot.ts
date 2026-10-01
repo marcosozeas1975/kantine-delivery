@@ -1260,23 +1260,14 @@ export class TelegramBotService {
   }
 
   /**
-   * Helper to build 2-column inline keyboard for vehicle types
+   * Helper to build inline keyboard for simplified vehicle types
    */
   private getVehicleInlineKeyboard() {
     return {
       inline_keyboard: [
-        [
-          { text: '🚗 CARRO HATCH', callback_data: 'veh_CAR_HATCH' },
-          { text: '🚘 CARRO SEDAN', callback_data: 'veh_CAR_SEDAN' },
-        ],
-        [
-          { text: '🚙 CARRO SW', callback_data: 'veh_CAR_SW' },
-          { text: '🏍️ MOTO COM BAG', callback_data: 'veh_MOTO_WITH_BAG' },
-        ],
-        [
-          { text: '🏍️ MOTO SEM BAG', callback_data: 'veh_MOTO_WITHOUT_BAG' },
-          { text: '🚚 OUTRO', callback_data: 'veh_OTHER' },
-        ],
+        [{ text: '🚗 Carro', callback_data: 'veh_CAR' }],
+        [{ text: '🏍️ Moto', callback_data: 'veh_MOTO' }],
+        [{ text: '🎒 Moto com Bag', callback_data: 'veh_MOTO_WITH_BAG' }],
       ],
     };
   }
@@ -1437,8 +1428,17 @@ export class TelegramBotService {
 
       const existing = await this.driverService.getDriverByTelegramUserId(telegramUserId);
       if (existing) {
-        await this.sendMainMenu(chatId, existing);
-        return;
+        if (existing.status === 'EXCLUDED' || existing.is_excluded) {
+          // Excluded drivers can ONLY return via a new invite and new approval (process zerado)
+          if (!payload || !payload.trim()) {
+            await this.sendMainMenu(chatId, existing);
+            return;
+          }
+          // If there is an invite token payload, continue below to validate and start fresh registration
+        } else {
+          await this.sendMainMenu(chatId, existing);
+          return;
+        }
       }
     }
 
@@ -1571,13 +1571,9 @@ export class TelegramBotService {
     if (isExcluded) {
       const reason = driver.exclusion_reason || driver.previous_exclusion_reason || 'Desativação administrativa';
       msg += `\n• <b>Motivo do desligamento:</b> ${escapeHtml(reason)}`;
-      if (driver.reinclusion_requested) {
-        msg += `\n\n⏳ <b>Solicitação de reinclusão em análise.</b>\n` +
-               `Justificativa informada: <i>"${escapeHtml(driver.reinclusion_reason || '')}"</i>`;
-      } else {
-        msg += `\n\nCaso queira retornar ao quadro de entregadores da Kantine, você pode enviar um pedido de reinclusão com sua justificativa.`;
-        buttons.push([{ text: '📝 SOLICITAR REINCLUSÃO', callback_data: 'req_reinclusion' }]);
-      }
+      msg += `\n\n⚠️ <b>Processo Reiniciado do Zero:</b>\n` +
+             `Motoristas excluídos têm o processo zerado. Para retornar à equipe Kantine Entregas, é necessário receber um <b>novo convite</b> e refazer o cadastro completo (pois você pode ter mudado de veículo, telefone ou chave PIX), passando por nova aprovação da administração.\n\n` +
+             `Solicite um novo convite de acesso junto à equipe Kantine.`;
       buttons.push([{ text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' }]);
     } else if (driver.status === 'BLOCKED') {
       if (driver.reactivation_requested) {
@@ -2947,18 +2943,11 @@ export class TelegramBotService {
 
     if (data === 'req_reinclusion') {
       await this.answerCallbackQuery(query.id);
-      if (!this.driverService) return;
-      const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
-      if (!driver || (driver.status !== 'EXCLUDED' && !driver.is_excluded)) {
-        await this.sendMessage(chatId, 'Solicitação de reinclusão não aplicável ao seu status atual.');
-        return;
-      }
-      this.reactivationSessions.set(telegramUserId, { driverId: driver.id, type: 'REINCLUSION' });
       await this.sendMessage(
         chatId,
-        '📝 *Solicitar Reinclusão de Cadastro*\n\n' +
-          'Por favor, digite a sua justificativa para solicitar a reinclusão no sistema de entregas da Kantine:\n\n' +
-          '_(Envie /cancelar para desistir)_'
+        '⚠️ *Processo de Cadastro Reiniciado*\n\n' +
+          'Motoristas desligados/excluídos têm o processo zerado e só podem ser reinseridos através de um *novo convite* e nova aprovação da administração (pois você pode ter mudado de veículo, telefone ou chave Pix).\n\n' +
+          'Por favor, solicite um novo convite de acesso junto à equipe Kantine.'
       );
       return;
     }
@@ -3030,18 +3019,9 @@ export class TelegramBotService {
       await this.sendMessage(chatId, 'Selecione o novo *tipo de veículo*:', {
         reply_markup: {
           inline_keyboard: [
-            [
-              { text: '🚗 CARRO HATCH', callback_data: 'edit_veh:CAR_HATCH' },
-              { text: '🚘 CARRO SEDAN', callback_data: 'edit_veh:CAR_SEDAN' },
-            ],
-            [
-              { text: '🚙 CARRO SW', callback_data: 'edit_veh:CAR_SW' },
-              { text: '🏍️ MOTO COM BAG', callback_data: 'edit_veh:MOTO_WITH_BAG' },
-            ],
-            [
-              { text: '🏍️ MOTO SEM BAG', callback_data: 'edit_veh:MOTO_WITHOUT_BAG' },
-              { text: '🚚 OUTRO', callback_data: 'edit_veh:OTHER' },
-            ],
+            [{ text: '🚗 Carro', callback_data: 'edit_veh:CAR' }],
+            [{ text: '🏍️ Moto', callback_data: 'edit_veh:MOTO' }],
+            [{ text: '🎒 Moto com Bag', callback_data: 'edit_veh:MOTO_WITH_BAG' }],
             [{ text: '❌ CANCELAR', callback_data: 'cancel_edit' }],
           ],
         },

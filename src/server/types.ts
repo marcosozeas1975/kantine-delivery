@@ -1,10 +1,13 @@
 export type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED' | 'EXCLUDED';
 
 export type VehicleType =
+  | 'CAR'
+  | 'MOTO'
+  | 'MOTO_WITH_BAG'
+  // Legacy backward compatibility
   | 'CAR_HATCH'
   | 'CAR_SEDAN'
   | 'CAR_SW'
-  | 'MOTO_WITH_BAG'
   | 'MOTO_WITHOUT_BAG'
   | 'OTHER';
 
@@ -16,15 +19,26 @@ export interface VehicleOption {
 }
 
 export const VEHICLE_OPTIONS: VehicleOption[] = [
-  { canonical: 'CAR_HATCH', label: 'CARRO HATCH', emoji: '🚗', buttonText: '🚗 CARRO HATCH' },
-  { canonical: 'CAR_SEDAN', label: 'CARRO SEDAN', emoji: '🚘', buttonText: '🚘 CARRO SEDAN' },
-  { canonical: 'CAR_SW', label: 'CARRO SW', emoji: '🚙', buttonText: '🚙 CARRO SW' },
-  { canonical: 'MOTO_WITH_BAG', label: 'MOTO COM BAG', emoji: '🏍️', buttonText: '🏍️ MOTO COM BAG' },
-  { canonical: 'MOTO_WITHOUT_BAG', label: 'MOTO SEM BAG', emoji: '🏍️', buttonText: '🏍️ MOTO SEM BAG' },
-  { canonical: 'OTHER', label: 'OUTRO', emoji: '🚚', buttonText: '🚚 OUTRO' },
+  { canonical: 'CAR', label: 'Carro', emoji: '🚗', buttonText: '🚗 Carro' },
+  { canonical: 'MOTO', label: 'Moto', emoji: '🏍️', buttonText: '🏍️ Moto' },
+  { canonical: 'MOTO_WITH_BAG', label: 'Moto com Bag', emoji: '🎒', buttonText: '🎒 Moto com Bag' },
 ];
 
 export function getVehicleTypeLabel(type: string): string {
+  if (!type) return 'Não informado';
+  const upper = type.toUpperCase().trim();
+  if (upper === 'CAR' || upper === 'CARRO' || upper === 'CAR_HATCH' || upper === 'CAR_SEDAN' || upper === 'CAR_SW') {
+    return 'Carro';
+  }
+  if (upper === 'MOTO' || upper === 'MOTO_WITHOUT_BAG') {
+    return 'Moto';
+  }
+  if (upper === 'MOTO_WITH_BAG' || upper === 'MOTO_COM_BAG') {
+    return 'Moto com Bag';
+  }
+  if (upper === 'OTHER') {
+    return 'Carro';
+  }
   const match = VEHICLE_OPTIONS.find((v) => v.canonical === type);
   return match ? match.label : type;
 }
@@ -32,31 +46,30 @@ export function getVehicleTypeLabel(type: string): string {
 export function parseVehicleInput(input: string): VehicleType | null {
   if (!input) return null;
   const trimmed = input.trim();
+  const lower = trimmed.toLowerCase();
 
-  // 1. Direct canonical match (e.g. CAR_HATCH)
-  const byCanonical = VEHICLE_OPTIONS.find((v) => v.canonical === trimmed);
-  if (byCanonical) return byCanonical.canonical;
+  // 1. Direct canonical check
+  if (trimmed === 'CAR' || trimmed === 'CARRO') return 'CAR';
+  if (trimmed === 'MOTO') return 'MOTO';
+  if (trimmed === 'MOTO_WITH_BAG' || trimmed === 'MOTO_COM_BAG') return 'MOTO_WITH_BAG';
 
-  // 2. Callback query prefix (e.g. veh_CAR_HATCH)
+  // Legacy mappings
+  if (trimmed === 'CAR_HATCH' || trimmed === 'CAR_SEDAN' || trimmed === 'CAR_SW' || trimmed === 'OTHER') return 'CAR';
+  if (trimmed === 'MOTO_WITHOUT_BAG') return 'MOTO';
+
+  // 2. Callback query prefix (e.g. veh_CAR, veh_MOTO, veh_MOTO_WITH_BAG)
   if (trimmed.startsWith('veh_')) {
-    const raw = trimmed.replace('veh_', '');
-    const byCb = VEHICLE_OPTIONS.find((v) => v.canonical === raw);
-    if (byCb) return byCb.canonical;
+    const raw = trimmed.replace('veh_', '').trim();
+    if (raw === 'CAR' || raw === 'CARRO' || raw === 'CAR_HATCH' || raw === 'CAR_SEDAN' || raw === 'CAR_SW' || raw === 'OTHER') return 'CAR';
+    if (raw === 'MOTO' || raw === 'MOTO_WITHOUT_BAG') return 'MOTO';
+    if (raw === 'MOTO_WITH_BAG' || raw === 'MOTO_COM_BAG') return 'MOTO_WITH_BAG';
   }
 
-  // 3. Exact buttonText match (e.g. "🚗 CARRO HATCH")
-  const byButton = VEHICLE_OPTIONS.find(
-    (v) => v.buttonText.toLowerCase() === trimmed.toLowerCase()
-  );
-  if (byButton) return byButton.canonical;
+  // 3. User friendly text match
+  if (lower.includes('bag')) return 'MOTO_WITH_BAG';
+  if (lower.includes('moto')) return 'MOTO';
+  if (lower.includes('carro') || lower.includes('car')) return 'CAR';
 
-  // 4. Cleaned label match (e.g. "CARRO HATCH", "MOTO COM BAG")
-  const byLabel = VEHICLE_OPTIONS.find(
-    (v) => v.label.toLowerCase() === trimmed.toLowerCase()
-  );
-  if (byLabel) return byLabel.canonical;
-
-  // Any other text (e.g. "carro", "moto", "sedan", "qualquer coisa") returns null
   return null;
 }
 
@@ -341,13 +354,18 @@ export const PRICING_VEHICLE_CATEGORIES: PricingVehicleCategoryOption[] = [
 
 export function mapVehicleTypeToPricingCategory(type: VehicleType | string): PricingVehicleCategory | null {
   switch (type) {
+    case 'CAR':
+    case 'CARRO':
     case 'CAR_HATCH':
     case 'CAR_SEDAN':
     case 'CAR_SW':
+    case 'OTHER':
       return 'CAR';
+    case 'MOTO':
     case 'MOTO_WITHOUT_BAG':
       return 'MOTO';
     case 'MOTO_WITH_BAG':
+    case 'MOTO_COM_BAG':
       return 'MOTO_WITH_BAG';
     default:
       return null;

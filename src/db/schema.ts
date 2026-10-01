@@ -45,7 +45,7 @@ export const drivers = pgTable(
     check('drivers_status_check', sql`${table.status} IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED')`),
     check(
       'drivers_vehicle_type_canonical_check',
-      sql`${table.vehicle_type} IN ('CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITH_BAG', 'MOTO_WITHOUT_BAG', 'OTHER')`
+      sql`${table.vehicle_type} IN ('CAR', 'MOTO', 'MOTO_WITH_BAG', 'CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITHOUT_BAG', 'OTHER')`
     ),
     check(
       'drivers_pix_key_type_check',

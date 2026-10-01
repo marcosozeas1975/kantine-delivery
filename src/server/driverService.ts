@@ -105,6 +105,32 @@ export class DriverService {
     }
   }
 
+  public async getDriverByPhone(phone: string): Promise<Driver | null> {
+    try {
+      const cleanPhone = normalizeGeneralPhone(phone);
+      const results = await db
+        .select()
+        .from(drivers)
+        .where(eq(drivers.phone, cleanPhone));
+      if (results[0]) return results[0] as Driver;
+
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        const prodResults = await prodDb
+          .select()
+          .from(drivers)
+          .where(eq(drivers.phone, cleanPhone));
+        if (prodResults[0]) {
+          await db.insert(drivers).values(prodResults[0]).onConflictDoNothing().catch(() => {});
+          return prodResults[0] as Driver;
+        }
+      }
+      return null;
+    } catch (err: any) {
+      console.error(`[DriverService.getDriverByPhone failed]`, err);
+      return null;
+    }
+  }
+
   public async registerDriver(data: {
     telegram_user_id: string;
     telegram_chat_id: string;
@@ -118,15 +144,25 @@ export class DriverService {
   }): Promise<Driver> {
     // Validate vehicle type
     const validVehicles: VehicleType[] = [
+      'CAR',
+      'MOTO',
+      'MOTO_WITH_BAG',
       'CAR_HATCH',
       'CAR_SEDAN',
       'CAR_SW',
-      'MOTO_WITH_BAG',
       'MOTO_WITHOUT_BAG',
       'OTHER',
     ];
     if (!validVehicles.includes(data.vehicle_type as VehicleType)) {
       throw new Error(`INVALID_VEHICLE_TYPE: ${data.vehicle_type}`);
+    }
+
+    // Canonicalize to simplified types: CAR, MOTO, MOTO_WITH_BAG
+    let canonicalVehicle: VehicleType = data.vehicle_type as VehicleType;
+    if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(canonicalVehicle as string)) {
+      canonicalVehicle = 'CAR';
+    } else if (canonicalVehicle === 'MOTO_WITHOUT_BAG') {
+      canonicalVehicle = 'MOTO';
     }
 
     if (!data.name || !data.phone || !data.telegram_user_id) {
@@ -154,8 +190,130 @@ export class DriverService {
     }
 
     // Check idempotency before insert
-    const existing = await this.getDriverByTelegramUserId(data.telegram_user_id);
+    let existing = await this.getDriverByTelegramUserId(data.telegram_user_id);
+    if (!existing) {
+      existing = await this.getDriverByPhone(data.phone.trim());
+    }
+
     if (existing) {
+      // If driver was EXCLUDED: they MUST have a valid new invite token to re-register ("processo zerado")!
+      if (existing.status === 'EXCLUDED' || existing.is_excluded) {
+        if (!data.invite_token) {
+          throw new Error(
+            'EXCLUDED_DRIVER_REQUIRES_NEW_INVITE: Motoristas excluídos têm o processo zerado e só podem ser reinseridos através de novo convite e aprovação.'
+          );
+        }
+
+        const prevReason =
+          existing.exclusion_reason || existing.previous_exclusion_reason || 'Desativação anterior';
+        const newExclusionCount = (existing.exclusion_count || 0) + 1;
+
+        const updated = await db
+          .update(drivers)
+          .set({
+            telegram_user_id: data.telegram_user_id,
+            telegram_chat_id: data.telegram_chat_id,
+            name: data.name.trim(),
+            phone: data.phone.trim(),
+            vehicle_type: canonicalVehicle,
+            pix_key: canonicalPixValue,
+            pix_key_type: canonicalPixType,
+            pix_key_value: canonicalPixValue,
+            status: 'PENDING',
+            is_excluded: false,
+            excluded_at: null,
+            exclusion_reason: null,
+            excluded_by: null,
+            previous_exclusion_reason: prevReason,
+            exclusion_count: newExclusionCount,
+            reactivation_requested: false,
+            reactivation_reason: null,
+            reactivation_requested_at: null,
+            reinclusion_requested: false,
+            reinclusion_reason: null,
+            reinclusion_requested_at: null,
+            updated_at: new Date(),
+          })
+          .where(eq(drivers.id, existing.id))
+          .returning();
+
+        const reincluded = (updated[0] as Driver) || existing;
+
+        await db.insert(driverEvents).values({
+          driver_id: existing.id,
+          event_type: 'DRIVER_REINCLUSION_REQUESTED',
+          actor_type: 'DRIVER',
+          actor_id: data.telegram_user_id,
+          details: JSON.stringify({
+            via_new_invite: data.invite_token,
+            previous_exclusion_reason: prevReason,
+            new_vehicle: canonicalVehicle,
+            new_phone: data.phone.trim(),
+            new_pix: canonicalPixValue,
+          }),
+        });
+
+        // Link invitation
+        await db
+          .update(driverInvitations)
+          .set({
+            status: 'COMPLETED',
+            telegram_user_id: data.telegram_user_id,
+            driver_id: existing.id,
+            completed_at: new Date(),
+          })
+          .where(eq(driverInvitations.token, data.invite_token))
+          .catch(() => {});
+
+        if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+          try {
+            await prodDb
+              .update(drivers)
+              .set({
+                telegram_user_id: data.telegram_user_id,
+                telegram_chat_id: data.telegram_chat_id,
+                name: data.name.trim(),
+                phone: data.phone.trim(),
+                vehicle_type: canonicalVehicle,
+                pix_key: canonicalPixValue,
+                pix_key_type: canonicalPixType,
+                pix_key_value: canonicalPixValue,
+                status: 'PENDING',
+                is_excluded: false,
+                excluded_at: null,
+                exclusion_reason: null,
+                excluded_by: null,
+                previous_exclusion_reason: prevReason,
+                exclusion_count: newExclusionCount,
+                reactivation_requested: false,
+                reactivation_reason: null,
+                reactivation_requested_at: null,
+                reinclusion_requested: false,
+                reinclusion_reason: null,
+                reinclusion_requested_at: null,
+                updated_at: new Date(),
+              })
+              .where(eq(drivers.id, existing.id))
+              .catch(() => {});
+
+            await prodDb
+              .update(driverInvitations)
+              .set({
+                status: 'COMPLETED',
+                telegram_user_id: data.telegram_user_id,
+                driver_id: existing.id,
+                completed_at: new Date(),
+              })
+              .where(eq(driverInvitations.token, data.invite_token))
+              .catch(() => {});
+          } catch (e: any) {
+            console.warn('[DriverService] Mirror re-registered driver to prod warning:', e?.message);
+          }
+        }
+
+        return reincluded;
+      }
+
       throw new Error('DRIVER_ALREADY_EXISTS');
     }
 
@@ -167,7 +325,7 @@ export class DriverService {
           telegram_chat_id: data.telegram_chat_id,
           name: data.name.trim(),
           phone: data.phone.trim(),
-          vehicle_type: data.vehicle_type,
+          vehicle_type: canonicalVehicle,
           pix_key: canonicalPixValue,
           pix_key_type: canonicalPixType,
           pix_key_value: canonicalPixValue,
@@ -366,18 +524,26 @@ export class DriverService {
     // 4. Validate and set Vehicle Type
     if (updates.vehicle_type !== undefined) {
       const validVehicles: VehicleType[] = [
+        'CAR',
+        'MOTO',
+        'MOTO_WITH_BAG',
         'CAR_HATCH',
         'CAR_SEDAN',
         'CAR_SW',
-        'MOTO_WITH_BAG',
         'MOTO_WITHOUT_BAG',
         'OTHER',
       ];
       if (!validVehicles.includes(updates.vehicle_type as VehicleType)) {
         throw new Error(`INVALID_VEHICLE_TYPE: ${updates.vehicle_type}`);
       }
-      if (updates.vehicle_type !== driver.vehicle_type) {
-        setPayload.vehicle_type = updates.vehicle_type;
+      let canonicalVeh: VehicleType = updates.vehicle_type as VehicleType;
+      if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(canonicalVeh as string)) {
+        canonicalVeh = 'CAR';
+      } else if (canonicalVeh === 'MOTO_WITHOUT_BAG') {
+        canonicalVeh = 'MOTO';
+      }
+      if (canonicalVeh !== driver.vehicle_type) {
+        setPayload.vehicle_type = canonicalVeh;
         auditEventsToInsert.push({
           driver_id: driverId,
           event_type: 'DRIVER_PROFILE_UPDATED',
@@ -385,7 +551,7 @@ export class DriverService {
           actor_id: context.actor_id || null,
           field_changed: 'vehicle_type',
           old_value: driver.vehicle_type,
-          new_value: updates.vehicle_type,
+          new_value: canonicalVeh,
         });
       }
     }
@@ -766,7 +932,7 @@ export class DriverService {
         `⚠️ *Cadastro Desativado — Kantine Entregas*\n\n` +
         `Seu cadastro de entregador foi desativado/excluído pela administração.\n\n` +
         `• *Motivo registrado:* ${escapeTelegramMarkdown(trimmedReason)}\n\n` +
-        `Caso queira solicitar inclusão futura, você pode enviar sua solicitação e justificativa por este canal.`;
+        `O seu processo foi zerado. Para retornar à equipe Kantine Entregas, será necessário receber um novo convite e refazer o cadastro com dados atualizados (veículo, telefone e chave PIX) para nova aprovação.`;
       await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
 
       return updatedDriver;
@@ -825,7 +991,7 @@ export class DriverService {
   }
 
   /**
-   * Admin approves reinclusion request, returning driver to ACTIVE or PENDING while preserving historical memory
+   * Admin approves reinclusion request: enforces that excluded drivers require a new invite and approval
    */
   public async approveReinclusion(
     id: number,
@@ -837,50 +1003,13 @@ export class DriverService {
       throw new Error('DRIVER_NOT_FOUND');
     }
 
-    const targetStatus = options.targetStatus || 'ACTIVE';
-    const notes = (options.notes || '').trim() || 'Reinclusão aprovada pela administração.';
-
-    try {
-      const updated = await db
-        .update(drivers)
-        .set({
-          status: targetStatus,
-          is_excluded: false,
-          reinclusion_requested: false,
-          // Note: previous_exclusion_reason and exclusion_count are intentionally PRESERVED for historical memory!
-          updated_at: new Date(),
-        })
-        .where(eq(drivers.id, id))
-        .returning();
-
-      const updatedDriver = updated[0] as Driver;
-
-      // Record REINCLUSION_APPROVED
-      await db.insert(driverEvents).values({
-        driver_id: id,
-        event_type: 'REINCLUSION_APPROVED',
-        actor_type: 'ADMIN',
-        actor_id: actorId || null,
-        details: JSON.stringify({
-          targetStatus,
-          notes,
-          previous_exclusion_reason: driver.exclusion_reason || driver.previous_exclusion_reason,
-        }),
-      });
-
-      // Send Telegram notification
-      const msg =
-        `🎉 *Reinclusão Aprovada — Kantine Entregas*\n\n` +
-        `Seu pedido de reinclusão foi aprovado pela administração!\n\n` +
-        `Seu cadastro agora está *${targetStatus === 'ACTIVE' ? 'ATIVO' : 'EM ANÁLISE'}*.\n` +
-        `Você já pode voltar a participar das operações da Kantine.`;
-      await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
-
-      return updatedDriver;
-    } catch (err: any) {
-      console.error(`[DriverService.approveReinclusion failed for #${id}]`, err);
-      throw new Error(`Failed to approve reinclusion for driver #${id}`, { cause: err });
+    if (driver.status === 'EXCLUDED' || driver.is_excluded) {
+      throw new Error(
+        'EXCLUDED_DRIVER_REQUIRES_NEW_INVITE: Motoristas excluídos têm o processo zerado e só podem ser reinseridos através de novo convite e aprovação (pois podem ter mudado de veículo, telefone ou chave PIX).'
+      );
     }
+
+    return driver;
   }
 
   /**
@@ -1095,7 +1224,7 @@ export class DriverService {
     const placeholderId = `pending_${invite.token}`;
     const cleanPhone = normalizeGeneralPhone(invite.phone || '34999999999');
     const validVehicle: VehicleType =
-      (invite.vehicle_type as VehicleType) || 'CAR_HATCH';
+      (invite.vehicle_type as VehicleType) || 'CAR';
 
     // Check if a driver with this placeholder already exists
     const existingPlaceholder = await this.getDriverByTelegramUserId(placeholderId);

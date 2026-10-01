@@ -1,4 +1,4 @@
-import { VehicleType } from './types.ts';
+import { VehicleType, mapVehicleTypeToPricingCategory } from './types.ts';
 
 /**
  * V1 Eligibility Rule for Kantine Delivery:
@@ -11,11 +11,20 @@ export function canReceiveDeliveryOffers(driver: { status: string }): boolean {
 /**
  * M2.1 Eligibility Rule for Kantine Multi-Stop Routes:
  * canReceiveRouteOffer(driver, route) =
- *   canReceiveDeliveryOffers(driver) AND route.accepted_vehicle_types.includes(driver.vehicle_type)
+ *   canReceiveDeliveryOffers(driver) AND route accepts driver vehicle type
  */
 export function canReceiveRouteOffer(
   driver: { status: string; vehicle_type: VehicleType },
   route: { accepted_vehicle_types: VehicleType[] }
 ): boolean {
-  return canReceiveDeliveryOffers(driver) && route.accepted_vehicle_types.includes(driver.vehicle_type);
+  if (!canReceiveDeliveryOffers(driver)) return false;
+  if (!route.accepted_vehicle_types || route.accepted_vehicle_types.length === 0) return true;
+
+  if (route.accepted_vehicle_types.includes(driver.vehicle_type)) return true;
+
+  const dCat = mapVehicleTypeToPricingCategory(driver.vehicle_type);
+  return route.accepted_vehicle_types.some((t) => {
+    const rCat = mapVehicleTypeToPricingCategory(t);
+    return rCat && rCat === dCat;
+  });
 }

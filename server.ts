@@ -177,21 +177,12 @@ app.post('/api/admin/drivers/:id/exclude', requireAdminAuth, async (req: AuthReq
   }
 });
 
-// 5d. Approve reinclusion request for EXCLUDED driver
+// 5d. Reinclusion requires new invite and approval ("processo zerado")
 app.post('/api/admin/drivers/:id/reinclusion/approve', requireAdminAuth, async (req: AuthRequest, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DRIVER_ID' });
-
-    const { targetStatus, notes } = req.body;
-    const actor = req.user?.email || 'ADMIN';
-    const driver = await driverService.approveReinclusion(id, { targetStatus, notes }, actor);
-    res.json({ success: true, driver });
-  } catch (err: any) {
-    console.error(`[API POST /api/admin/drivers/${req.params.id}/reinclusion/approve failed]`, err.message);
-    if (err.message === 'DRIVER_NOT_FOUND') return res.status(404).json({ error: err.message });
-    res.status(500).json({ error: err.message || 'Failed to approve reinclusion' });
-  }
+  return res.status(400).json({
+    error: 'EXCLUDED_DRIVER_REQUIRES_NEW_INVITE',
+    message: 'Motoristas excluídos têm o processo zerado e só podem ser reinseridos através de novo convite e aprovação (pois podem ter mudado de veículo, telefone ou chave PIX).'
+  });
 });
 
 // 5e. Reject reinclusion request for EXCLUDED driver
@@ -208,6 +199,40 @@ app.post('/api/admin/drivers/:id/reinclusion/reject', requireAdminAuth, async (r
     console.error(`[API POST /api/admin/drivers/${req.params.id}/reinclusion/reject failed]`, err.message);
     if (err.message === 'DRIVER_NOT_FOUND') return res.status(404).json({ error: err.message });
     res.status(500).json({ error: err.message || 'Failed to reject reinclusion' });
+  }
+});
+
+// 5f. Reinvite excluded driver with new invite token
+app.post('/api/admin/drivers/:id/reinvite', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_DRIVER_ID' });
+
+    const driver = await driverService.getDriverById(id);
+    if (!driver) return res.status(404).json({ error: 'DRIVER_NOT_FOUND' });
+
+    const actorId = req.user?.email || req.user?.uid || 'ADMIN';
+    const invitation = await driverService.createDriverInvitation({
+      name: driver.name,
+      phone: driver.phone,
+      vehicle_type: 'CAR',
+      created_by: actorId,
+    });
+
+    const status = telegramBot.getStatus();
+    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineDeliveryBot';
+    const inviteLink = `https://t.me/${botUsername}?start=${invitation.token}`;
+
+    res.json({
+      success: true,
+      message: 'Novo convite gerado com sucesso. O motorista reiniciará o cadastro do zero.',
+      invitation,
+      inviteLink,
+      botUsername: status.botUsername,
+    });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/drivers/${req.params.id}/reinvite failed]`, err.message);
+    res.status(500).json({ error: err.message || 'Failed to generate reinvite' });
   }
 });
 

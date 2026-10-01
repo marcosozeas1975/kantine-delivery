@@ -769,7 +769,8 @@ export class RouteService {
     }
 
     // 4. Validate Vehicle Compatibility at Acceptance Time (Seção 21 & 22)
-    if (!route.accepted_vehicle_types.includes(driver.vehicle_type)) {
+    const isVehicleCompatible = canReceiveRouteOffer(driver, route);
+    if (!isVehicleCompatible) {
       return {
         status: 'REJECTED',
         error: 'VEHICLE_INCOMPATIBLE',
