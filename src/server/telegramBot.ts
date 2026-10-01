@@ -1417,6 +1417,24 @@ export class TelegramBotService {
 
     // M1.1 & M1.2 Section 21: Existing drivers are NEVER asked for invite
     if (this.driverService) {
+      // Check if this user is a pending pre-created driver waiting to link Telegram
+      if (payload && payload.trim()) {
+        const cleanToken = payload.replace(/^invite_/, '').trim();
+        const linkedDriver = await this.driverService.bindPendingDriverToTelegram(
+          cleanToken,
+          telegramUserId,
+          chatId
+        );
+        if (linkedDriver) {
+          await this.sendMessage(
+            chatId,
+            `✅ Olá, *${escapeHtml(linkedDriver.name)}*! Sua conta do Telegram foi vinculada ao seu cadastro com sucesso.`
+          );
+          await this.sendMainMenu(chatId, linkedDriver);
+          return;
+        }
+      }
+
       const existing = await this.driverService.getDriverByTelegramUserId(telegramUserId);
       if (existing) {
         await this.sendMainMenu(chatId, existing);

@@ -1,4 +1,4 @@
-import { db } from '../db/index.ts';
+import { db, prodDb } from '../db/index.ts';
 import { drivers, driverEvents, driverInvitations, driverReferrals } from '../db/schema.ts';
 import { eq, desc, sql } from 'drizzle-orm';
 import { Driver, DriverStatus, VehicleType, DriverEventType, PixKeyType, DriverInvitation } from './types.ts';
@@ -18,17 +18,44 @@ function escapeTelegramMarkdown(str: string): string {
 export class DriverService {
   public async getDrivers(statusFilter?: DriverStatus): Promise<Driver[]> {
     try {
+      let result: Driver[] = [];
       if (statusFilter) {
-        return (await db
+        result = (await db
           .select()
           .from(drivers)
           .where(eq(drivers.status, statusFilter))
           .orderBy(desc(drivers.created_at))) as Driver[];
+      } else {
+        result = (await db
+          .select()
+          .from(drivers)
+          .orderBy(desc(drivers.created_at))) as Driver[];
       }
-      return (await db
-        .select()
-        .from(drivers)
-        .orderBy(desc(drivers.created_at))) as Driver[];
+
+      // If in dev environment, sync any missing drivers from prodDb
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        try {
+          const prodDrivers = (await prodDb
+            .select()
+            .from(drivers)
+            .orderBy(desc(drivers.created_at))) as Driver[];
+          const existingIds = new Set(result.map(d => d.id));
+          const existingUserIds = new Set(result.map(d => d.telegram_user_id));
+          for (const pd of prodDrivers) {
+            if (!existingIds.has(pd.id) && !existingUserIds.has(pd.telegram_user_id)) {
+              if (!statusFilter || pd.status === statusFilter) {
+                result.push(pd);
+              }
+              // Mirror to dev db
+              await db.insert(drivers).values(pd).onConflictDoNothing().catch(() => {});
+            }
+          }
+        } catch (syncErr: any) {
+          console.warn('[DriverService.getDrivers] Sync from prodDb warning:', syncErr?.message);
+        }
+      }
+
+      return result;
     } catch (err: any) {
       console.error('[DriverService.getDrivers failed]', err);
       throw new Error('Failed to retrieve drivers', { cause: err });
@@ -38,7 +65,15 @@ export class DriverService {
   public async getDriverById(id: number): Promise<Driver | null> {
     try {
       const results = await db.select().from(drivers).where(eq(drivers.id, id));
-      return (results[0] as Driver) || null;
+      if (results[0]) return results[0] as Driver;
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        const prodResults = await prodDb.select().from(drivers).where(eq(drivers.id, id));
+        if (prodResults[0]) {
+          await db.insert(drivers).values(prodResults[0]).onConflictDoNothing().catch(() => {});
+          return prodResults[0] as Driver;
+        }
+      }
+      return null;
     } catch (err: any) {
       console.error(`[DriverService.getDriverById failed for id ${id}]`, err);
       throw new Error(`Failed to retrieve driver #${id}`, { cause: err });
@@ -51,7 +86,19 @@ export class DriverService {
         .select()
         .from(drivers)
         .where(eq(drivers.telegram_user_id, telegramUserId));
-      return (results[0] as Driver) || null;
+      if (results[0]) return results[0] as Driver;
+
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        const prodResults = await prodDb
+          .select()
+          .from(drivers)
+          .where(eq(drivers.telegram_user_id, telegramUserId));
+        if (prodResults[0]) {
+          await db.insert(drivers).values(prodResults[0]).onConflictDoNothing().catch(() => {});
+          return prodResults[0] as Driver;
+        }
+      }
+      return null;
     } catch (err: any) {
       console.error(`[DriverService.getDriverByTelegramUserId failed]`, err);
       throw new Error('Failed to find driver by Telegram User ID', { cause: err });
@@ -186,6 +233,33 @@ export class DriverService {
           .where(eq(driverReferrals.invited_telegram_user_id, data.telegram_user_id));
       } catch (refErr: any) {
         console.warn('[DriverService] Note: Failed to link referral:', refErr?.message);
+      }
+
+      // Mirror to prodDb if running in dev environment
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        try {
+          await prodDb.insert(drivers).values(newDriver).onConflictDoNothing();
+          await prodDb.insert(driverEvents).values({
+            driver_id: newDriver.id,
+            event_type: 'DRIVER_REGISTERED',
+            actor_type: 'DRIVER',
+            actor_id: data.telegram_user_id,
+          }).catch(() => {});
+          if (data.invite_token) {
+            await prodDb
+              .update(driverInvitations)
+              .set({
+                status: 'COMPLETED',
+                telegram_user_id: data.telegram_user_id,
+                driver_id: newDriver.id,
+                completed_at: new Date(),
+              })
+              .where(eq(driverInvitations.token, data.invite_token))
+              .catch(() => {});
+          }
+        } catch (mErr: any) {
+          console.warn('[DriverService.registerDriver] Mirror to prodDb failed:', mErr?.message);
+        }
       }
 
       return newDriver;
@@ -411,18 +485,40 @@ export class DriverService {
 
       const updatedDriver = updated[0] as Driver;
 
+      // Mirror to prodDb if in dev
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        try {
+          await prodDb
+            .update(drivers)
+            .set({
+              status: 'ACTIVE',
+              updated_at: new Date(),
+            })
+            .where(eq(drivers.id, id))
+            .catch(() => {});
+          await prodDb.insert(driverEvents).values({
+            driver_id: id,
+            event_type: 'DRIVER_APPROVED',
+          }).catch(() => {});
+        } catch {}
+      }
+
       // Record DRIVER_APPROVED
       await db.insert(driverEvents).values({
         driver_id: id,
         event_type: 'DRIVER_APPROVED',
       });
 
-      // 10. Enviar mensagem Telegram
-      const msg =
-        '✅ Cadastro aprovado.\n\n' +
-        'Você agora está habilitado para receber ofertas de entrega da Kantine.';
+      // 10. Enviar mensagem Telegram se não for chat placeholder
+      if (updatedDriver.telegram_chat_id && !updatedDriver.telegram_chat_id.startsWith('pending_')) {
+        const msg =
+          '✅ Cadastro aprovado.\n\n' +
+          'Você agora está habilitado para receber ofertas de entrega da Kantine.';
 
-      await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg);
+        await telegramBot.sendMessage(updatedDriver.telegram_chat_id, msg).catch((e) =>
+          console.warn('[DriverService.approveDriver] Telegram notification notice:', e.message)
+        );
+      }
 
       return updatedDriver;
     } catch (err: any) {
@@ -874,7 +970,17 @@ export class DriverService {
         })
         .returning();
 
-      return inserted[0] as DriverInvitation;
+      const inv = inserted[0] as DriverInvitation;
+
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        try {
+          await prodDb.insert(driverInvitations).values(inv).onConflictDoNothing().catch(() => {});
+        } catch (e: any) {
+          console.warn('[DriverService] Mirror invitation to prod warning:', e?.message);
+        }
+      }
+
+      return inv;
     } catch (err: any) {
       console.error('[DriverService.createDriverInvitation failed]', err);
       throw new Error('Failed to create driver invitation', { cause: err });
@@ -883,10 +989,28 @@ export class DriverService {
 
   public async getDriverInvitations(): Promise<DriverInvitation[]> {
     try {
-      return (await db
+      const list = (await db
         .select()
         .from(driverInvitations)
         .orderBy(desc(driverInvitations.created_at))) as DriverInvitation[];
+
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        try {
+          const prodList = (await prodDb
+            .select()
+            .from(driverInvitations)
+            .orderBy(desc(driverInvitations.created_at))) as DriverInvitation[];
+          const existingTokens = new Set(list.map(i => i.token));
+          for (const pi of prodList) {
+            if (!existingTokens.has(pi.token)) {
+              list.push(pi);
+              await db.insert(driverInvitations).values(pi).onConflictDoNothing().catch(() => {});
+            }
+          }
+        } catch {}
+      }
+
+      return list;
     } catch (err: any) {
       console.error('[DriverService.getDriverInvitations failed]', err);
       throw new Error('Failed to retrieve driver invitations', { cause: err });
@@ -899,7 +1023,21 @@ export class DriverService {
         .select()
         .from(driverInvitations)
         .where(eq(driverInvitations.token, token));
-      return (results[0] as DriverInvitation) || null;
+      if (results[0]) return results[0] as DriverInvitation;
+
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        const prodResults = await prodDb
+          .select()
+          .from(driverInvitations)
+          .where(eq(driverInvitations.token, token));
+        if (prodResults[0]) {
+          try {
+            await db.insert(driverInvitations).values(prodResults[0]).onConflictDoNothing().catch(() => {});
+          } catch {}
+          return prodResults[0] as DriverInvitation;
+        }
+      }
+      return null;
     } catch (err: any) {
       console.error(`[DriverService.getInviteByToken failed for ${token}]`, err);
       return null;
@@ -912,10 +1050,186 @@ export class DriverService {
         .update(driverInvitations)
         .set({ status: 'CANCELLED' })
         .where(eq(driverInvitations.id, id));
+      if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        await prodDb
+          .update(driverInvitations)
+          .set({ status: 'CANCELLED' })
+          .where(eq(driverInvitations.id, id))
+          .catch(() => {});
+      }
       return true;
     } catch (err: any) {
       console.error(`[DriverService.cancelDriverInvitation failed for #${id}]`, err);
       return false;
+    }
+  }
+
+  /**
+   * Directly convert an invitation into a registered driver record with PENDING status.
+   * Enables admin to instantly bring invited drivers (like Evelyn) into the pending approval queue.
+   */
+  public async convertInvitationToDriver(invitationId: number): Promise<Driver> {
+    let invite = (await db
+      .select()
+      .from(driverInvitations)
+      .where(eq(driverInvitations.id, invitationId))
+      .then((r) => r[0])) as DriverInvitation | undefined;
+
+    if (!invite && process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+      invite = (await prodDb
+        .select()
+        .from(driverInvitations)
+        .where(eq(driverInvitations.id, invitationId))
+        .then((r) => r[0])) as DriverInvitation | undefined;
+    }
+
+    if (!invite) {
+      throw new Error('INVITATION_NOT_FOUND');
+    }
+
+    if (invite.driver_id) {
+      const existing = await this.getDriverById(invite.driver_id);
+      if (existing) return existing;
+    }
+
+    const placeholderId = `pending_${invite.token}`;
+    const cleanPhone = normalizeGeneralPhone(invite.phone || '34999999999');
+    const validVehicle: VehicleType =
+      (invite.vehicle_type as VehicleType) || 'CAR_HATCH';
+
+    // Check if a driver with this placeholder already exists
+    const existingPlaceholder = await this.getDriverByTelegramUserId(placeholderId);
+    if (existingPlaceholder) return existingPlaceholder;
+
+    const inserted = await db
+      .insert(drivers)
+      .values({
+        telegram_user_id: placeholderId,
+        telegram_chat_id: placeholderId,
+        name: invite.name?.trim() || 'Motorista Convidado',
+        phone: cleanPhone,
+        vehicle_type: validVehicle,
+        pix_key: cleanPhone,
+        pix_key_type: 'PHONE',
+        pix_key_value: cleanPhone,
+        status: 'PENDING',
+      })
+      .returning();
+
+    const newDriver = inserted[0] as Driver;
+
+    await db
+      .update(driverInvitations)
+      .set({
+        status: 'COMPLETED',
+        driver_id: newDriver.id,
+        completed_at: new Date(),
+      })
+      .where(eq(driverInvitations.id, invitationId));
+
+    await db.insert(driverEvents).values({
+      driver_id: newDriver.id,
+      event_type: 'DRIVER_REGISTERED',
+      actor_type: 'ADMIN',
+      actor_id: invite.created_by || 'ADMIN',
+    });
+
+    if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+      try {
+        await prodDb.insert(drivers).values(newDriver).onConflictDoNothing().catch(() => {});
+        await prodDb
+          .update(driverInvitations)
+          .set({
+            status: 'COMPLETED',
+            driver_id: newDriver.id,
+            completed_at: new Date(),
+          })
+          .where(eq(driverInvitations.id, invitationId))
+          .catch(() => {});
+        await prodDb.insert(driverEvents).values({
+          driver_id: newDriver.id,
+          event_type: 'DRIVER_REGISTERED',
+          actor_type: 'ADMIN',
+          actor_id: invite.created_by || 'ADMIN',
+        }).catch(() => {});
+      } catch (err: any) {
+        console.warn('[convertInvitationToDriver] Prod mirror warning:', err?.message);
+      }
+    }
+
+    return newDriver;
+  }
+
+  /**
+   * Binds a pre-created or token-based pending driver to a real Telegram user ID & chat ID.
+   */
+  public async bindPendingDriverToTelegram(
+    token: string,
+    telegramUserId: string,
+    chatId: string
+  ): Promise<Driver | null> {
+    try {
+      const placeholderId = `pending_${token}`;
+      let driver = await this.getDriverByTelegramUserId(placeholderId);
+      if (!driver) {
+        // Also check by token in invitations
+        const inv = await this.getInviteByToken(token);
+        if (inv && inv.driver_id) {
+          driver = await this.getDriverById(inv.driver_id);
+        }
+      }
+
+      if (driver) {
+        const updated = await db
+          .update(drivers)
+          .set({
+            telegram_user_id: telegramUserId,
+            telegram_chat_id: chatId,
+            updated_at: new Date(),
+          })
+          .where(eq(drivers.id, driver.id))
+          .returning();
+
+        const linked = (updated[0] as Driver) || driver;
+
+        await db
+          .update(driverInvitations)
+          .set({
+            telegram_user_id: telegramUserId,
+            status: 'COMPLETED',
+            completed_at: new Date(),
+          })
+          .where(eq(driverInvitations.token, token));
+
+        if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+          try {
+            await prodDb
+              .update(drivers)
+              .set({
+                telegram_user_id: telegramUserId,
+                telegram_chat_id: chatId,
+                updated_at: new Date(),
+              })
+              .where(eq(drivers.id, driver.id))
+              .catch(() => {});
+            await prodDb
+              .update(driverInvitations)
+              .set({
+                telegram_user_id: telegramUserId,
+                status: 'COMPLETED',
+                completed_at: new Date(),
+              })
+              .where(eq(driverInvitations.token, token))
+              .catch(() => {});
+          } catch {}
+        }
+
+        return linked;
+      }
+      return null;
+    } catch (err: any) {
+      console.warn('[DriverService.bindPendingDriverToTelegram] Error:', err?.message);
+      return null;
     }
   }
 

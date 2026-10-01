@@ -330,6 +330,18 @@ app.post('/api/admin/driver-invitations/:id/cancel', requireAdminAuth, async (re
   }
 });
 
+app.post('/api/admin/driver-invitations/:id/convert', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_INVITATION_ID' });
+    const driver = await driverService.convertInvitationToDriver(id);
+    res.json({ success: true, driver });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/driver-invitations/${req.params.id}/convert failed]`, err.message);
+    res.status(500).json({ error: err.message || 'Failed to convert invitation to driver' });
+  }
+});
+
 // ==========================================
 // M1.2 — Controlled Referrals (Indicação Controlada de Motoristas)
 // ==========================================

@@ -994,6 +994,30 @@ export default function App() {
     }
   };
 
+  const handleConvertToDriver = async (invitationId: number) => {
+    setActionLoadingId(invitationId);
+    setErrorMessage(null);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/admin/driver-invitations/${invitationId}/convert`, {
+        method: 'POST',
+        headers,
+      });
+      if (res.ok) {
+        setSuccessMessage('Convite convertido em cadastro pendente com sucesso! Motorista disponível na fila de aprovação.');
+        await fetchDrivers();
+        await fetchInvitations();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorMessage(err.error || 'Falha ao converter convite em cadastro');
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao converter convite em cadastro');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const copyToClipboard = async (text: string, key: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -2795,6 +2819,45 @@ export default function App() {
               </button>
             </div>
           </div>
+
+          {/* Pending Invitations Alert Card */}
+          {invitationsList.filter((i) => i.status === 'PENDING').length > 0 && (
+            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-300/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs font-bold text-sm">
+                  ✉️
+                </div>
+                <div>
+                  <h3 className="text-xs sm:text-sm font-bold text-amber-950 flex items-center gap-2">
+                    <span>
+                      {invitationsList.filter((i) => i.status === 'PENDING').length} Convite(s) emitido(s) aguardando cadastro no Telegram
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                      Aguardando
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-amber-900/80 mt-0.5 font-medium">
+                    {invitationsList
+                      .filter((i) => i.status === 'PENDING')
+                      .map((i) => `${i.name || 'Convidado'} (${i.phone || 's/ tel'})`)
+                      .join(' • ')}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => {
+                    setShowInviteModal(true);
+                    setInviteModalTab('HISTORY');
+                    fetchInvitations();
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-2xs transition-colors cursor-pointer"
+                >
+                  <span>Gerenciar Convites / Pré-Cadastrar</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden shadow-xs">
             <table className="w-full text-left text-xs">
@@ -6509,6 +6572,16 @@ export default function App() {
                             >
                               {copiedKey === `hist_${inv.id}` ? 'Copiado!' : 'Copiar Link'}
                             </button>
+                            {inv.status === 'PENDING' && (
+                              <button
+                                onClick={() => handleConvertToDriver(inv.id)}
+                                disabled={actionLoadingId === inv.id}
+                                className="px-2 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                title="Converter convite em cadastro pendente de aprovação"
+                              >
+                                <span>⚡ Pré-Cadastrar</span>
+                              </button>
+                            )}
                             {inv.status === 'PENDING' && (
                               <button
                                 onClick={() => handleCancelInvite(inv.id)}
