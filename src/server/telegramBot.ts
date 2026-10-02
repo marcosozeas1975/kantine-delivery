@@ -24,6 +24,9 @@ import {
   buildGoogleMapsDestinationUrl,
 } from './mapsNavigation.ts';
 import { routeEditService } from './routeEditService.ts';
+import { db } from '../db/index.ts';
+import { eq } from 'drizzle-orm';
+import { telegramBotSessions } from '../db/schema.ts';
 
 export function isMockChatId(chatId: any): boolean {
   if (!chatId) return true;
@@ -247,13 +250,76 @@ export class TelegramBotService {
     return !!this.token;
   }
 
-  public clearAllSessions() {
+  public async getSession(telegramUserId: string): Promise<WizardState | null> {
+    const memory = this.sessions.get(telegramUserId);
+    if (memory) return memory;
+
+    try {
+      const res = await db
+        .select()
+        .from(telegramBotSessions)
+        .where(eq(telegramBotSessions.userId, telegramUserId));
+      if (res[0] && res[0].sessionType === 'WIZARD') {
+        const rawData = typeof res[0].data === 'string' ? JSON.parse(res[0].data) : res[0].data;
+        const loaded: WizardState = {
+          step: res[0].step as any,
+          data: (rawData as any) || {},
+          lastPromptTime: res[0].updatedAt ? new Date(res[0].updatedAt).getTime() : Date.now(),
+        };
+        this.sessions.set(telegramUserId, loaded);
+        return loaded;
+      }
+    } catch (e: any) {
+      console.warn('[TelegramBot.getSession] DB lookup warning:', e?.message);
+    }
+    return null;
+  }
+
+  public async saveSession(telegramUserId: string, state: WizardState) {
+    this.sessions.set(telegramUserId, state);
+    try {
+      await db
+        .insert(telegramBotSessions)
+        .values({
+          userId: telegramUserId,
+          sessionType: 'WIZARD',
+          step: state.step,
+          data: state.data as any,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: telegramBotSessions.userId,
+          set: {
+            sessionType: 'WIZARD',
+            step: state.step,
+            data: state.data as any,
+            updatedAt: new Date(),
+          },
+        });
+    } catch (e: any) {
+      console.warn('[TelegramBot.saveSession] DB save warning:', e?.message);
+    }
+  }
+
+  public async deleteSession(telegramUserId: string) {
+    this.sessions.delete(telegramUserId);
+    try {
+      await db.delete(telegramBotSessions).where(eq(telegramBotSessions.userId, telegramUserId));
+    } catch (e: any) {
+      console.warn('[TelegramBot.deleteSession] DB delete warning:', e?.message);
+    }
+  }
+
+  public async clearAllSessions() {
     this.sessions.clear();
     this.editSessions.clear();
     this.m4DriverSessions.clear();
     this.referralSessions.clear();
     this.reactivationSessions.clear();
     this.recentDispatches = [];
+    try {
+      await db.delete(telegramBotSessions);
+    } catch {}
   }
 
   public getStatus() {
@@ -1295,7 +1361,10 @@ export class TelegramBotService {
 
     const telegramUserId = message.from.id.toString();
     const chatId = message.chat.id.toString();
-    const rawText = (message.text || '').trim();
+    let rawText = (message.text || '').trim();
+    if (!rawText && message.contact && message.contact.phone_number) {
+      rawText = message.contact.phone_number;
+    }
 
     // Check for /start command (supports /start, /start <payload>, /start=<payload>)
     const isStart = rawText === '/start' || rawText.startsWith('/start ') || rawText.startsWith('/start=');
@@ -1377,7 +1446,7 @@ export class TelegramBotService {
     }
 
     // Check if user has an active registration session
-    const session = this.sessions.get(telegramUserId);
+    const session = await this.getSession(telegramUserId);
     if (!session) {
       // User is not in registration/editing and didn't send /start
       // Check if driver is already registered
@@ -1389,12 +1458,40 @@ export class TelegramBotService {
         }
       }
 
-      // M1.2 Section 20: Closed registration
+      // If user typed their name (e.g. "Marcos") after opening the bot,
+      // start the registration wizard directly using that name:
+      if (rawText && rawText.length >= 2 && !rawText.startsWith('/')) {
+        const newSession: WizardState = {
+          step: 'PHONE',
+          data: {
+            name: rawText.trim(),
+            invite_token: 'convite_geral',
+          },
+          lastPromptTime: Date.now(),
+        };
+        await this.saveSession(telegramUserId, newSession);
+
+        await this.sendMessage(
+          chatId,
+          `👋 Olá, *${escapeHtml(rawText.trim())}*! Bem-vindo à *Kantine Entregas*! 🚀\n\n` +
+            `Por favor, informe seu *telefone com DDD* (ex: 34999999999):`
+        );
+        return;
+      }
+
+      // Friendly welcome with registration button
       await this.sendMessage(
         chatId,
         '👋 *Kantine Entregas*\n\n' +
-          'O cadastro de novos motoristas é realizado somente por convite.\n\n' +
-          'Se você recebeu uma indicação aprovada, utilize o link de convite enviado pelo motorista que fez sua indicação.'
+          'Seja bem-vindo à central de entregadores da Kantine!\n\n' +
+          'Para iniciar seu cadastro de motorista parceiro, clique no botão abaixo:',
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 INICIAR MEU CADASTRO', callback_data: 'start_cadastro' }],
+            ],
+          },
+        }
       );
       return;
     }
@@ -1410,16 +1507,20 @@ export class TelegramBotService {
     payload?: string
   ) {
     // Clear any lingering session
-    this.sessions.delete(telegramUserId);
+    await this.deleteSession(telegramUserId);
     this.editSessions.delete(telegramUserId);
     this.referralSessions.delete(telegramUserId);
     this.reactivationSessions.delete(telegramUserId);
 
-    // M1.1 & M1.2 Section 21: Existing drivers are NEVER asked for invite
+    const cleanToken = (payload || '').replace(/^invite_/, '').trim();
+    const isGenericCadastro =
+      ['cadastro', 'cadastrar', 'registrar', 'registro', 'novo', 'entregador', 'convite', 'geral', 'start'].includes(
+        cleanToken.toLowerCase()
+      );
+
     if (this.driverService) {
-      // Check if this user is a pending pre-created driver waiting to link Telegram
-      if (payload && payload.trim()) {
-        const cleanToken = payload.replace(/^invite_/, '').trim();
+      // 1. Check if this user is a pending pre-created driver waiting to link Telegram via token
+      if (cleanToken && !isGenericCadastro) {
         const linkedDriver = await this.driverService.bindPendingDriverToTelegram(
           cleanToken,
           telegramUserId,
@@ -1436,45 +1537,73 @@ export class TelegramBotService {
       }
 
       const existing = await this.driverService.getDriverByTelegramUserId(telegramUserId);
-      if (existing) {
-        if (existing.status === 'EXCLUDED' || existing.is_excluded) {
-          // Excluded drivers can ONLY return via a new invite and new approval (process zerado)
-          if (!payload || !payload.trim()) {
-            await this.sendMainMenu(chatId, existing);
-            return;
-          }
-          // If there is an invite token payload, continue below to validate and start fresh registration
-        } else {
+
+      // If user invoked generic cadastro (/start cadastro or similar)
+      if (isGenericCadastro) {
+        if (existing && existing.status === 'ACTIVE') {
+          await this.sendMessage(
+            chatId,
+            `👋 Olá, *${escapeHtml(existing.name)}*! Você já possui cadastro *ATIVO* na Kantine Entregas! 🚀\n\n` +
+              `Caso queira visualizar ou editar seus dados, acesse *Meu Cadastro*.\n` +
+              `Caso queira reiniciar seu cadastro do zero, clique abaixo:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' }],
+                  [{ text: '🔄 REINICIAR CADASTRO DO ZERO', callback_data: 'force_restart_cadastro' }],
+                ],
+              },
+            }
+          );
+          return;
+        }
+
+        // For PENDING, EXCLUDED, BLOCKED or NEW users coming with /start cadastro:
+        // START REGISTRATION WIZARD
+        const genericSession: WizardState = {
+          step: 'NAME',
+          data: {
+            name: existing?.name || (fromUser?.first_name ? `${fromUser.first_name || ''} ${fromUser.last_name || ''}`.trim() : undefined),
+            phone: existing?.phone || undefined,
+            invite_token: 'convite_geral',
+          },
+          lastPromptTime: Date.now(),
+        };
+        await this.saveSession(telegramUserId, genericSession);
+
+        await this.sendMessage(
+          chatId,
+          `👋 Olá! Seja bem-vindo à *Kantine Entregas*! 🚀\n\n` +
+            `Vamos dar início ao seu cadastro de motorista parceiro.\n\n` +
+            `Para começar, por favor informe seu *nome completo*:`
+        );
+        return;
+      }
+
+      // If user opened without any token (/start)
+      if (!cleanToken) {
+        if (existing) {
           await this.sendMainMenu(chatId, existing);
           return;
         }
+
+        const genericSession: WizardState = {
+          step: 'NAME',
+          data: {
+            invite_token: 'convite_geral',
+          },
+          lastPromptTime: Date.now(),
+        };
+        await this.saveSession(telegramUserId, genericSession);
+
+        await this.sendMessage(
+          chatId,
+          `👋 Olá! Seja bem-vindo à *Kantine Entregas*! 🚀\n\n` +
+            `Vamos dar início ao seu cadastro de motorista parceiro.\n\n` +
+            `Para começar, por favor informe seu *nome completo*:`
+        );
+        return;
       }
-    }
-
-    const cleanToken = (payload || '').replace(/^invite_/, '').trim();
-    const isGenericCadastro =
-      !cleanToken ||
-      ['cadastro', 'cadastrar', 'registrar', 'registro', 'novo', 'entregador', 'convite', 'geral', 'start'].includes(
-        cleanToken.toLowerCase()
-      );
-
-    if (isGenericCadastro) {
-      // Start registration wizard for the generic invite / store counter link
-      this.sessions.set(telegramUserId, {
-        step: 'NAME',
-        data: {
-          invite_token: 'convite_geral',
-        },
-        lastPromptTime: Date.now(),
-      });
-
-      await this.sendMessage(
-        chatId,
-        `👋 Olá! Seja bem-vindo à *Kantine Entregas*! 🚀\n\n` +
-          `Vamos dar início ao seu cadastro de motorista parceiro.\n\n` +
-          `Para começar, por favor informe seu *nome completo*:`
-      );
-      return;
     }
 
     // Specific referral token or driver invitation token
@@ -1596,8 +1725,11 @@ export class TelegramBotService {
       const reason = driver.exclusion_reason || driver.previous_exclusion_reason || 'Desativação administrativa';
       msg += `\n• <b>Motivo do desligamento:</b> ${escapeHtml(reason)}`;
       msg += `\n\n⚠️ <b>Processo Reiniciado do Zero:</b>\n` +
-             `Motoristas excluídos têm o processo zerado. Para retornar à equipe Kantine Entregas, é necessário receber um <b>novo convite</b> e refazer o cadastro completo (pois você pode ter mudado de veículo, telefone ou chave PIX), passando por nova aprovação da administração.\n\n` +
-             `Solicite um novo convite de acesso junto à equipe Kantine.`;
+             `Motoristas excluídos têm o processo zerado. Para retornar à equipe Kantine Entregas, é necessário refazer o cadastro completo com dados atualizados e passar por nova aprovação.\n\n` +
+             `Clique no botão abaixo para reiniciar seu cadastro agora:`;
+      buttons.push([
+        { text: '🚀 REINICIAR CADASTRO DO ZERO', callback_data: 'force_restart_cadastro' },
+      ]);
       buttons.push([{ text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' }]);
     } else if (driver.status === 'BLOCKED') {
       if (driver.reactivation_requested) {
@@ -1623,6 +1755,7 @@ export class TelegramBotService {
       // PENDING
       buttons.push([
         { text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' },
+        { text: '🔄 REINICIAR / ATUALIZAR', callback_data: 'force_restart_cadastro' },
       ]);
       buttons.push([
         { text: '📋 MINHAS INDICAÇÕES', callback_data: 'menu_my_referrals' },
@@ -1999,6 +2132,7 @@ export class TelegramBotService {
       }
       session.data.name = text.trim();
       session.step = 'PHONE';
+      await this.saveSession(telegramUserId, session);
       await this.sendMessage(chatId, 'Informe seu *telefone com DDD* (ex: 34999999999):');
       return;
     }
@@ -2014,6 +2148,7 @@ export class TelegramBotService {
       }
       session.data.phone = normalizeGeneralPhone(text);
       session.step = 'VEHICLE';
+      await this.saveSession(telegramUserId, session);
 
       // Send vehicle selection with 2-column inline keyboard
       await this.sendMessage(chatId, 'Selecione o *tipo de veículo*:', {
@@ -2034,6 +2169,7 @@ export class TelegramBotService {
 
       session.data.vehicle_type = parsed;
       session.step = 'PIX_TYPE';
+      await this.saveSession(telegramUserId, session);
       await this.sendMessage(
         chatId,
         'Selecione o *tipo de chave Pix* para recebimento dos repasses:',
@@ -2083,6 +2219,7 @@ export class TelegramBotService {
 
       session.data.pix_key_type = selectedType;
       session.step = 'PIX_VALUE';
+      await this.saveSession(telegramUserId, session);
       let promptMsg = 'Informe sua chave Pix:';
       if (selectedType === 'CPF') promptMsg = 'Informe o *CPF* utilizado como chave Pix:';
       if (selectedType === 'PHONE') promptMsg = 'Informe o *telefone com DDD* utilizado como chave Pix (ex: 34999999999):';
@@ -2107,6 +2244,7 @@ export class TelegramBotService {
       session.data.pix_key_value = valRes.canonical!;
       session.data.pix_key = valRes.canonical!;
       session.step = 'CONFIRM';
+      await this.saveSession(telegramUserId, session);
 
       const vehicleFriendlyLabel = getVehicleTypeLabel(session.data.vehicle_type!);
       const maskedPix = maskPixKey(session.data.pix_key_type, session.data.pix_key_value);
@@ -3164,10 +3302,30 @@ export class TelegramBotService {
     // ==========================================
     // Registration Wizard Callbacks
     // ==========================================
-    const session = this.sessions.get(telegramUserId);
+    const session = await this.getSession(telegramUserId);
+
+    if (data === 'force_restart_cadastro' || data === 'start_cadastro') {
+      await this.answerCallbackQuery(query.id);
+      await this.deleteSession(telegramUserId);
+      const newSession: WizardState = {
+        step: 'NAME',
+        data: {
+          invite_token: 'convite_geral',
+        },
+        lastPromptTime: Date.now(),
+      };
+      await this.saveSession(telegramUserId, newSession);
+      await this.sendMessage(
+        chatId,
+        `👋 Olá! Vamos dar início ao seu cadastro na *Kantine Entregas*! 🚀\n\n` +
+          `Para começar, por favor informe seu *nome completo*:`
+      );
+      return;
+    }
 
     if (data === 'cancel_reg') {
-      this.sessions.delete(telegramUserId);
+      await this.answerCallbackQuery(query.id);
+      await this.deleteSession(telegramUserId);
       await this.sendMessage(
         chatId,
         'Cadastro cancelado.\nQuando quiser recomeçar, envie /start.',
@@ -3178,11 +3336,13 @@ export class TelegramBotService {
 
     // Vehicle selection callback in registration
     if (data && data.startsWith('veh_')) {
-      if (session && session.step === 'VEHICLE') {
+      await this.answerCallbackQuery(query.id);
+      if (session && (session.step === 'VEHICLE' || session.step === 'PHONE')) {
         const parsed = parseVehicleInput(data);
         if (parsed) {
           session.data.vehicle_type = parsed;
           session.step = 'PIX_TYPE';
+          await this.saveSession(telegramUserId, session);
           await this.sendMessage(
             chatId,
             'Selecione o *tipo de chave Pix* para recebimento dos repasses:',
@@ -3208,10 +3368,12 @@ export class TelegramBotService {
 
     // Pix type selection callback in registration
     if (data && data.startsWith('reg_pixtype:')) {
+      await this.answerCallbackQuery(query.id);
       const chosenPixType = data.replace('reg_pixtype:', '') as PixKeyType;
       if (session && (session.step === 'PIX_TYPE' || session.step === 'VEHICLE')) {
         session.data.pix_key_type = chosenPixType;
         session.step = 'PIX_VALUE';
+        await this.saveSession(telegramUserId, session);
 
         let promptMsg = 'Informe sua chave Pix:';
         if (chosenPixType === 'CPF') promptMsg = 'Informe o *CPF* utilizado como chave Pix:';
@@ -3225,6 +3387,7 @@ export class TelegramBotService {
     }
 
     if (data === 'confirm_reg') {
+      await this.answerCallbackQuery(query.id);
       if (
         !session ||
         !session.data.name ||
@@ -3236,7 +3399,7 @@ export class TelegramBotService {
           chatId,
           'Sessão expirada ou incompleta. Por favor, reinicie enviando /start.'
         );
-        this.sessions.delete(telegramUserId);
+        await this.deleteSession(telegramUserId);
         return;
       }
 
@@ -3263,13 +3426,13 @@ export class TelegramBotService {
         invite_token: session.data.invite_token,
       });
 
-      this.sessions.delete(telegramUserId);
+      await this.deleteSession(telegramUserId);
 
       // Resposta de confirmação
       const responseMsg =
-        'Cadastro recebido.\n\n' +
-        'Sua solicitação está aguardando aprovação da Kantine.\n\n' +
-        'Você receberá uma mensagem aqui quando seu cadastro for aprovado.';
+        'Cadastro recebido com sucesso! 🚀\n\n' +
+        'Sua solicitação está aguardando aprovação da equipe Kantine.\n\n' +
+        'Você receberá uma notificação aqui quando seu cadastro for aprovado.';
 
       await this.sendMessage(chatId, responseMsg, {
         reply_markup: { remove_keyboard: true },
@@ -3277,7 +3440,7 @@ export class TelegramBotService {
     } catch (err: any) {
       // Idempotency: if already registered
       if (err.message === 'DRIVER_ALREADY_EXISTS') {
-        this.sessions.delete(telegramUserId);
+        await this.deleteSession(telegramUserId);
         const existing = await this.driverService.getDriverByTelegramUserId(telegramUserId);
         if (existing) {
           await this.sendMainMenu(chatId, existing);

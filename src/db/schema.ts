@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, integer, numeric, pgTable, serial, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import { boolean, check, integer, jsonb, numeric, pgTable, serial, text, timestamp, unique } from 'drizzle-orm/pg-core';
 
 // Firebase Auth Admin Users
 export const users = pgTable('users', {
@@ -415,5 +415,14 @@ export const driverReferralEvents = pgTable('driver_referral_events', {
   actor_id: text('actor_id'),
   details: text('details'),
   timestamp: timestamp('timestamp').defaultNow().notNull(),
+});
+
+// Telegram Bot Sessions Table (Persisted wizard state across containers/restarts)
+export const telegramBotSessions = pgTable('telegram_bot_sessions', {
+  userId: text('user_id').primaryKey(),
+  sessionType: text('session_type').notNull(), // WIZARD | EDIT | REFERRAL | REACTIVATION
+  step: text('step').notNull(),
+  data: jsonb('data').default({}).notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 

@@ -371,6 +371,7 @@ app.post('/api/admin/driver-invitations/:id/convert', requireAdminAuth, async (r
 app.post('/api/admin/system/reset-drivers-history', requireAdminAuth, async (_req: AuthRequest, res) => {
   try {
     await driverService.resetAllDriversAndHistory();
+    await telegramBot.clearAllSessions();
     const status = telegramBot.getStatus();
     res.json({
       success: true,
