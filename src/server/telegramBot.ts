@@ -1499,9 +1499,11 @@ export class TelegramBotService {
         }
       }
 
-      // If user typed their name (e.g. "Marcos") after opening the bot,
+      // If user typed their name (e.g. "Marcos Silva") after opening the bot,
       // start the registration wizard directly using that name:
-      if (rawText && rawText.length >= 2 && !rawText.startsWith('/')) {
+      const digitsOnly = (rawText || '').replace(/\D/g, '');
+      const hasLetters = /[a-zA-ZÀ-ÿ]{2,}/.test(rawText || '');
+      if (rawText && rawText.length >= 2 && !rawText.startsWith('/') && hasLetters && digitsOnly.length < 6) {
         const newSession: WizardState = {
           step: 'PHONE',
           data: {
@@ -1604,8 +1606,6 @@ export class TelegramBotService {
         const genericSession: WizardState = {
           step: 'NAME',
           data: {
-            name: existing?.name || (fromUser?.first_name ? `${fromUser.first_name || ''} ${fromUser.last_name || ''}`.trim() : undefined),
-            phone: existing?.phone || undefined,
             invite_token: 'convite_geral',
           },
           lastPromptTime: Date.now(),
@@ -2171,12 +2171,13 @@ export class TelegramBotService {
         await this.sendMessage(chatId, 'Por favor, informe um nome válido (mínimo 2 letras):');
         return;
       }
-      // Check if user accidentally typed a phone number instead of a name
+      // Check if user accidentally typed numbers, CPF, or phone instead of a name
       const digitsOnly = text.replace(/\D/g, '');
-      if (digitsOnly.length >= 8 && digitsOnly.length === text.replace(/[\s\(\)\-\+]/g, '').length) {
+      const hasLetters = /[a-zA-ZÀ-ÿ]{2,}/.test(text);
+      if (digitsOnly.length >= 6 || !hasLetters) {
         await this.sendMessage(
           chatId,
-          '⚠️ Você informou um número de telefone.\n\nPor favor, informe seu *nome completo* (ex: Marcos Silva):'
+          '⚠️ Por favor, informe seu *nome completo* utilizando letras (ex: Marcos Silva):'
         );
         return;
       }
@@ -2250,6 +2251,65 @@ export class TelegramBotService {
       else if (upper === 'EMAIL' || upper === 'E-MAIL') selectedType = 'EMAIL';
       else if (upper === 'ALEATÓRIA' || upper === 'ALEATORIA' || upper === 'RANDOM') selectedType = 'RANDOM';
 
+      // Smart auto-detection if user typed the key itself instead of the type label:
+      if (!selectedType) {
+        if (text.includes('@')) {
+          selectedType = 'EMAIL';
+        } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text.trim())) {
+          selectedType = 'RANDOM';
+        } else {
+          const numDigits = text.replace(/\D/g, '').length;
+          if (numDigits === 11) {
+            // Check if valid CPF first
+            const cpfVal = validateAndNormalizePix('CPF', text);
+            if (cpfVal.isValid) {
+              selectedType = 'CPF';
+            } else {
+              // Could be mobile phone with DDD (11 digits: 2 DDD + 9 digits)
+              selectedType = 'PHONE';
+            }
+          } else if (numDigits === 10 || numDigits === 12 || numDigits === 13) {
+            selectedType = 'PHONE';
+          }
+        }
+
+        // If auto-detected, immediately process this value:
+        if (selectedType) {
+          const valRes = validateAndNormalizePix(selectedType, text);
+          if (valRes.isValid) {
+            session.data.pix_key_type = selectedType;
+            session.data.pix_key_value = valRes.canonical!;
+            session.data.pix_key = valRes.canonical!;
+            session.step = 'CONFIRM';
+            await this.saveSession(telegramUserId, session);
+
+            const vehicleFriendlyLabel = getVehicleTypeLabel(session.data.vehicle_type || 'CAR');
+            const maskedPix = maskPixKey(session.data.pix_key_type, session.data.pix_key_value);
+
+            const summary =
+              `<b>CADASTRO DE MOTORISTA</b>\n\n` +
+              `<b>Nome:</b> ${escapeHtml(session.data.name || '')}\n` +
+              `<b>Telefone:</b> ${escapeHtml(session.data.phone || '')}\n` +
+              `<b>Veículo:</b> ${escapeHtml(vehicleFriendlyLabel)}\n` +
+              `<b>Tipo Pix:</b> ${escapeHtml(session.data.pix_key_type)}\n` +
+              `<b>Chave Pix:</b> ${escapeHtml(maskedPix)}`;
+
+            await this.sendMessage(chatId, summary, {
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: 'CONFIRMAR CADASTRO', callback_data: 'confirm_reg' },
+                    { text: 'CANCELAR', callback_data: 'cancel_reg' },
+                  ],
+                ],
+              },
+            });
+            return;
+          }
+        }
+      }
+
       if (!selectedType) {
         await this.sendMessage(chatId, 'Selecione o *tipo de chave Pix*:', {
           reply_markup: {
@@ -2272,7 +2332,7 @@ export class TelegramBotService {
       session.step = 'PIX_VALUE';
       await this.saveSession(telegramUserId, session);
       let promptMsg = 'Informe sua chave Pix:';
-      if (selectedType === 'CPF') promptMsg = 'Informe o *CPF* utilizado como chave Pix:';
+      if (selectedType === 'CPF') promptMsg = 'Informe o *CPF* (11 dígitos, ex: 123.456.789-00) utilizado como chave Pix:';
       if (selectedType === 'PHONE') promptMsg = 'Informe o *telefone com DDD* utilizado como chave Pix (ex: 34999999999):';
       if (selectedType === 'EMAIL') promptMsg = 'Informe o *e-mail* utilizado como chave Pix:';
       if (selectedType === 'RANDOM') promptMsg = 'Informe a *chave aleatória (UUID)* utilizada como chave Pix:';
@@ -2297,15 +2357,15 @@ export class TelegramBotService {
       session.step = 'CONFIRM';
       await this.saveSession(telegramUserId, session);
 
-      const vehicleFriendlyLabel = getVehicleTypeLabel(session.data.vehicle_type!);
+      const vehicleFriendlyLabel = getVehicleTypeLabel(session.data.vehicle_type || 'CAR');
       const maskedPix = maskPixKey(session.data.pix_key_type, session.data.pix_key_value);
 
       const summary =
         `<b>CADASTRO DE MOTORISTA</b>\n\n` +
-        `<b>Nome:</b> ${escapeHtml(session.data.name)}\n` +
-        `<b>Telefone:</b> ${escapeHtml(session.data.phone)}\n` +
+        `<b>Nome:</b> ${escapeHtml(session.data.name || '')}\n` +
+        `<b>Telefone:</b> ${escapeHtml(session.data.phone || '')}\n` +
         `<b>Veículo:</b> ${escapeHtml(vehicleFriendlyLabel)}\n` +
-        `<b>Tipo Pix:</b> ${escapeHtml(session.data.pix_key_type)}\n` +
+        `<b>Tipo Pix:</b> ${escapeHtml(session.data.pix_key_type || 'CPF')}\n` +
         `<b>Chave Pix:</b> ${escapeHtml(maskedPix)}`;
 
       await this.sendMessage(chatId, summary, {
@@ -2323,11 +2383,17 @@ export class TelegramBotService {
     }
 
     if (session.step === 'CONFIRM') {
-      if (normalized === 'CONFIRMAR CADASTRO' || normalized === 'CONFIRMAR') {
+      const norm = (text || '').trim().toUpperCase();
+      if (norm === 'CONFIRMAR CADASTRO' || norm === 'CONFIRMAR' || norm === 'SIM' || norm === 'OK') {
         await this.commitRegistration(telegramUserId, chatId, session);
         return;
       }
-      await this.sendMessage(chatId, 'Utilize os botões abaixo para confirmar ou cancelar o cadastro.', {
+      if (norm === 'CANCELAR' || norm === 'NÃO' || norm === 'NAO') {
+        await this.deleteSession(telegramUserId);
+        await this.sendMessage(chatId, 'Cadastro cancelado.\nQuando quiser recomeçar, envie /start.');
+        return;
+      }
+      await this.sendMessage(chatId, 'Utilize o botão *CONFIRMAR CADASTRO* abaixo para finalizar ou envie CANCELAR:', {
         reply_markup: {
           inline_keyboard: [
             [
@@ -3427,7 +3493,7 @@ export class TelegramBotService {
         await this.saveSession(telegramUserId, session);
 
         let promptMsg = 'Informe sua chave Pix:';
-        if (chosenPixType === 'CPF') promptMsg = 'Informe o *CPF* utilizado como chave Pix:';
+        if (chosenPixType === 'CPF') promptMsg = 'Informe o *CPF* (11 dígitos, ex: 123.456.789-00) utilizado como chave Pix:';
         if (chosenPixType === 'PHONE') promptMsg = 'Informe o *telefone com DDD* utilizado como chave Pix (ex: 34999999999):';
         if (chosenPixType === 'EMAIL') promptMsg = 'Informe o *e-mail* utilizado como chave Pix:';
         if (chosenPixType === 'RANDOM') promptMsg = 'Informe a *chave aleatória (UUID)* utilizada como chave Pix:';
@@ -3439,22 +3505,72 @@ export class TelegramBotService {
 
     if (data === 'confirm_reg') {
       await this.answerCallbackQuery(query.id);
-      if (
-        !session ||
-        !session.data.name ||
-        !session.data.phone ||
-        (!session.data.pix_key_value && !session.data.pix_key)
-      ) {
+      if (!session) {
         await this.sendMessage(
           chatId,
-          'Sessão expirada ou incompleta. Por favor, reinicie enviando /start.'
+          '⚠️ Sessão não encontrada. Por favor, envie /start para iniciar seu cadastro.'
         );
-        await this.deleteSession(telegramUserId);
+        return;
+      }
+
+      // If user clicked confirm but still hasn't completed all steps, prompt the missing step without wiping data!
+      if (!session.data.name) {
+        session.step = 'NAME';
+        await this.saveSession(telegramUserId, session);
+        await this.sendMessage(chatId, 'Por favor, informe seu *nome completo*:');
+        return;
+      }
+
+      if (!session.data.phone) {
+        session.step = 'PHONE';
+        await this.saveSession(telegramUserId, session);
+        await this.sendMessage(chatId, 'Por favor, informe seu *telefone com DDD* (ex: 34999999999):');
         return;
       }
 
       if (!session.data.vehicle_type) {
-        session.data.vehicle_type = 'CAR';
+        session.step = 'VEHICLE';
+        await this.saveSession(telegramUserId, session);
+        await this.sendMessage(chatId, 'Selecione o *tipo de veículo*:', {
+          reply_markup: this.getVehicleInlineKeyboard(),
+        });
+        return;
+      }
+
+      if (!session.data.pix_key_value && !session.data.pix_key) {
+        if (session.data.pix_key_type) {
+          session.step = 'PIX_VALUE';
+          await this.saveSession(telegramUserId, session);
+          let promptMsg = 'Informe sua chave Pix:';
+          if (session.data.pix_key_type === 'CPF') promptMsg = 'Informe o *CPF* (11 dígitos, ex: 123.456.789-00) utilizado como chave Pix:';
+          if (session.data.pix_key_type === 'PHONE') promptMsg = 'Informe o *telefone com DDD* utilizado como chave Pix (ex: 34999999999):';
+          if (session.data.pix_key_type === 'EMAIL') promptMsg = 'Informe o *e-mail* utilizado como chave Pix:';
+          if (session.data.pix_key_type === 'RANDOM') promptMsg = 'Informe a *chave aleatória (UUID)* utilizada como chave Pix:';
+          await this.sendMessage(chatId, promptMsg);
+          return;
+        }
+
+        session.step = 'PIX_TYPE';
+        await this.saveSession(telegramUserId, session);
+        await this.sendMessage(
+          chatId,
+          'Selecione o *tipo de chave Pix* para recebimento dos repasses:',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: 'CPF', callback_data: 'reg_pixtype:CPF' },
+                  { text: 'TELEFONE', callback_data: 'reg_pixtype:PHONE' },
+                ],
+                [
+                  { text: 'E-MAIL', callback_data: 'reg_pixtype:EMAIL' },
+                  { text: 'ALEATÓRIA', callback_data: 'reg_pixtype:RANDOM' },
+                ],
+              ],
+            },
+          }
+        );
+        return;
       }
 
       await this.commitRegistration(telegramUserId, chatId, session);
