@@ -24,7 +24,7 @@ import {
   buildGoogleMapsDestinationUrl,
 } from './mapsNavigation.ts';
 import { routeEditService } from './routeEditService.ts';
-import { db } from '../db/index.ts';
+import { db, prodDb } from '../db/index.ts';
 import { eq } from 'drizzle-orm';
 import { telegramBotSessions } from '../db/schema.ts';
 
@@ -255,11 +255,21 @@ export class TelegramBotService {
     if (memory) return memory;
 
     try {
-      const res = await db
+      let res = await db
         .select()
         .from(telegramBotSessions)
         .where(eq(telegramBotSessions.userId, telegramUserId));
-      if (res[0] && res[0].sessionType === 'WIZARD') {
+
+      if ((!res || res.length === 0) && process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+        try {
+          res = await prodDb
+            .select()
+            .from(telegramBotSessions)
+            .where(eq(telegramBotSessions.userId, telegramUserId));
+        } catch {}
+      }
+
+      if (res && res[0] && res[0].sessionType === 'WIZARD') {
         const rawData = typeof res[0].data === 'string' ? JSON.parse(res[0].data) : res[0].data;
         const loaded: WizardState = {
           step: res[0].step as any,
@@ -277,16 +287,18 @@ export class TelegramBotService {
 
   public async saveSession(telegramUserId: string, state: WizardState) {
     this.sessions.set(telegramUserId, state);
+    const sessionValues = {
+      userId: telegramUserId,
+      sessionType: 'WIZARD',
+      step: state.step,
+      data: state.data as any,
+      updatedAt: new Date(),
+    };
+
     try {
       await db
         .insert(telegramBotSessions)
-        .values({
-          userId: telegramUserId,
-          sessionType: 'WIZARD',
-          step: state.step,
-          data: state.data as any,
-          updatedAt: new Date(),
-        })
+        .values(sessionValues)
         .onConflictDoUpdate({
           target: telegramBotSessions.userId,
           set: {
@@ -299,6 +311,25 @@ export class TelegramBotService {
     } catch (e: any) {
       console.warn('[TelegramBot.saveSession] DB save warning:', e?.message);
     }
+
+    if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+      try {
+        await prodDb
+          .insert(telegramBotSessions)
+          .values(sessionValues)
+          .onConflictDoUpdate({
+            target: telegramBotSessions.userId,
+            set: {
+              sessionType: 'WIZARD',
+              step: state.step,
+              data: state.data as any,
+              updatedAt: new Date(),
+            },
+          });
+      } catch (e: any) {
+        console.warn('[TelegramBot.saveSession] prodDb save warning:', e?.message);
+      }
+    }
   }
 
   public async deleteSession(telegramUserId: string) {
@@ -307,6 +338,11 @@ export class TelegramBotService {
       await db.delete(telegramBotSessions).where(eq(telegramBotSessions.userId, telegramUserId));
     } catch (e: any) {
       console.warn('[TelegramBot.deleteSession] DB delete warning:', e?.message);
+    }
+    if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+      try {
+        await prodDb.delete(telegramBotSessions).where(eq(telegramBotSessions.userId, telegramUserId));
+      } catch {}
     }
   }
 
@@ -320,6 +356,11 @@ export class TelegramBotService {
     try {
       await db.delete(telegramBotSessions);
     } catch {}
+    if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+      try {
+        await prodDb.delete(telegramBotSessions);
+      } catch {}
+    }
   }
 
   public getStatus() {
@@ -2130,6 +2171,16 @@ export class TelegramBotService {
         await this.sendMessage(chatId, 'Por favor, informe um nome válido (mínimo 2 letras):');
         return;
       }
+      // Check if user accidentally typed a phone number instead of a name
+      const digitsOnly = text.replace(/\D/g, '');
+      if (digitsOnly.length >= 8 && digitsOnly.length === text.replace(/[\s\(\)\-\+]/g, '').length) {
+        await this.sendMessage(
+          chatId,
+          '⚠️ Você informou um número de telefone.\n\nPor favor, informe seu *nome completo* (ex: Marcos Silva):'
+        );
+        return;
+      }
+
       session.data.name = text.trim();
       session.step = 'PHONE';
       await this.saveSession(telegramUserId, session);
@@ -3392,7 +3443,6 @@ export class TelegramBotService {
         !session ||
         !session.data.name ||
         !session.data.phone ||
-        !session.data.vehicle_type ||
         (!session.data.pix_key_value && !session.data.pix_key)
       ) {
         await this.sendMessage(
@@ -3401,6 +3451,10 @@ export class TelegramBotService {
         );
         await this.deleteSession(telegramUserId);
         return;
+      }
+
+      if (!session.data.vehicle_type) {
+        session.data.vehicle_type = 'CAR';
       }
 
       await this.commitRegistration(telegramUserId, chatId, session);
@@ -3414,25 +3468,36 @@ export class TelegramBotService {
     }
 
     try {
+      const vType = session.data.vehicle_type || 'CAR';
+      const pixVal = session.data.pix_key_value || session.data.pix_key || '';
+      const pixType = session.data.pix_key_type || 'CPF';
+
       await this.driverService.registerDriver({
         telegram_user_id: telegramUserId,
         telegram_chat_id: chatId,
         name: session.data.name!,
         phone: session.data.phone!,
-        vehicle_type: session.data.vehicle_type!,
-        pix_key: session.data.pix_key_value || session.data.pix_key,
-        pix_key_type: session.data.pix_key_type,
-        pix_key_value: session.data.pix_key_value || session.data.pix_key,
-        invite_token: session.data.invite_token,
+        vehicle_type: vType,
+        pix_key: pixVal,
+        pix_key_type: pixType,
+        pix_key_value: pixVal,
+        invite_token: session.data.invite_token || 'convite_geral',
       });
 
       await this.deleteSession(telegramUserId);
 
-      // Resposta de confirmação
+      // Resposta de confirmação completa
+      const vehicleLabel = getVehicleTypeLabel(vType);
+      const masked = maskPixKey(pixType, pixVal);
       const responseMsg =
-        'Cadastro recebido com sucesso! 🚀\n\n' +
-        'Sua solicitação está aguardando aprovação da equipe Kantine.\n\n' +
-        'Você receberá uma notificação aqui quando seu cadastro for aprovado.';
+        `🎉 *CADASTRO CONCLUÍDO COM SUCESSO!* 🚀\n\n` +
+        `Olá, *${escapeHtml(session.data.name)}*!\n\n` +
+        `Seu cadastro foi registrado com sucesso:\n` +
+        `• *Telefone:* ${escapeHtml(session.data.phone)}\n` +
+        `• *Veículo:* ${escapeHtml(vehicleLabel)}\n` +
+        `• *Chave Pix (${escapeHtml(pixType)}):* ${escapeHtml(masked)}\n\n` +
+        `Sua solicitação está agora na fila de aprovação da equipe Kantine.\n` +
+        `Assim que for ativado, você receberá uma notificação aqui no Telegram!`;
 
       await this.sendMessage(chatId, responseMsg, {
         reply_markup: { remove_keyboard: true },
