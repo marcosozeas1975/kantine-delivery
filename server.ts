@@ -220,7 +220,7 @@ app.post('/api/admin/drivers/:id/reinvite', requireAdminAuth, async (req: AuthRe
     });
 
     const status = telegramBot.getStatus();
-    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineDeliveryBot';
+    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineEntregasbot';
     const inviteLink = `https://t.me/${botUsername}?start=${invitation.token}`;
 
     res.json({
@@ -228,7 +228,7 @@ app.post('/api/admin/drivers/:id/reinvite', requireAdminAuth, async (req: AuthRe
       message: 'Novo convite gerado com sucesso. O motorista reiniciará o cadastro do zero.',
       invitation,
       inviteLink,
-      botUsername: status.botUsername,
+      botUsername: status.botUsername || 'KantineEntregasbot',
     });
   } catch (err: any) {
     console.error(`[API POST /api/admin/drivers/${req.params.id}/reinvite failed]`, err.message);
@@ -307,10 +307,10 @@ app.get('/api/admin/driver-invitations', requireAdminAuth, async (_req: AuthRequ
   try {
     const invites = await driverService.getDriverInvitations();
     const status = telegramBot.getStatus();
-    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineDeliveryBot';
+    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineEntregasbot';
     res.json({
       invitations: invites,
-      botUsername: status.botUsername,
+      botUsername: status.botUsername || 'KantineEntregasbot',
       defaultInviteLink: `https://t.me/${botUsername}?start=cadastro`,
     });
   } catch (err: any) {
@@ -330,13 +330,13 @@ app.post('/api/admin/driver-invitations', requireAdminAuth, async (req: AuthRequ
       created_by: actorId,
     });
     const status = telegramBot.getStatus();
-    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineDeliveryBot';
+    const botUsername = status.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'KantineEntregasbot';
     const inviteLink = `https://t.me/${botUsername}?start=${invitation.token}`;
     res.json({
       success: true,
       invitation,
       inviteLink,
-      botUsername: status.botUsername,
+      botUsername: status.botUsername || 'KantineEntregasbot',
     });
   } catch (err: any) {
     console.error('[API POST /api/admin/driver-invitations failed]', err.message);
@@ -364,6 +364,22 @@ app.post('/api/admin/driver-invitations/:id/convert', requireAdminAuth, async (r
   } catch (err: any) {
     console.error(`[API POST /api/admin/driver-invitations/${req.params.id}/convert failed]`, err.message);
     res.status(500).json({ error: err.message || 'Failed to convert invitation to driver' });
+  }
+});
+
+// Admin endpoint to completely reset drivers, invitations, routes and operational history
+app.post('/api/admin/system/reset-drivers-history', requireAdminAuth, async (_req: AuthRequest, res) => {
+  try {
+    await driverService.resetAllDriversAndHistory();
+    const status = telegramBot.getStatus();
+    res.json({
+      success: true,
+      message: 'Todos os motoristas, convites, rotas e históricos foram limpos com sucesso. O Telegram Kantine Entregas foi zerado para novos cadastros.',
+      botUsername: status.botUsername || 'KantineEntregasbot',
+    });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/system/reset-drivers-history failed]', err.message);
+    res.status(500).json({ error: err.message || 'Falha ao resetar motoristas e histórico.' });
   }
 });
 

@@ -631,6 +631,35 @@ export default function App() {
   } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [showResetSystemModal, setShowResetSystemModal] = useState<boolean>(false);
+  const [resettingSystem, setResettingSystem] = useState<boolean>(false);
+
+  const handleResetSystemHistory = async () => {
+    setResettingSystem(true);
+    setErrorMessage(null);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/system/reset-drivers-history', {
+        method: 'POST',
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSuccessMessage(data.message || 'Todos os motoristas e históricos foram limpos com sucesso!');
+        setShowResetSystemModal(false);
+        await fetchDrivers();
+        await fetchInvitations();
+        await fetchRoutes();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorMessage(err.error || 'Falha ao resetar motoristas e histórico');
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao conectar ao servidor');
+    } finally {
+      setResettingSystem(false);
+    }
+  };
 
   // Pickup Locations State (M2.1 Seção 12)
   const [pickupLocations, setPickupLocations] = useState<PickupLocation[]>([]);
@@ -974,7 +1003,7 @@ export default function App() {
       defaultInviteLink ||
       (telegramStatus?.botUsername
         ? `https://t.me/${telegramStatus.botUsername}?start=cadastro`
-        : 'https://t.me/KantineDeliveryBot?start=cadastro');
+        : 'https://t.me/KantineEntregasbot?start=cadastro');
 
     if (link) {
       QRCode.toDataURL(link, {
@@ -2712,6 +2741,14 @@ export default function App() {
                 title="Atualizar lista"
               >
                 <RefreshCw className={`w-4 h-4 ${loadingDrivers ? 'animate-spin' : ''}`} />
+              </button>
+              <button
+                onClick={() => setShowResetSystemModal(true)}
+                className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl border border-rose-200 hover:bg-rose-50 text-rose-700 font-bold text-xs transition-colors shadow-2xs cursor-pointer"
+                title="Limpar motoristas e histórico para reiniciar sem erros"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Limpar Histórico</span>
               </button>
               <button
                 onClick={() => {
@@ -6184,7 +6221,7 @@ export default function App() {
                             defaultInviteLink ||
                             (telegramStatus?.botUsername
                               ? `https://t.me/${telegramStatus.botUsername}?start=cadastro`
-                              : 'https://t.me/KantineDeliveryBot?start=cadastro')
+                              : 'https://t.me/KantineEntregasbot?start=cadastro')
                           }
                           className="w-full px-3 py-2 text-xs font-mono bg-neutral-50 border border-neutral-300 rounded-lg text-neutral-800 select-all"
                         />
@@ -6195,7 +6232,7 @@ export default function App() {
                               defaultInviteLink ||
                               (telegramStatus?.botUsername
                                 ? `https://t.me/${telegramStatus.botUsername}?start=cadastro`
-                                : 'https://t.me/KantineDeliveryBot?start=cadastro');
+                                : 'https://t.me/KantineEntregasbot?start=cadastro');
                             copyToClipboard(link, 'quick_link');
                           }}
                           className="px-3 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-white font-semibold text-xs shrink-0 flex items-center gap-1"
@@ -6218,7 +6255,7 @@ export default function App() {
                           {defaultInviteLink ||
                             (telegramStatus?.botUsername
                               ? `https://t.me/${telegramStatus.botUsername}?start=cadastro`
-                              : 'https://t.me/KantineDeliveryBot?start=cadastro')}
+                              : 'https://t.me/KantineEntregasbot?start=cadastro')}
                         </span>
                       </div>
                     </div>
@@ -6230,7 +6267,7 @@ export default function App() {
                             defaultInviteLink ||
                             (telegramStatus?.botUsername
                               ? `https://t.me/${telegramStatus.botUsername}?start=cadastro`
-                              : 'https://t.me/KantineDeliveryBot?start=cadastro')
+                              : 'https://t.me/KantineEntregasbot?start=cadastro')
                           }`
                         )}`}
                         target="_blank"
@@ -6245,7 +6282,7 @@ export default function App() {
                           defaultInviteLink ||
                           (telegramStatus?.botUsername
                             ? `https://t.me/${telegramStatus.botUsername}?start=cadastro`
-                            : 'https://t.me/KantineDeliveryBot?start=cadastro')
+                            : 'https://t.me/KantineEntregasbot?start=cadastro')
                         }
                         target="_blank"
                         rel="noreferrer"
@@ -6423,7 +6460,7 @@ export default function App() {
                     </div>
                   ) : (
                     invitationsList.map((inv) => {
-                      const botUser = telegramStatus?.botUsername || 'KantineDeliveryBot';
+                      const botUser = telegramStatus?.botUsername || 'KantineEntregasbot';
                       const link = `https://t.me/${botUser}?start=${inv.token}`;
                       return (
                         <div key={inv.id} className="p-3 hover:bg-neutral-50 transition-colors flex items-center justify-between gap-3 text-xs">
@@ -6511,6 +6548,73 @@ export default function App() {
                 className="px-4 py-2 text-xs font-semibold rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-800 transition-colors"
               >
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: RESETAR MOTORISTAS E HISTÓRICO                          */}
+      {/* ============================================================== */}
+      {showResetSystemModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-200">
+            <div className="flex items-center gap-3 pb-3 border-b border-neutral-200">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-900">
+                  Limpar Motoristas e Histórico
+                </h3>
+                <p className="text-xs text-neutral-500">
+                  Reiniciar testes do zero no Telegram Kantine Entregas
+                </p>
+              </div>
+            </div>
+
+            <div className="py-4 space-y-3 text-xs text-neutral-600">
+              <p>
+                Esta ação vai eliminar permanentemente:
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-neutral-700 font-medium">
+                <li>Todos os motoristas cadastrados (produção e desenvolvimento)</li>
+                <li>Todos os convites e links de indicação pendentes ou usados</li>
+                <li>Todas as rotas, paradas e eventos operacionais</li>
+                <li>Sessões ativas no bot do Telegram (@KantineEntregasbot)</li>
+              </ul>
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
+                ℹ️ Isso permite recadastrar o mesmo número de celular ou usuário no Telegram sem qualquer conflito ou erro de histórico remanescente.
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-neutral-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={resettingSystem}
+                onClick={() => setShowResetSystemModal(false)}
+                className="px-4 py-2 text-xs font-semibold rounded-xl border border-neutral-200 hover:bg-neutral-50 text-neutral-700 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={resettingSystem}
+                onClick={handleResetSystemHistory}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {resettingSystem ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Limpando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirmar e Limpar Tudo</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

@@ -247,11 +247,20 @@ export class TelegramBotService {
     return !!this.token;
   }
 
+  public clearAllSessions() {
+    this.sessions.clear();
+    this.editSessions.clear();
+    this.m4DriverSessions.clear();
+    this.referralSessions.clear();
+    this.reactivationSessions.clear();
+    this.recentDispatches = [];
+  }
+
   public getStatus() {
     return {
       configured: !!this.token,
       polling: this.isPolling,
-      botUsername: this.botInfo?.username || process.env.TELEGRAM_BOT_USERNAME || null,
+      botUsername: this.botInfo?.username || process.env.TELEGRAM_BOT_USERNAME || 'KantineEntregasbot',
       activeSessions: this.sessions.size,
     };
   }
@@ -3257,6 +3266,8 @@ export class TelegramBotService {
         const existing = await this.driverService.getDriverByTelegramUserId(telegramUserId);
         if (existing) {
           await this.sendMainMenu(chatId, existing);
+        } else {
+          await this.sendMessage(chatId, 'Você já possui cadastro no sistema Kantine Entregas.');
         }
         return;
       }
@@ -3264,7 +3275,7 @@ export class TelegramBotService {
       console.error('[Telegram Bot] Registration commit error:', err.message);
       await this.sendMessage(
         chatId,
-        'Ocorreu um erro ao processar seu cadastro. Por favor, tente novamente enviando /start.'
+        `Ocorreu um erro ao processar seu cadastro: ${err.message || 'Tente novamente enviando /start.'}`
       );
     }
   }

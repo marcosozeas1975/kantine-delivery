@@ -108,20 +108,41 @@ export class DriverService {
   public async getDriverByPhone(phone: string): Promise<Driver | null> {
     try {
       const cleanPhone = normalizeGeneralPhone(phone);
-      const results = await db
-        .select()
-        .from(drivers)
-        .where(eq(drivers.phone, cleanPhone));
-      if (results[0]) return results[0] as Driver;
+      const digits = phone.replace(/\D/g, '');
+      const rawLocal = digits.startsWith('55') && digits.length > 10 ? digits.slice(2) : digits;
+
+      const allDrivers = (await db.select().from(drivers)) as Driver[];
+      let found = allDrivers.find((d) => {
+        if (!d.phone) return false;
+        const dClean = normalizeGeneralPhone(d.phone);
+        const dDigits = d.phone.replace(/\D/g, '');
+        const dLocal = dDigits.startsWith('55') && dDigits.length > 10 ? dDigits.slice(2) : dDigits;
+        return (
+          d.phone === cleanPhone ||
+          d.phone === phone ||
+          dClean === cleanPhone ||
+          (rawLocal.length >= 8 && dLocal === rawLocal)
+        );
+      });
+      if (found) return found;
 
       if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
-        const prodResults = await prodDb
-          .select()
-          .from(drivers)
-          .where(eq(drivers.phone, cleanPhone));
-        if (prodResults[0]) {
-          await db.insert(drivers).values(prodResults[0]).onConflictDoNothing().catch(() => {});
-          return prodResults[0] as Driver;
+        const prodDrivers = (await prodDb.select().from(drivers)) as Driver[];
+        found = prodDrivers.find((d) => {
+          if (!d.phone) return false;
+          const dClean = normalizeGeneralPhone(d.phone);
+          const dDigits = d.phone.replace(/\D/g, '');
+          const dLocal = dDigits.startsWith('55') && dDigits.length > 10 ? dDigits.slice(2) : dDigits;
+          return (
+            d.phone === cleanPhone ||
+            d.phone === phone ||
+            dClean === cleanPhone ||
+            (rawLocal.length >= 8 && dLocal === rawLocal)
+          );
+        });
+        if (found) {
+          await db.insert(drivers).values(found).onConflictDoNothing().catch(() => {});
+          return found;
         }
       }
       return null;
@@ -203,10 +224,13 @@ export class DriverService {
             'EXCLUDED_DRIVER_REQUIRES_NEW_INVITE: Motoristas excluídos têm o processo zerado e só podem ser reinseridos através de novo convite e aprovação.'
           );
         }
+      }
 
+      // If driver has a valid invite_token OR was EXCLUDED/PENDING, reset and register fresh as PENDING:
+      if (data.invite_token || existing.status === 'EXCLUDED' || existing.is_excluded || existing.status === 'PENDING') {
         const prevReason =
           existing.exclusion_reason || existing.previous_exclusion_reason || 'Desativação anterior';
-        const newExclusionCount = (existing.exclusion_count || 0) + 1;
+        const newExclusionCount = existing.is_excluded ? (existing.exclusion_count || 0) + 1 : (existing.exclusion_count || 0);
 
         const updated = await db
           .update(drivers)
@@ -241,29 +265,30 @@ export class DriverService {
 
         await db.insert(driverEvents).values({
           driver_id: existing.id,
-          event_type: 'DRIVER_REINCLUSION_REQUESTED',
+          event_type: 'DRIVER_REGISTERED',
           actor_type: 'DRIVER',
           actor_id: data.telegram_user_id,
           details: JSON.stringify({
-            via_new_invite: data.invite_token,
-            previous_exclusion_reason: prevReason,
+            via_invite_token: data.invite_token || null,
             new_vehicle: canonicalVehicle,
             new_phone: data.phone.trim(),
             new_pix: canonicalPixValue,
           }),
         });
 
-        // Link invitation
-        await db
-          .update(driverInvitations)
-          .set({
-            status: 'COMPLETED',
-            telegram_user_id: data.telegram_user_id,
-            driver_id: existing.id,
-            completed_at: new Date(),
-          })
-          .where(eq(driverInvitations.token, data.invite_token))
-          .catch(() => {});
+        // Link invitation if provided
+        if (data.invite_token) {
+          await db
+            .update(driverInvitations)
+            .set({
+              status: 'COMPLETED',
+              telegram_user_id: data.telegram_user_id,
+              driver_id: existing.id,
+              completed_at: new Date(),
+            })
+            .where(eq(driverInvitations.token, data.invite_token))
+            .catch(() => {});
+        }
 
         if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
           try {
@@ -296,16 +321,18 @@ export class DriverService {
               .where(eq(drivers.id, existing.id))
               .catch(() => {});
 
-            await prodDb
-              .update(driverInvitations)
-              .set({
-                status: 'COMPLETED',
-                telegram_user_id: data.telegram_user_id,
-                driver_id: existing.id,
-                completed_at: new Date(),
-              })
-              .where(eq(driverInvitations.token, data.invite_token))
-              .catch(() => {});
+            if (data.invite_token) {
+              await prodDb
+                .update(driverInvitations)
+                .set({
+                  status: 'COMPLETED',
+                  telegram_user_id: data.telegram_user_id,
+                  driver_id: existing.id,
+                  completed_at: new Date(),
+                })
+                .where(eq(driverInvitations.token, data.invite_token))
+                .catch(() => {});
+            }
           } catch (e: any) {
             console.warn('[DriverService] Mirror re-registered driver to prod warning:', e?.message);
           }
@@ -1437,6 +1464,73 @@ export class DriverService {
           : 'Veículo compatível ou com escolha explícita.',
       };
     });
+  }
+
+  /**
+   * Resets all driver registrations, invitations, referrals, routes, and operational history
+   * across both primary database and mirrored production database.
+   * Also clears all Telegram bot cached sessions.
+   */
+  public async resetAllDriversAndHistory(): Promise<void> {
+    const tables = [
+      'driver_referral_events',
+      'driver_referrals',
+      'driver_events',
+      'route_offer_dispatches',
+      'delivery_offer_dispatches',
+      'route_updates',
+      'route_stops',
+      'route_events',
+      'routes',
+      'delivery_events',
+      'deliveries',
+      'driver_invitations',
+      'drivers',
+    ];
+
+    for (const t of tables) {
+      await db.execute(sql.raw(`DELETE FROM "${t}"`));
+    }
+
+    const sequences = [
+      'drivers_id_seq',
+      'driver_invitations_id_seq',
+      'driver_events_id_seq',
+      'driver_referrals_id_seq',
+      'driver_referral_events_id_seq',
+      'routes_id_seq',
+      'route_stops_id_seq',
+      'route_events_id_seq',
+      'deliveries_id_seq',
+      'delivery_events_id_seq',
+    ];
+
+    for (const seq of sequences) {
+      try {
+        await db.execute(sql.raw(`SELECT setval('${seq}', 1, false)`));
+      } catch {}
+    }
+
+    if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+      try {
+        for (const t of tables) {
+          await prodDb.execute(sql.raw(`DELETE FROM "${t}"`));
+        }
+        for (const seq of sequences) {
+          try {
+            await prodDb.execute(sql.raw(`SELECT setval('${seq}', 1, false)`));
+          } catch {}
+        }
+      } catch (err: any) {
+        console.warn('[DriverService.resetAllDriversAndHistory] Prod DB reset error:', err.message);
+      }
+    }
+
+    try {
+      telegramBot.clearAllSessions();
+    } catch (e: any) {
+      console.warn('[DriverService.resetAllDriversAndHistory] Clear sessions error:', e.message);
+    }
   }
 }
 
