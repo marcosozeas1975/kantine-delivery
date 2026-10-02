@@ -1451,114 +1451,129 @@ export class TelegramBotService {
       }
     }
 
-    // M1.2: Check if payload has an invite token
-    if (payload && payload.trim()) {
-      const cleanToken = payload.replace(/^invite_/, '').trim();
-      const refSvc = this.referralService || (await import('./referralService.ts')).referralService;
+    const cleanToken = (payload || '').replace(/^invite_/, '').trim();
+    const isGenericCadastro =
+      !cleanToken ||
+      ['cadastro', 'cadastrar', 'registrar', 'registro', 'novo', 'entregador', 'convite', 'geral', 'start'].includes(
+        cleanToken.toLowerCase()
+      );
 
-      // 1. Check in driver_referrals (M1.2)
-      try {
-        const validation = await refSvc.validateInviteToken(cleanToken);
-        if (validation.valid && validation.referral) {
-          const ref = validation.referral;
+    if (isGenericCadastro) {
+      // Start registration wizard for the generic invite / store counter link
+      this.sessions.set(telegramUserId, {
+        step: 'NAME',
+        data: {
+          invite_token: 'convite_geral',
+        },
+        lastPromptTime: Date.now(),
+      });
 
-          // Check if already bound to another user
-          if (validation.alreadyBoundUser && validation.alreadyBoundUser !== telegramUserId) {
+      await this.sendMessage(
+        chatId,
+        `👋 Olá! Seja bem-vindo à *Kantine Entregas*! 🚀\n\n` +
+          `Vamos dar início ao seu cadastro de motorista parceiro.\n\n` +
+          `Para começar, por favor informe seu *nome completo*:`
+      );
+      return;
+    }
+
+    // Specific referral token or driver invitation token
+    const refSvc = this.referralService || (await import('./referralService.ts')).referralService;
+
+    // 1. Check in driver_referrals (M1.2)
+    try {
+      const validation = await refSvc.validateInviteToken(cleanToken);
+      if (validation.valid && validation.referral) {
+        const ref = validation.referral;
+
+        // Check if already bound to another user
+        if (validation.alreadyBoundUser && validation.alreadyBoundUser !== telegramUserId) {
+          await this.sendMessage(
+            chatId,
+            '❌ *Este convite já foi utilizado por outro usuário.*'
+          );
+          return;
+        }
+
+        // Consume / bind invite to this Telegram user
+        try {
+          await refSvc.consumeInvite(cleanToken, telegramUserId);
+        } catch (consumeErr: any) {
+          if (consumeErr.message?.includes('ANOTHER_USER')) {
             await this.sendMessage(
               chatId,
               '❌ *Este convite já foi utilizado por outro usuário.*'
             );
             return;
           }
+          await this.sendMessage(
+            chatId,
+            `❌ ${consumeErr.message}`
+          );
+          return;
+        }
 
-          // Consume / bind invite to this Telegram user
-          try {
-            await refSvc.consumeInvite(cleanToken, telegramUserId);
-          } catch (consumeErr: any) {
-            if (consumeErr.message?.includes('ANOTHER_USER')) {
-              await this.sendMessage(
-                chatId,
-                '❌ *Este convite já foi utilizado por outro usuário.*'
-              );
-              return;
-            }
-            await this.sendMessage(
-              chatId,
-              `❌ ${consumeErr.message}`
-            );
-            return;
-          }
+        // Start registration wizard for the nominee
+        this.sessions.set(telegramUserId, {
+          step: 'NAME',
+          data: {
+            name: ref.referred_name || undefined,
+            phone: ref.referred_phone || undefined,
+            invite_token: cleanToken,
+          },
+          lastPromptTime: Date.now(),
+        });
 
-          // Start registration wizard for the nominee
+        await this.sendMessage(
+          chatId,
+          `👋 Olá, *${escapeHtml(ref.referred_name)}*! Seu convite foi validado com sucesso. 🚀\n\n` +
+            `Para dar início ao seu cadastro na Kantine Delivery, por favor confirme seu *nome completo*:`
+        );
+        return;
+      }
+
+      if (validation.error === 'TOKEN_EXPIRED') {
+        await this.sendMessage(
+          chatId,
+          '❌ *Este convite expirou.*\n\nPeça ao motorista que realizou sua indicação para solicitar uma nova autorização à Kantine.'
+        );
+        return;
+      }
+    } catch (err: any) {
+      console.warn('[TelegramBot] Validation of referral token failed:', err.message);
+    }
+
+    // 2. Fallback check for legacy M1 driverInvitations
+    if (this.driverService?.getInviteByToken) {
+      try {
+        const legacyInvite = await this.driverService.getInviteByToken(cleanToken);
+        if (legacyInvite && legacyInvite.status === 'PENDING') {
           this.sessions.set(telegramUserId, {
             step: 'NAME',
             data: {
-              name: ref.referred_name || undefined,
-              phone: ref.referred_phone || undefined,
+              name: legacyInvite.name || undefined,
+              phone: legacyInvite.phone || undefined,
               invite_token: cleanToken,
             },
             lastPromptTime: Date.now(),
           });
-
           await this.sendMessage(
             chatId,
-            `👋 Olá, *${escapeHtml(ref.referred_name)}*! Seu convite foi validado com sucesso. 🚀\n\n` +
-              `Para dar início ao seu cadastro na Kantine Delivery, por favor confirme seu *nome completo*:`
+            `👋 Olá, *${escapeHtml(legacyInvite.name || 'Motorista')}*! Seu convite foi validado.\n\nPor favor confirme seu *nome completo*:`
           );
           return;
         }
-
-        if (validation.error === 'TOKEN_EXPIRED') {
-          await this.sendMessage(
-            chatId,
-            '❌ *Este convite expirou.*\n\nPeça ao motorista que realizou sua indicação para solicitar uma nova autorização à Kantine.'
-          );
-          return;
-        }
-      } catch (err: any) {
-        console.warn('[TelegramBot] Validation of referral token failed:', err.message);
+      } catch {
+        // ignore
       }
-
-      // 2. Fallback check for legacy M1 driverInvitations
-      if (this.driverService?.getInviteByToken) {
-        try {
-          const legacyInvite = await this.driverService.getInviteByToken(cleanToken);
-          if (legacyInvite && legacyInvite.status === 'PENDING') {
-            this.sessions.set(telegramUserId, {
-              step: 'NAME',
-              data: {
-                name: legacyInvite.name || undefined,
-                phone: legacyInvite.phone || undefined,
-                invite_token: cleanToken,
-              },
-              lastPromptTime: Date.now(),
-            });
-            await this.sendMessage(
-              chatId,
-              `👋 Olá, *${escapeHtml(legacyInvite.name || 'Motorista')}*! Seu convite foi validado.\n\nPor favor confirme seu *nome completo*:`
-            );
-            return;
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      // Invalid token
-      await this.sendMessage(
-        chatId,
-        '❌ *Convite inválido ou não encontrado.*\n\nVerifique o link enviado pelo motorista que realizou sua indicação.'
-      );
-      return;
     }
 
-    // M1.2 Section 20: NO INVITE AND NOT REGISTERED -> CLOSED REGISTRATION!
-    const closedMsg =
-      `👋 *Kantine Entregas*\n\n` +
-      `O cadastro de novos motoristas é realizado somente por convite.\n\n` +
-      `Se você recebeu uma indicação aprovada, utilize o link de convite enviado pelo motorista que fez sua indicação.`;
-
-    await this.sendMessage(chatId, closedMsg);
+    // Invalid token
+    await this.sendMessage(
+      chatId,
+      '❌ *Convite inválido ou não encontrado.*\n\n' +
+        'Verifique se o link foi copiado corretamente ou inicie seu cadastro pelo convite oficial da Kantine Entregas.'
+    );
   }
 
   private async sendMainMenu(chatId: string, driver: Driver) {
