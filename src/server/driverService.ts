@@ -423,7 +423,22 @@ export class DriverService {
       // Mirror to prodDb if running in dev environment
       if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
         try {
-          await prodDb.insert(drivers).values(newDriver).onConflictDoNothing();
+          await prodDb
+            .insert(drivers)
+            .values(newDriver)
+            .onConflictDoUpdate({
+              target: drivers.telegram_user_id,
+              set: {
+                name: newDriver.name,
+                phone: newDriver.phone,
+                vehicle_type: newDriver.vehicle_type,
+                pix_key: newDriver.pix_key,
+                pix_key_type: newDriver.pix_key_type,
+                pix_key_value: newDriver.pix_key_value,
+                status: newDriver.status,
+                updated_at: new Date(),
+              },
+            });
           await prodDb.insert(driverEvents).values({
             driver_id: newDriver.id,
             event_type: 'DRIVER_REGISTERED',
@@ -449,12 +464,75 @@ export class DriverService {
 
       return newDriver;
     } catch (err: any) {
-      if (err?.code === '23505') {
-        // Postgres unique violation on telegram_user_id
+      // 1. Auto-recovery: if unique violation on telegram_user_id, update the existing driver directly
+      if (err?.code === '23505' && (err?.constraint === 'drivers_telegram_user_id_unique' || !err?.constraint)) {
+        try {
+          const updated = await db
+            .update(drivers)
+            .set({
+              name: data.name.trim(),
+              phone: data.phone.trim(),
+              vehicle_type: canonicalVehicle,
+              pix_key: canonicalPixValue,
+              pix_key_type: canonicalPixType,
+              pix_key_value: canonicalPixValue,
+              status: 'PENDING',
+              updated_at: new Date(),
+            })
+            .where(eq(drivers.telegram_user_id, data.telegram_user_id))
+            .returning();
+          if (updated[0]) {
+            if (process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
+              await prodDb
+                .update(drivers)
+                .set({
+                  name: data.name.trim(),
+                  phone: data.phone.trim(),
+                  vehicle_type: canonicalVehicle,
+                  pix_key: canonicalPixValue,
+                  pix_key_type: canonicalPixType,
+                  pix_key_value: canonicalPixValue,
+                  status: 'PENDING',
+                  updated_at: new Date(),
+                })
+                .where(eq(drivers.telegram_user_id, data.telegram_user_id))
+                .catch(() => {});
+            }
+            return updated[0] as Driver;
+          }
+        } catch (updateErr: any) {
+          console.error('[DriverService.registerDriver] Fallback update failed:', updateErr?.message);
+        }
         throw new Error('DRIVER_ALREADY_EXISTS');
       }
+
+      // 2. Auto-recovery: if serial sequence was out of sync (drivers_pkey), heal sequence and retry
+      if (err?.code === '23505' && err?.constraint === 'drivers_pkey') {
+        try {
+          await db.execute(sql`SELECT setval(pg_get_serial_sequence('drivers', 'id'), COALESCE((SELECT MAX(id) FROM drivers), 1) + 1, false)`);
+          const retryInserted = await db
+            .insert(drivers)
+            .values({
+              telegram_user_id: data.telegram_user_id,
+              telegram_chat_id: data.telegram_chat_id,
+              name: data.name.trim(),
+              phone: data.phone.trim(),
+              vehicle_type: canonicalVehicle,
+              pix_key: canonicalPixValue,
+              pix_key_type: canonicalPixType,
+              pix_key_value: canonicalPixValue,
+              status: 'PENDING',
+            })
+            .returning();
+          if (retryInserted[0]) return retryInserted[0] as Driver;
+        } catch (retryErr: any) {
+          console.error('[DriverService.registerDriver retry failed]', retryErr);
+        }
+      }
+
       console.error('[DriverService.registerDriver failed]', err);
-      throw new Error('Failed to register driver', { cause: err });
+      const userFriendlyMsg = err?.detail || err?.message || 'Falha ao gravar cadastro';
+      throw new Error(userFriendlyMsg, { cause: err });
     }
   }
 
