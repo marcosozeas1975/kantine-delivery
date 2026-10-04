@@ -1836,15 +1836,20 @@ export default function App() {
 
   const openRouteDetails = async (routeId: number) => {
     setLoadingRouteDetails(true);
+    setErrorMessage(null);
     try {
       const headers = await getAuthHeaders();
       const res = await fetch(`/api/admin/routes/${routeId}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setSelectedRouteDetails(data);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setErrorMessage(errData.error || `Erro ao carregar detalhes da rota #${routeId}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setErrorMessage(e?.message || 'Erro ao carregar detalhes da rota');
     } finally {
       setLoadingRouteDetails(false);
     }
@@ -5137,10 +5142,10 @@ export default function App() {
             )}
 
             {/* Dispatches */}
-            {selectedRouteDetails.dispatches.length > 0 && (
+            {(selectedRouteDetails.dispatches || []).length > 0 && (
               <div>
                 <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider mb-2">
-                  Dispatches no Telegram ({selectedRouteDetails.dispatches.length})
+                  Dispatches no Telegram ({(selectedRouteDetails.dispatches || []).length})
                 </h4>
                 <div className="border border-neutral-200 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
                   <table className="w-full text-left text-xs">
@@ -5153,7 +5158,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-100">
-                      {selectedRouteDetails.dispatches.map((disp) => (
+                      {(selectedRouteDetails.dispatches || []).map((disp) => (
                         <tr key={disp.id}>
                           <td className="px-3 py-1.5 font-mono">#{disp.driver_id}</td>
                           <td className="px-3 py-1.5 font-mono">{disp.telegram_chat_id}</td>
@@ -5189,7 +5194,7 @@ export default function App() {
                 Trilha de Auditoria (Eventos)
               </h4>
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                {selectedRouteDetails.events.map((evt) => (
+                {(selectedRouteDetails.events || []).map((evt) => (
                   <div key={evt.id} className="p-2 rounded-lg bg-neutral-50 border border-neutral-200/80 text-[11px] flex justify-between items-center">
                     <div>
                       <span className="font-bold text-neutral-900">{evt.event_type}</span>

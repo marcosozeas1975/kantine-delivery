@@ -9,11 +9,16 @@ declare global {
 
 export const createPool = () => {
   if (!global._postgresPool) {
+    const targetDatabase =
+      process.env.FORCE_DEV_DB === 'true'
+        ? (process.env.SQL_DB_NAME || 'cloud_sql_development_database')
+        : 'cloud_sql_production_database';
+
     global._postgresPool = new Pool({
       host: process.env.SQL_HOST,
       user: process.env.SQL_USER,
       password: process.env.SQL_PASSWORD,
-      database: process.env.SQL_DB_NAME,
+      database: targetDatabase,
       max: 10,
       connectionTimeoutMillis: 15000,
     });
@@ -34,25 +39,7 @@ declare global {
 }
 
 export const createProdPool = () => {
-  if (process.env.SQL_DB_NAME === 'cloud_sql_production_database') {
-    return pool;
-  }
-  if (!global._prodPostgresPool) {
-    const adminUser = process.env.SQL_ADMIN_USER || process.env.SQL_USER;
-    const adminPassword = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD;
-    global._prodPostgresPool = new Pool({
-      host: process.env.SQL_HOST,
-      user: adminUser,
-      password: adminPassword,
-      database: 'cloud_sql_production_database',
-      max: 5,
-      connectionTimeoutMillis: 15000,
-    });
-    global._prodPostgresPool.on('error', (err) => {
-      console.warn('Unexpected error on idle prod SQL pool client:', err?.message);
-    });
-  }
-  return global._prodPostgresPool;
+  return createPool();
 };
 
 export const prodPool = createProdPool();
@@ -62,11 +49,16 @@ export async function initDbConstraints() {
   const adminUser = process.env.SQL_ADMIN_USER || process.env.SQL_USER;
   const adminPassword = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD;
 
+  const targetDatabase =
+    process.env.FORCE_DEV_DB === 'true'
+      ? (process.env.SQL_DB_NAME || 'cloud_sql_development_database')
+      : 'cloud_sql_production_database';
+
   const adminPool = new Pool({
     host: process.env.SQL_HOST,
     user: adminUser,
     password: adminPassword,
-    database: process.env.SQL_DB_NAME,
+    database: targetDatabase,
     max: 1,
   });
 
