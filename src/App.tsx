@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShieldCheck,
   Bike,
@@ -47,6 +47,10 @@ import {
   Sliders,
   Tag,
   Percent,
+  BellRing,
+  Zap,
+  Calculator,
+  Phone,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { auth, googleAuthProvider } from './lib/firebase.ts';
@@ -59,6 +63,17 @@ import {
 import { RouteEditModal } from './components/RouteEditModal.tsx';
 import { RouteUpdatesHistory } from './components/RouteUpdatesHistory.tsx';
 import { KantineLogo } from './components/KantineLogo.tsx';
+import { FreightEngineSettings } from './components/FreightEngineSettings.tsx';
+import {
+  calculateRoutePricing,
+  generateWhatsAppProposalMessage,
+  UBERLANDIA_70_NEIGHBORHOODS,
+  PICKUP_PRESETS,
+  DEFAULT_FREIGHT_PARAMETERS,
+} from './shared/freightEngine.ts';
+import { getAllMappedNeighborhoods } from './shared/freightNeighborhoods.ts';
+import { AddressAutocompleteInput, GeocodedAddressSuggestion } from './components/AddressAutocompleteInput.tsx';
+import { extractCustomerData, calculateDriverFee } from './shared/customerUtils.ts';
 
 // Types for Driver (M1 & M1.1 & Lifecycle)
 type DriverStatus = 'PENDING' | 'ACTIVE' | 'BLOCKED' | 'EXCLUDED';
@@ -129,13 +144,108 @@ const renderCompactVehicleBadges = (types: VehicleType[]) => {
   );
 };
 
+const parseDriverVehicleTypes = (input: any): VehicleType[] => {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    const list: VehicleType[] = [];
+    for (const item of input) {
+      const parsed = parseDriverVehicleTypes(item);
+      for (const p of parsed) {
+        if (!list.includes(p)) list.push(p);
+      }
+    }
+    return list;
+  }
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const arr = JSON.parse(trimmed);
+        if (Array.isArray(arr)) return parseDriverVehicleTypes(arr);
+      } catch {}
+    }
+    const lower = trimmed.toLowerCase();
+    if (
+      lower.includes('todos') ||
+      lower.includes('todas') ||
+      lower.includes('os tres') ||
+      lower.includes('as tres') ||
+      lower.includes('os 3') ||
+      lower.includes('as 3')
+    ) {
+      return ['CAR', 'MOTO', 'MOTO_WITH_BAG'];
+    }
+    const tokens = trimmed.split(/[,;/+&]|\s+e\s+|\s+ou\s+/i).map((t) => t.trim()).filter(Boolean);
+    const result: VehicleType[] = [];
+    for (const tok of tokens) {
+      const u = tok.toUpperCase();
+      if (u === 'CAR' || u === 'CARRO' || ['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(u)) {
+        if (!result.includes('CAR')) result.push('CAR');
+      } else if (u === 'MOTO_WITH_BAG' || u === 'MOTO_COM_BAG' || tok.toLowerCase().includes('bag')) {
+        if (!result.includes('MOTO_WITH_BAG')) result.push('MOTO_WITH_BAG');
+      } else if (u === 'MOTO' || u === 'MOTO_WITHOUT_BAG' || tok.toLowerCase().includes('moto')) {
+        if (!result.includes('MOTO')) result.push('MOTO');
+      }
+    }
+    if (result.length > 0) return result;
+    if (lower.includes('carro') || lower.includes('car')) return ['CAR'];
+    if (lower.includes('bag')) return ['MOTO_WITH_BAG'];
+    if (lower.includes('moto')) return ['MOTO'];
+  }
+  return [];
+};
+
+const getVehicleTypeLabel = (type: string | null | undefined): string => {
+  if (!type) return 'Não informado';
+  const types = parseDriverVehicleTypes(type);
+  if (types.length === 0) return type;
+  const labels = types.map((t) => VEHICLE_DISPLAY[t]?.label || t);
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} e ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} e ${labels[labels.length - 1]}`;
+};
+
+const renderDriverVehicleBadges = (type: string | null | undefined) => {
+  if (!type) return <span className="text-neutral-400 text-xs">—</span>;
+  const types = parseDriverVehicleTypes(type);
+  if (types.length === 0) return <span className="text-neutral-600 text-xs">{type}</span>;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {types.map((t) => (
+        <span
+          key={t}
+          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 bg-neutral-100 text-neutral-800 rounded-md border border-neutral-200 whitespace-nowrap"
+        >
+          <span>{VEHICLE_DISPLAY[t]?.icon || '🚗'}</span>
+          <span>{VEHICLE_DISPLAY[t]?.label || t}</span>
+        </span>
+      ))}
+    </div>
+  );
+};
+
+const isDriverCompatibleWithRoute = (driverVehicleStr: string, acceptedVehicles: VehicleType[]) => {
+  if (!acceptedVehicles || acceptedVehicles.length === 0) return true;
+  const driverVehs = parseDriverVehicleTypes(driverVehicleStr);
+  if (driverVehs.length === 0) return false;
+  return driverVehs.some((dv) => {
+    if (acceptedVehicles.includes(dv)) return true;
+    const isCar = ['CAR', 'CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(dv);
+    const isMoto = ['MOTO', 'MOTO_WITH_BAG', 'MOTO_WITHOUT_BAG'].includes(dv);
+    if (isCar && acceptedVehicles.some((av) => ['CAR', 'CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(av))) return true;
+    if (isMoto && acceptedVehicles.some((av) => ['MOTO', 'MOTO_WITH_BAG', 'MOTO_WITHOUT_BAG'].includes(av))) return true;
+    return false;
+  });
+};
+
 interface Driver {
   id: number;
   telegram_user_id: string;
   telegram_chat_id: string;
   name: string;
   phone: string;
-  vehicle_type: VehicleType;
+  vehicle_type: string;
   pix_key?: string;
   pix_key_type?: string;
   pix_key_value?: string;
@@ -255,6 +365,7 @@ type IncidentResolutionType =
   | 'DELIVERED_TO_ALTERNATIVE_LOCATION'
   | 'CUSTOMER_PICKUP'
   | 'DISCARDED'
+  | 'CANCELLATION'
   | 'OTHER';
 
 const INCIDENT_RESOLUTION_OPTIONS: {
@@ -294,6 +405,12 @@ const INCIDENT_RESOLUTION_OPTIONS: {
     icon: '🗑️',
   },
   {
+    type: 'CANCELLATION',
+    label: 'Corrida Cancelada / Tratativa Administrativa',
+    description: 'Cancelamento operacional tratado com cliente/motorista.',
+    icon: '❌',
+  },
+  {
     type: 'OTHER',
     label: 'Outro',
     description: 'Outra resolução operacional negociada diretamente com o cliente.',
@@ -321,6 +438,7 @@ interface RouteStop {
   resolution_note?: string | null;
   resolved_at?: string | null;
   resolved_by?: string | null;
+  compensation_amount?: number | string | null;
   // M4.2 Fields
   modality_code?: string;
   neighborhood_id?: number | null;
@@ -384,6 +502,7 @@ interface Route {
   accepted_vehicle_types: VehicleType[];
   status: RouteStatus;
   accepted_driver_id: number | null;
+  accepted_driver?: Driver | null;
   accepted_at: string | null;
   arrived_pickup_at?: string | null;
   picked_up_at?: string | null;
@@ -404,6 +523,11 @@ interface Route {
   suggested_driver_fee?: number | null;
   final_driver_fee?: number | null;
   override_reason?: string | null;
+  // M4.4 Versioning & Edit Control
+  route_version?: number;
+  driver_acknowledged_version?: number;
+  change_pending_driver_approval?: boolean;
+  pending_material_change?: string | null;
   created_at: string;
   offered_at: string | null;
   stops?: RouteStop[];
@@ -475,6 +599,7 @@ interface RouteEvent {
 
 interface RouteDetails {
   route: Route;
+  driver?: Driver | null;
   dispatches: RouteDispatch[];
   events: RouteEvent[];
   stats: { sent: number; failed: number };
@@ -541,10 +666,14 @@ export default function App() {
   const [resolvingStop, setResolvingStop] = useState<OperationalIncidentItem | null>(null);
   const [selectedResolutionType, setSelectedResolutionType] = useState<IncidentResolutionType>('RETURN_TO_ORIGIN');
   const [resolutionNoteInput, setResolutionNoteInput] = useState<string>('');
+  const [resolutionCompensationInput, setResolutionCompensationInput] = useState<string>('');
   const [submittingResolution, setSubmittingResolution] = useState<boolean>(false);
 
   // M4.1 Parte C: Gestão de Pagamentos das Rotas (💰 PAGAMENTOS)
   const [paymentsData, setPaymentsData] = useState<PaymentsDataResponse | null>(null);
+
+  // Integração Takeat (Delivery Próprio & Motor de Fretes)
+  const [pendingTakeatCount, setPendingTakeatCount] = useState<number>(0);
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'PENDING' | 'PAID'>('ALL');
   const [selectedDriverFilter, setSelectedDriverFilter] = useState<number | null>(null);
   const [paymentSearch, setPaymentSearch] = useState<string>('');
@@ -554,6 +683,13 @@ export default function App() {
   const [paymentReferenceInput, setPaymentReferenceInput] = useState<string>('');
   const [paymentNoteInput, setPaymentNoteInput] = useState<string>('');
   const [submittingPayment, setSubmittingPayment] = useState<boolean>(false);
+  const [submittingMpPayout, setSubmittingMpPayout] = useState<boolean>(false);
+  const [mpPayoutFeedback, setMpPayoutFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [finalizingRouteId, setFinalizingRouteId] = useState<number | null>(null);
+
+  // Destaques e Ações Imediatas (Alertas Pulsantes)
+  const [pendingApprovalDriversCount, setPendingApprovalDriversCount] = useState<number>(0);
+  const [openIncidentsCount, setOpenIncidentsCount] = useState<number>(0);
 
   // M4.1 Parte A: Auditoria de Veículos dos Indicados
   const [vehicleAuditList, setVehicleAuditList] = useState<ReferralVehicleAuditItem[]>([]);
@@ -599,11 +735,19 @@ export default function App() {
 
   // Driver Editing State (M1.1)
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
-  const [editFormData, setEditFormData] = useState({
+  const [editFormData, setEditFormData] = useState<{
+    name: string;
+    phone: string;
+    vehicle_type: string;
+    vehicle_types: VehicleType[];
+    pix_key_type: 'CPF' | 'PHONE' | 'EMAIL' | 'RANDOM';
+    pix_key_value: string;
+  }>({
     name: '',
     phone: '',
-    vehicle_type: 'CAR' as VehicleType,
-    pix_key_type: 'CPF' as 'CPF' | 'PHONE' | 'EMAIL' | 'RANDOM',
+    vehicle_type: 'CAR',
+    vehicle_types: ['CAR'],
+    pix_key_type: 'CPF',
     pix_key_value: '',
   });
   const [savingDriverEdit, setSavingDriverEdit] = useState<boolean>(false);
@@ -618,11 +762,13 @@ export default function App() {
   const [inviteFormData, setInviteFormData] = useState<{
     name: string;
     phone: string;
-    vehicle_type: VehicleType;
+    vehicle_type: string;
+    vehicle_types: VehicleType[];
   }>({
     name: '',
     phone: '',
     vehicle_type: 'CAR',
+    vehicle_types: ['CAR'],
   });
   const [generatingInvite, setGeneratingInvite] = useState<boolean>(false);
   const [generatedInvite, setGeneratedInvite] = useState<{
@@ -681,6 +827,7 @@ export default function App() {
 
   // Routes State (M2.1)
   const [routesList, setRoutesList] = useState<Route[]>([]);
+  const [allRoutesList, setAllRoutesList] = useState<Route[]>([]);
   const [routeFilter, setRouteFilter] = useState<'ALL' | RouteStatus>('ALL');
   const [loadingRoutes, setLoadingRoutes] = useState<boolean>(true);
   const [showCreateRouteModal, setShowCreateRouteModal] = useState<boolean>(false);
@@ -688,6 +835,12 @@ export default function App() {
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [selectedRouteDetails, setSelectedRouteDetails] = useState<RouteDetails | null>(null);
   const [loadingRouteDetails, setLoadingRouteDetails] = useState<boolean>(false);
+
+  // Cancellation Modal State
+  const [routeToCancel, setRouteToCancel] = useState<Route | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState<string>('');
+  const [cancelCompensationInput, setCancelCompensationInput] = useState<string>('');
+  const [cancelResolutionType, setCancelResolutionType] = useState<IncidentResolutionType | 'OPEN'>('OPEN');
 
   // M4.4 Route Edit State
   const [editingRouteId, setEditingRouteId] = useState<number | null>(null);
@@ -711,7 +864,103 @@ export default function App() {
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
   const [loadingPhoto, setLoadingPhoto] = useState<boolean>(false);
 
-  // New Route Form State (M2.1 Seção 23 + M4.2)
+  // Synchronized state refs to prevent stale closures during background polling and async handlers
+  const driverFilterRef = useRef(driverFilter);
+  driverFilterRef.current = driverFilter;
+
+  const routeFilterRef = useRef(routeFilter);
+  routeFilterRef.current = routeFilter;
+
+  const referralFilterRef = useRef(referralFilter);
+  referralFilterRef.current = referralFilter;
+
+  const incidentResolutionFilterRef = useRef(incidentResolutionFilter);
+  incidentResolutionFilterRef.current = incidentResolutionFilter;
+
+  const paymentFilterRef = useRef(paymentFilter);
+  paymentFilterRef.current = paymentFilter;
+
+  const selectedDriverFilterRef = useRef(selectedDriverFilter);
+  selectedDriverFilterRef.current = selectedDriverFilter;
+
+  const incidentSearchRef = useRef(incidentSearch);
+  incidentSearchRef.current = incidentSearch;
+
+  const referralSearchRef = useRef(referralSearch);
+  referralSearchRef.current = referralSearch;
+
+  const paymentSearchRef = useRef(paymentSearch);
+  paymentSearchRef.current = paymentSearch;
+
+  // ==============================================================
+  // DESTAQUES E AÇÕES IMEDIATAS (Alertas Pulsantes para o Atendente)
+  // ==============================================================
+  const pendingReferralsCount = referralsList.filter(
+    (r) => r.status === 'PENDING_REVIEW'
+  ).length;
+
+  const pendingPaymentsCount = paymentsData?.summary.pendingRoutesCount || 0;
+
+  // Pendências em aberto: apenas ocorrências operacionais não resolvidas (evita falso alerta quando todas estão resolvidas)
+  const totalPendenciasCount = openIncidentsCount;
+
+  // Contagem dinâmica de rotas por status e rotas em fluxo operacional
+  // Status em fluxo ativo: corridas em andamento ou que requerem ação/monitoramento contínuo
+  const FLUX_STATUSES: RouteStatus[] = [
+    'OFFERED',
+    'ACCEPTED',
+    'ARRIVED_PICKUP',
+    'PICKED_UP',
+    'IN_TRANSIT',
+  ];
+
+  const routeStatusCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      ALL: 0,
+      DRAFT: 0,
+      OFFERED: 0,
+      ACCEPTED: 0,
+      ARRIVED_PICKUP: 0,
+      PICKED_UP: 0,
+      IN_TRANSIT: 0,
+      COMPLETED: 0,
+      CANCELLED: 0,
+    };
+
+    const sourceRoutes = allRoutesList.length > 0 ? allRoutesList : routesList;
+    counts.ALL = sourceRoutes.length;
+
+    for (const r of sourceRoutes) {
+      if (r.status && counts[r.status] !== undefined) {
+        counts[r.status] = (counts[r.status] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [allRoutesList, routesList]);
+
+  // Total de corridas em fluxo operacional no momento
+  const inFluxRoutesCount = useMemo(() => {
+    return (
+      (routeStatusCounts['OFFERED'] || 0) +
+      (routeStatusCounts['ACCEPTED'] || 0) +
+      (routeStatusCounts['ARRIVED_PICKUP'] || 0) +
+      (routeStatusCounts['PICKED_UP'] || 0) +
+      (routeStatusCounts['IN_TRANSIT'] || 0)
+    );
+  }, [routeStatusCounts]);
+
+  // Rotas em rascunho prontas para publicação
+  const draftRoutesCount = routeStatusCounts['DRAFT'] || 0;
+
+  const hasCriticalAlerts =
+    pendingApprovalDriversCount > 0 ||
+    pendingReferralsCount > 0 ||
+    totalPendenciasCount > 0 ||
+    pendingPaymentsCount > 0 ||
+    pendingTakeatCount > 0 ||
+    inFluxRoutesCount > 0;
+
+  // New Route Form State (Motor de Fretes Kantine)
   interface FormStop {
     destination_address: string;
     destination_neighborhood: string;
@@ -724,9 +973,12 @@ export default function App() {
     delivery_mode: DeliveryMode;
     desired_deadline: string;
     observations: string;
+    is_horizontal_condo: boolean;
+    dropoff_coords?: { lat: number; lng: number };
   }
 
   const [newRoute, setNewRoute] = useState<{
+    modality: 'CAR' | 'MOTO';
     pickup_type: 'REGISTERED' | 'AD_HOC';
     pickup_location_id: number;
     pickup_name: string;
@@ -739,32 +991,33 @@ export default function App() {
     accepted_vehicle_types: VehicleType[];
     stops: FormStop[];
   }>({
+    modality: 'MOTO',
     pickup_type: 'REGISTERED',
     pickup_location_id: 1,
     pickup_name: '',
     pickup_address: '',
     pickup_neighborhood: '',
-    final_deadline: '18:00',
-    total_fee: '35,00',
+    final_deadline: '50 min',
+    total_fee: '15,50',
     override_driver_fee: '',
     override_reason: '',
     accepted_vehicle_types: [
-      'CAR',
       'MOTO',
       'MOTO_WITH_BAG',
     ],
     stops: [
       {
-        destination_address: 'Av. Rondon Pacheco, 1000',
-        destination_neighborhood: 'Santa Mônica',
+        destination_address: '',
+        destination_neighborhood: 'Centro',
         neighborhood_id: null,
-        modality_code: 'BOLO',
-        pricing_vehicle_category: 'CAR',
-        customer_freight: '38,50',
-        cargo_description: '2x Caixa de Tortas',
+        modality_code: 'CONVENCIONAL',
+        pricing_vehicle_category: 'MOTO',
+        customer_freight: '',
+        cargo_description: 'Encomenda Kantine',
         delivery_mode: 'IN_PERSON',
-        desired_deadline: '16:30',
+        desired_deadline: '',
         observations: '',
+        is_horizontal_condo: false,
       },
     ],
   });
@@ -809,34 +1062,66 @@ export default function App() {
     return headers;
   };
 
-  const fetchDrivers = async () => {
-    setLoadingDrivers(true);
+  const safeFetchJson = async <T,>(url: string, init?: RequestInit): Promise<T | null> => {
+    try {
+      const res = await fetch(url, init);
+      if (!res.ok) {
+        return null;
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return null;
+      }
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  };
+
+  const fetchTakeatPendingCount = async (silent: boolean = false) => {
     try {
       const headers = await getAuthHeaders();
-      let url = '/api/admin/drivers';
-      if (
-        driverFilter === 'PENDING' ||
-        driverFilter === 'ACTIVE' ||
-        driverFilter === 'BLOCKED' ||
-        driverFilter === 'EXCLUDED'
-      ) {
-        url = `/api/admin/drivers?status=${driverFilter}`;
+      const data = await safeFetchJson<{ count?: number }>('/api/admin/takeat/pending-count', { headers });
+      if (data && typeof data.count !== 'undefined') {
+        setPendingTakeatCount(Number(data.count || 0));
       }
-      const res = await fetch(url, { headers });
+    } catch (err: any) {
+      if (!silent) console.warn('[fetchTakeatPendingCount error]', err?.message);
+    }
+  };
 
-      if (res.ok) {
-        let data: Driver[] = await res.json();
-        if (driverFilter === 'REACTIVATION_REQUESTED') {
-          data = data.filter((d) => d.reactivation_requested);
-        } else if (driverFilter === 'REINCLUSION_REQUESTED') {
-          data = data.filter((d) => d.reinclusion_requested);
+  const fetchDrivers = async (overrideFilter?: any, isBackground = false) => {
+    const filterToUse = overrideFilter !== undefined ? overrideFilter : driverFilterRef.current;
+    if (!isBackground) setLoadingDrivers(true);
+    try {
+      const headers = await getAuthHeaders();
+      const allData = await safeFetchJson<Driver[]>('/api/admin/drivers', { headers });
+
+      if (allData && Array.isArray(allData)) {
+        const pendingCount = allData.filter(
+          (d) => d.status === 'PENDING' || d.reactivation_requested || d.reinclusion_requested
+        ).length;
+        setPendingApprovalDriversCount(pendingCount);
+
+        let data = allData;
+        if (
+          filterToUse === 'PENDING' ||
+          filterToUse === 'ACTIVE' ||
+          filterToUse === 'BLOCKED' ||
+          filterToUse === 'EXCLUDED'
+        ) {
+          data = allData.filter((d) => d.status === filterToUse);
+        } else if (filterToUse === 'REACTIVATION_REQUESTED') {
+          data = allData.filter((d) => d.reactivation_requested);
+        } else if (filterToUse === 'REINCLUSION_REQUESTED') {
+          data = allData.filter((d) => d.reinclusion_requested);
         }
         setDrivers(data);
       }
     } catch (err: any) {
-      console.error('Error fetching drivers', err);
+      console.warn('Error fetching drivers', err);
     } finally {
-      setLoadingDrivers(false);
+      if (!isBackground) setLoadingDrivers(false);
     }
   };
 
@@ -844,39 +1129,82 @@ export default function App() {
     setLoadingLocations(true);
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch('/api/admin/pickup-locations', { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeFetchJson<PickupLocation[]>('/api/admin/pickup-locations', { headers });
+      if (data && Array.isArray(data)) {
         setPickupLocations(data);
         if (data.length > 0 && !newRoute.pickup_location_id) {
           setNewRoute((prev) => ({ ...prev, pickup_location_id: data[0].id }));
         }
       }
     } catch (err: any) {
-      console.error('Error fetching pickup locations', err);
+      console.warn('Error fetching pickup locations', err);
     } finally {
       setLoadingLocations(false);
     }
   };
 
-  const fetchRoutes = async () => {
-    setLoadingRoutes(true);
+  const fetchRoutes = async (targetFilter?: 'ALL' | RouteStatus, isBackground = false) => {
+    const activeF = targetFilter !== undefined ? targetFilter : routeFilterRef.current;
+    if (!isBackground) setLoadingRoutes(true);
     try {
       const headers = await getAuthHeaders();
+      // Sempre que filtrado por 'ALL', atualizamos allRoutesList diretamente
+      // Se filtrado por status específico, também buscamos a visão global de todas as rotas em background se allRoutesList estiver vazio
       const url =
-        routeFilter === 'ALL'
+        activeF === 'ALL'
           ? '/api/admin/routes'
-          : `/api/admin/routes?status=${routeFilter}`;
-      const res = await fetch(url, { headers });
+          : `/api/admin/routes?status=${activeF}`;
+      const data = await safeFetchJson<Route[]>(url, { headers });
 
-      if (res.ok) {
-        const data = await res.json();
+      if (data && Array.isArray(data)) {
         setRoutesList(data);
+        if (activeF === 'ALL') {
+          setAllRoutesList(data);
+        }
+      }
+
+      // Se estamos em um filtro específico, garantimos que allRoutesList continue atualizado em background para os contadores e destaques pulsantes
+      if (activeF !== 'ALL') {
+        safeFetchJson<Route[]>('/api/admin/routes', { headers })
+          .then((allData) => {
+            if (allData && Array.isArray(allData)) {
+              setAllRoutesList(allData);
+            }
+          })
+          .catch(() => {});
       }
     } catch (err: any) {
-      console.error('Error fetching routes', err);
+      console.warn('Error fetching routes', err);
     } finally {
-      setLoadingRoutes(false);
+      if (!isBackground) setLoadingRoutes(false);
+    }
+  };
+
+  const handleSelectRouteFilter = (filter: 'ALL' | RouteStatus) => {
+    setRouteFilter(filter);
+    fetchRoutes(filter);
+  };
+
+  const handleQuickUpdateVehicleType = async (routeId: number, vehicles: VehicleType[]) => {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/admin/routes/${routeId}/vehicle-types`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ accepted_vehicle_types: vehicles }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao atualizar veículos da rota');
+      }
+      const data = await res.json();
+      setSuccessMessage(`✅ Veículos da Rota #${routeId} atualizados com sucesso!`);
+      await fetchRoutes();
+      if (selectedRouteDetails?.route.id === routeId) {
+        openRouteDetails(routeId);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message);
     }
   };
 
@@ -897,16 +1225,18 @@ export default function App() {
     setLoadingInvitations(true);
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch('/api/admin/driver-invitations', { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeFetchJson<{ invitations?: DriverInvitation[]; defaultInviteLink?: string }>(
+        '/api/admin/driver-invitations',
+        { headers }
+      );
+      if (data) {
         setInvitationsList(data.invitations || []);
         if (data.defaultInviteLink) {
           setDefaultInviteLink(data.defaultInviteLink);
         }
       }
     } catch (err: any) {
-      console.error('Error fetching driver invitations', err);
+      console.warn('Error fetching driver invitations', err);
     } finally {
       setLoadingInvitations(false);
     }
@@ -997,6 +1327,68 @@ export default function App() {
     }
   };
 
+  const handleOpenCustomerWhatsApp = (stop: {
+    id?: number;
+    sequence?: number;
+    pin_code?: string | null;
+    destination_address?: string | null;
+    destination_neighborhood?: string | null;
+    cargo_description?: string | null;
+    observations?: string | null;
+  }) => {
+    const pin = (stop.pin_code || '').trim();
+    if (!pin) return;
+
+    // Localizar dados e número de WhatsApp do cliente nos campos da parada
+    const customerInfo = extractCustomerData(stop);
+    let cleanPhone = '';
+    if (customerInfo.rawDigits) {
+      cleanPhone = customerInfo.rawDigits.startsWith('55')
+        ? customerInfo.rawDigits
+        : `55${customerInfo.rawDigits}`;
+    }
+
+    const saudacao = customerInfo.name ? `Olá, *${customerInfo.name}*! Tudo bem?` : `Olá! Tudo bem?`;
+    const message =
+      `${saudacao} Passando para avisar que o seu pedido da *Kantine Gastronomia* já saiu para coleta com nosso entregador parceiro! 🛵📦\n\n` +
+      `Por favor, faça a gentileza de informar o código abaixo para o motorista no ato da entrega:\n\n` +
+      `🔑 *Código do Cliente:* ${pin}\n\n` +
+      `Assim garantimos que seu pedido seja entregue com total rapidez e segurança.\n\n` +
+      `Muito obrigado!\n*Kantine Gastronomia*`;
+
+    const encodedMessage = encodeURIComponent(message);
+    const whatsappUrl = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${encodedMessage}`
+      : `https://api.whatsapp.com/send?text=${encodedMessage}`;
+
+    const link = document.createElement('a');
+    link.href = whatsappUrl;
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    copyToClipboard(pin, `pin_whatsapp_${stop.id}`);
+  };
+
+  useEffect(() => {
+    if (selectedRouteDetails) {
+      const prevOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          setSelectedRouteDetails(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.body.style.overflow = prevOverflow;
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [selectedRouteDetails]);
+
   useEffect(() => {
     const link =
       generatedInvite?.inviteLink ||
@@ -1017,25 +1409,25 @@ export default function App() {
   }, [generatedInvite, defaultInviteLink, telegramStatus?.botUsername]);
 
   // Referrals API Handlers (M1.2)
-  const fetchReferrals = async () => {
-    setLoadingReferrals(true);
+  const fetchReferrals = async (overrideFilter?: any, isBackground = false) => {
+    const filterToUse = overrideFilter !== undefined ? overrideFilter : referralFilterRef.current;
+    if (!isBackground) setLoadingReferrals(true);
     try {
       const headers = await getAuthHeaders();
       let url = '/api/admin/referrals';
       const params = new URLSearchParams();
-      if (referralFilter !== 'ALL') params.set('status', referralFilter);
-      if (referralSearch) params.set('search', referralSearch);
+      if (filterToUse !== 'ALL') params.set('status', filterToUse);
+      if (referralSearchRef.current) params.set('search', referralSearchRef.current);
       if (params.toString()) url += `?${params.toString()}`;
 
-      const res = await fetch(url, { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeFetchJson<DriverReferralItem[]>(url, { headers });
+      if (data && Array.isArray(data)) {
         setReferralsList(data);
       }
     } catch (err: any) {
-      console.error('Failed to fetch referrals', err);
+      console.warn('Failed to fetch referrals', err);
     } finally {
-      setLoadingReferrals(false);
+      if (!isBackground) setLoadingReferrals(false);
     }
   };
 
@@ -1092,32 +1484,53 @@ export default function App() {
   // ==========================================
   // M4.1 PARTE B: Incidentes Operacionais (⚠️ PENDÊNCIAS) Handlers
   // ==========================================
-  const fetchIncidents = async () => {
-    setLoadingIncidents(true);
+  const fetchIncidents = async (overrideFilter?: 'ALL' | 'OPEN' | 'RESOLVED', isBackground = false) => {
+    const filterToUse = overrideFilter !== undefined ? overrideFilter : incidentResolutionFilterRef.current;
+    if (!isBackground) setLoadingIncidents(true);
     try {
       const headers = await getAuthHeaders();
+
+      // Always query open incidents count to know active pendências
+      try {
+        const openData = await safeFetchJson<OperationalIncidentItem[]>('/api/admin/incidents?resolution_status=OPEN', { headers });
+        if (openData && Array.isArray(openData)) {
+          setOpenIncidentsCount(openData.length);
+        }
+      } catch (e) {
+        // ignore
+      }
+
       let url = '/api/admin/incidents';
       const params = new URLSearchParams();
-      if (incidentResolutionFilter !== 'ALL') params.set('resolution_status', incidentResolutionFilter);
-      if (incidentSearch) params.set('search', incidentSearch);
+      if (filterToUse !== 'ALL') params.set('resolution_status', filterToUse);
+      if (incidentSearchRef.current) params.set('search', incidentSearchRef.current);
       if (params.toString()) url += `?${params.toString()}`;
 
-      const res = await fetch(url, { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeFetchJson<OperationalIncidentItem[]>(url, { headers });
+      if (data && Array.isArray(data)) {
         setIncidentsList(data);
       }
     } catch (err: any) {
-      console.error('Failed to fetch incidents', err);
+      console.warn('Failed to fetch incidents', err);
     } finally {
-      setLoadingIncidents(false);
+      if (!isBackground) setLoadingIncidents(false);
     }
   };
 
   const handleOpenResolveIncidentModal = (item: OperationalIncidentItem) => {
     setResolvingStop(item);
-    setSelectedResolutionType('RETURN_TO_ORIGIN');
-    setResolutionNoteInput('');
+    setSelectedResolutionType(
+      item.stop.resolution_type ||
+        (item.stop.incident_type === 'CORRIDA_CANCELADA' ? 'CANCELLATION' : 'RETURN_TO_ORIGIN')
+    );
+    setResolutionNoteInput(item.stop.resolution_note || '');
+    if (item.stop.compensation_amount !== undefined && item.stop.compensation_amount !== null) {
+      setResolutionCompensationInput(String(item.stop.compensation_amount));
+    } else if (item.route.status === 'CANCELLED' && item.route.accepted_driver_id) {
+      setResolutionCompensationInput(String(item.route.total_fee || ''));
+    } else {
+      setResolutionCompensationInput('');
+    }
   };
 
   const handleConfirmResolveIncident = async () => {
@@ -1126,20 +1539,27 @@ export default function App() {
     setErrorMessage(null);
     try {
       const headers = await getAuthHeaders();
+      const compAmount =
+        resolutionCompensationInput.trim() !== ''
+          ? parseFloat(resolutionCompensationInput.replace(',', '.'))
+          : undefined;
       const res = await fetch(`/api/admin/stops/${resolvingStop.stop.id}/resolve`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           resolution_type: selectedResolutionType,
           resolution_note: resolutionNoteInput,
+          compensation_amount: !isNaN(compAmount as number) ? compAmount : undefined,
+          adjust_route_fee: true,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Falha ao resolver incidente');
-      setSuccessMessage('✅ Incidente resolvido com sucesso! A destinação da encomenda foi registrada.');
+      setSuccessMessage('✅ Incidente resolvido com sucesso! A destinação da encomenda e os valores financeiros foram atualizados.');
       setResolvingStop(null);
       await fetchIncidents();
       await fetchRoutes();
+      await fetchPayments();
     } catch (err: any) {
       setErrorMessage(err.message);
     } finally {
@@ -1147,29 +1567,65 @@ export default function App() {
     }
   };
 
+  // Finalizar rota após tratamento e liberar para pagamento PIX
+  const handleFinalizeRoute = async (routeId: number) => {
+    if (
+      !window.confirm(
+        `Deseja finalizar a Rota #${routeId} e liberar para pagamento PIX?\n\nO motorista receberá a notificação de finalização e a rota entrará na fila do financeiro para repasse.`
+      )
+    ) {
+      return;
+    }
+    setFinalizingRouteId(routeId);
+    setErrorMessage(null);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/admin/routes/${routeId}/finalize`, {
+        method: 'POST',
+        headers,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Falha ao finalizar rota');
+      setSuccessMessage(
+        `✅ Rota #${routeId} finalizada e liberada para pagamento PIX! O motorista foi notificado via Telegram.`
+      );
+      await fetchRoutes();
+      await fetchPayments();
+      await fetchIncidents();
+      if (selectedRouteDetails?.route.id === routeId) {
+        await openRouteDetails(routeId);
+      }
+    } catch (err: any) {
+      setErrorMessage(`Erro ao finalizar rota: ${err.message}`);
+    } finally {
+      setFinalizingRouteId(null);
+    }
+  };
+
   // ==========================================
   // M4.1 PARTE C: Gestão de Pagamentos das Rotas (💰 PAGAMENTOS) Handlers
   // ==========================================
-  const fetchPayments = async () => {
-    setLoadingPayments(true);
+  const fetchPayments = async (overrideFilter?: any, isBackground = false) => {
+    const filterToUse = overrideFilter !== undefined ? overrideFilter : paymentFilterRef.current;
+    const driverFilterVal = selectedDriverFilterRef.current;
+    if (!isBackground) setLoadingPayments(true);
     try {
       const headers = await getAuthHeaders();
       let url = '/api/admin/payments';
       const params = new URLSearchParams();
-      if (paymentFilter !== 'ALL') params.set('payment_status', paymentFilter);
-      if (selectedDriverFilter) params.set('driver_id', String(selectedDriverFilter));
-      if (paymentSearch) params.set('search', paymentSearch);
+      if (filterToUse !== 'ALL') params.set('payment_status', filterToUse);
+      if (driverFilterVal) params.set('driver_id', String(driverFilterVal));
+      if (paymentSearchRef.current) params.set('search', paymentSearchRef.current);
       if (params.toString()) url += `?${params.toString()}`;
 
-      const res = await fetch(url, { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeFetchJson<PaymentsDataResponse>(url, { headers });
+      if (data) {
         setPaymentsData(data);
       }
     } catch (err: any) {
-      console.error('Failed to fetch payments data', err);
+      console.warn('Failed to fetch payments data', err);
     } finally {
-      setLoadingPayments(false);
+      if (!isBackground) setLoadingPayments(false);
     }
   };
 
@@ -1208,6 +1664,33 @@ export default function App() {
     }
   };
 
+  const handlePayWithMercadoPago = async () => {
+    if (!payingRoute) return;
+    setSubmittingMpPayout(true);
+    setMpPayoutFeedback(null);
+    setErrorMessage(null);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/admin/routes/${payingRoute.route.id}/pay-mercadopago`, {
+        method: 'POST',
+        headers,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Falha ao processar repasse Pix via Mercado Pago');
+      }
+      setSuccessMessage(`✅ Repasse Pix via Mercado Pago enviado com sucesso! ID: ${data.payoutId || 'OK'}`);
+      setPayingRoute(null);
+      await fetchPayments();
+      await fetchRoutes();
+    } catch (err: any) {
+      setMpPayoutFeedback({ type: 'error', message: err.message });
+      setErrorMessage(err.message);
+    } finally {
+      setSubmittingMpPayout(false);
+    }
+  };
+
   // ==========================================
   // M4.1 PARTE A: Auditoria de Veículos dos Indicados Handlers
   // ==========================================
@@ -1215,13 +1698,12 @@ export default function App() {
     setLoadingVehicleAudit(true);
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch('/api/admin/drivers/referral-vehicle-audit', { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeFetchJson<ReferralVehicleAuditItem[]>('/api/admin/drivers/referral-vehicle-audit', { headers });
+      if (data && Array.isArray(data)) {
         setVehicleAuditList(data);
       }
     } catch (err: any) {
-      console.error('Failed to fetch vehicle audit', err);
+      console.warn('Failed to fetch vehicle audit', err);
     } finally {
       setLoadingVehicleAudit(false);
     }
@@ -1260,6 +1742,7 @@ export default function App() {
     }
   };
 
+  // Carga inicial e quando as credenciais/usuário mudarem
   useEffect(() => {
     fetchDrivers();
     fetchPickupLocations();
@@ -1270,17 +1753,42 @@ export default function App() {
     fetchIncidents();
     fetchPayments();
     fetchVehicleAudit();
-  }, [
-    driverFilter,
-    routeFilter,
-    referralFilter,
-    incidentResolutionFilter,
-    paymentFilter,
-    selectedDriverFilter,
-    currentUser,
-    useAdminKey,
-    adminKey,
-  ]);
+    fetchTakeatPendingCount();
+  }, [currentUser, useAdminKey, adminKey]);
+
+  // Efeitos dedicados para cada filtro (evita disparar todas as requisições desnecessariamente)
+  useEffect(() => {
+    fetchDrivers(driverFilter);
+  }, [driverFilter]);
+
+  useEffect(() => {
+    fetchRoutes(routeFilter);
+  }, [routeFilter]);
+
+  useEffect(() => {
+    fetchReferrals(referralFilter);
+  }, [referralFilter]);
+
+  useEffect(() => {
+    fetchIncidents(incidentResolutionFilter);
+  }, [incidentResolutionFilter]);
+
+  useEffect(() => {
+    fetchPayments(paymentFilter);
+  }, [paymentFilter, selectedDriverFilter]);
+
+  // Polling em tempo real (12s) silencioso para atualizar as 4 situações críticas em segundo plano
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetchDrivers(undefined, true);
+      fetchReferrals(undefined, true);
+      fetchIncidents(undefined, true);
+      fetchPayments(undefined, true);
+      fetchRoutes(undefined, true);
+      fetchTakeatPendingCount(true);
+    }, 12000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Driver Actions (M1 & M1.1)
   const handleApproveDriver = async (driverId: number) => {
@@ -1443,10 +1951,12 @@ export default function App() {
   };
 
   const handleReinviteExcludedDriver = (driver: Driver) => {
+    const vTypes = parseDriverVehicleTypes(driver.vehicle_type);
     setInviteFormData({
       name: driver.name,
       phone: driver.phone,
-      vehicle_type: 'CAR',
+      vehicle_type: driver.vehicle_type || 'CAR',
+      vehicle_types: vTypes.length > 0 ? vTypes : ['CAR'],
     });
     setGeneratedInvite(null);
     setInviteModalTab('DIRECT');
@@ -1479,10 +1989,13 @@ export default function App() {
       driver.pix_key_type && ['CPF', 'PHONE', 'EMAIL', 'RANDOM'].includes(driver.pix_key_type)
         ? (driver.pix_key_type as any)
         : 'CPF';
+    const parsedVehs = parseDriverVehicleTypes(driver.vehicle_type);
+    const initialTypes = parsedVehs.length > 0 ? parsedVehs : ['CAR' as VehicleType];
     setEditFormData({
       name: driver.name,
       phone: driver.phone,
-      vehicle_type: driver.vehicle_type,
+      vehicle_type: initialTypes.join(','),
+      vehicle_types: initialTypes,
       pix_key_type: validPixType,
       pix_key_value: isRequiresUpdate ? '' : (driver.pix_key_value || driver.pix_key || ''),
     });
@@ -1646,6 +2159,7 @@ export default function App() {
           delivery_mode: 'IN_PERSON',
           desired_deadline: '',
           observations: '',
+          is_horizontal_condo: false,
         },
       ],
     }));
@@ -1671,7 +2185,7 @@ export default function App() {
     setNewRoute((prev) => ({ ...prev, stops: newStops }));
   };
 
-  const handleUpdateStopField = (index: number, field: keyof FormStop, value: string) => {
+  const handleUpdateStopField = (index: number, field: keyof FormStop, value: any) => {
     setNewRoute((prev) => {
       const stops = [...prev.stops];
       stops[index] = { ...stops[index], [field]: value };
@@ -1738,6 +2252,7 @@ export default function App() {
           delivery_mode: s.delivery_mode,
           desired_deadline: s.desired_deadline.trim() || undefined,
           observations: s.observations.trim() || undefined,
+          is_horizontal_condo: s.is_horizontal_condo,
         })),
       };
 
@@ -1805,25 +2320,49 @@ export default function App() {
     }
   };
 
-  const handleCancelRoute = async (routeId: number) => {
-    if (!confirm(`Tem certeza que deseja cancelar a Rota #${routeId}?`)) return;
+  const openCancelModal = (route: Route) => {
+    setRouteToCancel(route);
+    setCancelReasonInput('');
+    setCancelCompensationInput('');
+    setCancelResolutionType('OPEN');
+  };
 
+  const handleConfirmCancelRoute = async () => {
+    if (!routeToCancel) return;
+    const routeId = routeToCancel.id;
     setCancellingId(routeId);
     setErrorMessage(null);
     try {
       const headers = await getAuthHeaders();
+      const compAmount =
+        cancelCompensationInput.trim() !== ''
+          ? parseFloat(cancelCompensationInput.replace(',', '.'))
+          : undefined;
       const res = await fetch(`/api/admin/routes/${routeId}/cancel`, {
         method: 'POST',
         headers,
+        body: JSON.stringify({
+          reason: cancelReasonInput.trim() || undefined,
+          compensation_amount: !isNaN(compAmount as number) ? compAmount : undefined,
+          resolution_type: cancelResolutionType !== 'OPEN' ? cancelResolutionType : undefined,
+        }),
       });
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Falha ao cancelar rota.');
+        throw new Error(data.error || 'Falha ao cancelar rota.');
       }
 
-      setSuccessMessage(`Rota #${routeId} cancelada com sucesso.`);
+      setSuccessMessage(
+        `✅ Rota #${routeId} cancelada com sucesso! A corrida foi encaminhada para as Pendências Operacionais para acompanhamento e registro da solução.`
+      );
+      setRouteToCancel(null);
+      setCancelReasonInput('');
+      setCancelCompensationInput('');
+      setCancelResolutionType('OPEN');
       await fetchRoutes();
+      await fetchIncidents();
+      await fetchPayments();
       if (selectedRouteDetails?.route.id === routeId) {
         openRouteDetails(routeId);
       }
@@ -2118,7 +2657,7 @@ export default function App() {
       {/* HEADER                                                         */}
       {/* ============================================================== */}
       <header className="border-b border-neutral-200/80 bg-white/90 backdrop-blur sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-white border border-neutral-200/90 flex items-center justify-center p-1 shadow-sm shadow-neutral-900/5 hover:border-neutral-300 transition-all shrink-0">
               <KantineLogo className="w-full h-full object-contain" />
@@ -2185,20 +2724,31 @@ export default function App() {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center gap-1.5 border-t border-neutral-100/80 pt-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-1.5 border-t border-neutral-100/80 pt-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => setActiveTab('ROUTES')}
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'ROUTES'
                 ? 'border-orange-600 text-orange-600'
+                : inFluxRoutesCount > 0
+                ? 'border-amber-500 text-amber-700 bg-amber-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
-            <Layers className="w-3.5 h-3.5" />
+            <Layers className={`w-3.5 h-3.5 ${inFluxRoutesCount > 0 ? 'text-amber-600 animate-pulse' : ''}`} />
             <span>Rotas de Entrega</span>
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-200 text-neutral-700 font-bold">
-              {routesList.length}
+              {allRoutesList.length > 0 ? allRoutesList.length : routesList.length}
             </span>
+            {inFluxRoutesCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse ring-2 ring-amber-300 shadow-xs"
+                title={`${inFluxRoutesCount} corrida(s) ativa(s) em fluxo operacional`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{inFluxRoutesCount} em fluxo</span>
+              </span>
+            )}
           </button>
 
           <button
@@ -2221,6 +2771,8 @@ export default function App() {
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'DRIVERS'
                 ? 'border-orange-600 text-orange-600'
+                : pendingApprovalDriversCount > 0
+                ? 'border-amber-500 text-amber-700 bg-amber-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
@@ -2229,6 +2781,15 @@ export default function App() {
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-200 text-neutral-700 font-bold">
               {drivers.length}
             </span>
+            {pendingApprovalDriversCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse ring-2 ring-amber-300 shadow-xs"
+                title={`${pendingApprovalDriversCount} motorista(s) aguardando aprovação`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{pendingApprovalDriversCount} pendente(s)</span>
+              </span>
+            )}
           </button>
 
           <button
@@ -2239,6 +2800,8 @@ export default function App() {
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'REFERRALS'
                 ? 'border-orange-600 text-orange-600'
+                : pendingReferralsCount > 0
+                ? 'border-orange-500 text-orange-700 bg-orange-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
@@ -2247,8 +2810,14 @@ export default function App() {
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-200 text-neutral-700 font-bold">
               {referralsList.length}
             </span>
-            {referralsList.filter((r) => r.status === 'PENDING_REVIEW').length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Há indicações pendentes de análise"></span>
+            {pendingReferralsCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-600 text-white animate-pulse ring-2 ring-orange-300 shadow-xs"
+                title={`${pendingReferralsCount} motorista(s) indicado(s) aguardando análise`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{pendingReferralsCount} indicado(s)</span>
+              </span>
             )}
           </button>
 
@@ -2260,20 +2829,26 @@ export default function App() {
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'INCIDENTS'
                 ? 'border-orange-600 text-orange-600'
+                : totalPendenciasCount > 0
+                ? 'border-rose-500 text-rose-700 bg-rose-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
             <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
             <span>Pendências (M4.1)</span>
-            <span
-              className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                incidentsList.filter((i) => (i.stop.incident_resolution_status || 'OPEN') === 'OPEN').length > 0
-                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                  : 'bg-neutral-200 text-neutral-700'
-              }`}
-            >
-              {incidentsList.filter((i) => (i.stop.incident_resolution_status || 'OPEN') === 'OPEN').length}
-            </span>
+            {totalPendenciasCount > 0 ? (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-600 text-white animate-pulse ring-2 ring-rose-300 shadow-xs"
+                title={`${totalPendenciasCount} pendência(s) em aberto`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{totalPendenciasCount} aberta(s)</span>
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-200 text-neutral-700 font-bold">
+                0
+              </span>
+            )}
           </button>
 
           <button
@@ -2284,25 +2859,81 @@ export default function App() {
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'PAYMENTS'
                 ? 'border-orange-600 text-orange-600'
+                : pendingPaymentsCount > 0
+                ? 'border-amber-500 text-amber-700 bg-amber-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
             <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
             <span>Pagamentos (M4.1)</span>
-            {paymentsData?.summary.pendingRoutesCount ? (
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-300">
-                {paymentsData.summary.pendingRoutesCount}
+            {pendingPaymentsCount > 0 ? (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse ring-2 ring-amber-300 shadow-xs"
+                title={`${pendingPaymentsCount} rota(s) aguardando pagamento PIX`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{pendingPaymentsCount} a pagar</span>
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('SETTINGS')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+              activeTab === 'SETTINGS'
+                ? 'border-orange-600 text-orange-600'
+                : pendingTakeatCount > 0
+                ? 'border-red-500 text-red-700 bg-red-50/90 animate-pulse ring-2 ring-red-400 ring-offset-1 font-black shadow-xs'
+                : 'border-transparent text-neutral-500 hover:text-neutral-900'
+            }`}
+          >
+            <Calculator className={`w-3.5 h-3.5 ${pendingTakeatCount > 0 ? 'text-red-600' : 'text-orange-600'}`} />
+            <span>Motor de Fretes</span>
+            {pendingTakeatCount > 0 ? (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-black bg-red-600 text-white animate-bounce ring-2 ring-red-300 shadow-xs"
+                title={`${pendingTakeatCount} pedido(s) Takeat aguardando entregador`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{pendingTakeatCount} Takeat!</span>
               </span>
             ) : null}
           </button>
         </div>
       </header>
 
+      {/* Alerta Destacado: Pedidos Takeat Aguardando Entregador */}
+      {pendingTakeatCount > 0 && activeTab !== 'SETTINGS' && (
+        <div className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-3">
+          <div
+            onClick={() => setActiveTab('SETTINGS')}
+            className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 text-white shadow-md cursor-pointer hover:opacity-95 transition-all animate-pulse"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-xl">🛵</span>
+              <div>
+                <p className="text-xs font-black tracking-wide uppercase">
+                  {pendingTakeatCount === 1
+                    ? '1 Pedido Takeat Aceito Aguardando Entregador!'
+                    : `${pendingTakeatCount} Pedidos Takeat Aceitos Aguardando Entregador!`}
+                </p>
+                <p className="text-[11px] text-white/90">
+                  Clique aqui para abrir no Motor de Fretes, calcular o frete da Kantine e despachar para os motoboys.
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-bold bg-white text-red-700 px-3 py-1 rounded-lg shadow-sm whitespace-nowrap">
+              Despachar no Motor de Fretes &rarr;
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* ============================================================== */}
       {/* GLOBAL TOAST ALERTS                                            */}
       {/* ============================================================== */}
       {errorMessage && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-4">
+        <div className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-4">
           <div className="flex items-center justify-between p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold shadow-xs">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -2316,7 +2947,7 @@ export default function App() {
       )}
 
       {successMessage && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-4">
+        <div className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-4">
           <div className="flex items-center justify-between p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shadow-xs">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2333,7 +2964,7 @@ export default function App() {
       {/* TAB 1: ROTAS MULTI-ENTREGA (M2.1)                              */}
       {/* ============================================================== */}
       {activeTab === 'ROUTES' && (
-        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 mt-5 space-y-5">
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
           {/* Action Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
@@ -2344,33 +2975,74 @@ export default function App() {
                 </span>
               </h2>
               <div className="flex flex-wrap items-center gap-2 mt-2">
-                {(['ALL', 'DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'COMPLETED', 'CANCELLED'] as const).map((filter) => (
-                  <button
-                    key={filter}
-                    onClick={() => setRouteFilter(filter)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
-                      routeFilter === filter
-                        ? 'bg-neutral-900 text-white shadow-xs'
-                        : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    {filter === 'ALL' && 'Todas as Rotas'}
-                    {filter === 'DRAFT' && '📝 Rascunhos'}
-                    {filter === 'OFFERED' && '🚀 Em Oferta'}
-                    {filter === 'ACCEPTED' && '✅ Aceitas'}
-                    {filter === 'ARRIVED_PICKUP' && '📍 Na Coleta'}
-                    {filter === 'PICKED_UP' && '📦 Coletadas'}
-                    {filter === 'IN_TRANSIT' && '🛵 Em Rota'}
-                    {filter === 'COMPLETED' && '🏁 Concluídas'}
-                    {filter === 'CANCELLED' && '❌ Canceladas'}
-                  </button>
-                ))}
+                {(
+                  [
+                    { key: 'ALL', label: 'Todas as Rotas', icon: '📋' },
+                    { key: 'DRAFT', label: 'Rascunhos', icon: '📝' },
+                    { key: 'OFFERED', label: 'Em Oferta', icon: '🚀', isFlux: true },
+                    { key: 'ACCEPTED', label: 'Aceitas', icon: '✅', isFlux: true },
+                    { key: 'ARRIVED_PICKUP', label: 'Na Coleta', icon: '📍', isFlux: true },
+                    { key: 'PICKED_UP', label: 'Coletadas', icon: '📦', isFlux: true },
+                    { key: 'IN_TRANSIT', label: 'Em Rota', icon: '🛵/🚗', isFlux: true },
+                    { key: 'COMPLETED', label: 'Concluídas', icon: '🏁' },
+                    { key: 'CANCELLED', label: 'Canceladas', icon: '❌' },
+                  ] as const
+                ).map((f) => {
+                  const count = routeStatusCounts[f.key] || 0;
+                  const isFlux = (f as any).isFlux && count > 0;
+                  const isSelected = routeFilter === f.key;
+                  const isDraftAlert = f.key === 'DRAFT' && count > 0;
+
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => handleSelectRouteFilter(f.key as any)}
+                      className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                        isSelected
+                          ? isFlux
+                            ? 'bg-amber-600 text-white font-bold shadow-sm ring-2 ring-amber-400 animate-pulse'
+                            : 'bg-neutral-900 text-white shadow-xs'
+                          : isFlux
+                          ? 'bg-amber-100 text-amber-950 border-2 border-amber-400 font-bold animate-pulse ring-2 ring-amber-300 shadow-xs hover:bg-amber-200'
+                          : isDraftAlert
+                          ? 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
+                          : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                      }`}
+                      title={
+                        isFlux
+                          ? `${count} corrida(s) em fluxo ativo neste status`
+                          : `${count} corrida(s) com status ${f.label}`
+                      }
+                    >
+                      <span>{f.icon}</span>
+                      <span>{f.label}</span>
+
+                      {/* Contador e destaque piscante para status em fluxo ativo */}
+                      {isFlux ? (
+                        <span className="inline-flex items-center gap-1 ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-white ring-1 ring-amber-300">
+                          <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                          <span>{count} em fluxo</span>
+                        </span>
+                      ) : count > 0 ? (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                            isSelected
+                              ? 'bg-white/20 text-white'
+                              : 'bg-neutral-200/90 text-neutral-700'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
             <div className="flex items-center gap-2 self-start sm:self-auto">
               <button
-                onClick={fetchRoutes}
+                onClick={() => fetchRoutes()}
                 className="p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 text-neutral-700 transition-colors shadow-xs"
                 title="Atualizar lista"
               >
@@ -2390,28 +3062,29 @@ export default function App() {
           <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-neutral-50/80 border-b border-neutral-200 text-neutral-600 font-bold uppercase tracking-wider text-[10px]">
+                <thead className="bg-neutral-50/90 border-b border-neutral-200 text-neutral-600 font-bold uppercase tracking-wider text-[10px]">
                   <tr>
-                    <th className="px-4 py-3 whitespace-nowrap">ID / Status</th>
-                    <th className="px-4 py-3">Ponto de Coleta</th>
-                    <th className="px-4 py-3">Paradas / Entregas</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Prazo Final</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Frete Total</th>
-                    <th className="px-4 py-3 whitespace-nowrap">Veículos Aceitos</th>
-                    <th className="px-4 py-3 text-right whitespace-nowrap">Ações</th>
+                    <th className="px-3 py-3 whitespace-nowrap w-[110px] min-w-[100px]">ID / Status</th>
+                    <th className="px-3 py-3 min-w-[140px] max-w-[200px]">Ponto de Coleta</th>
+                    <th className="px-3 py-3 min-w-[220px]">Paradas & Código do Cliente</th>
+                    <th className="px-3 py-3 whitespace-nowrap w-[100px] min-w-[95px]">Prazo Final</th>
+                    <th className="px-3 py-3 whitespace-nowrap w-[100px] min-w-[95px]">Frete Total</th>
+                    <th className="px-3 py-3 whitespace-nowrap w-[140px] min-w-[135px]">Frete Motorista</th>
+                    <th className="px-3 py-3 whitespace-nowrap w-[135px] min-w-[125px]">Veículos Aceitos</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap sticky right-0 bg-neutral-50/95 backdrop-blur-xs z-10 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.06)] border-l border-neutral-200/80 w-[180px] min-w-[170px]">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100">
                   {loadingRoutes ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-neutral-400">
+                      <td colSpan={8} className="px-4 py-12 text-center text-neutral-400">
                         <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-neutral-400" />
                         Carregando rotas...
                       </td>
                     </tr>
                   ) : routesList.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-neutral-400">
+                      <td colSpan={8} className="px-4 py-12 text-center text-neutral-400">
                         Nenhuma rota encontrada para este filtro.
                       </td>
                     </tr>
@@ -2422,41 +3095,125 @@ export default function App() {
                         ? route.stops.map((s) => s.destination_neighborhood).join(' → ')
                         : '1 parada';
 
+                      const driverAllocated =
+                        route.accepted_driver ||
+                        drivers.find((d) => d.id === route.accepted_driver_id);
+
+                      const isCarTransit =
+                        driverAllocated?.vehicle_type === 'CAR' ||
+                        (route.accepted_vehicle_types?.length === 1 && route.accepted_vehicle_types[0] === 'CAR') ||
+                        (route.accepted_vehicle_types?.includes('CAR') && !route.accepted_vehicle_types?.includes('MOTO'));
+
+                      const hasRouteIssue =
+                        route.stops?.some(
+                          (s) => (s.status === 'INCIDENT' || s.incident_type) && s.incident_resolution_status !== 'RESOLVED'
+                        );
+                      const hasPendingPayment =
+                        route.status === 'COMPLETED' && (!route.payment_status || route.payment_status === 'PENDING');
+
+                      const parsedMaterialChange = (() => {
+                        if (!route.pending_material_change) return null;
+                        try {
+                          return typeof route.pending_material_change === 'string'
+                            ? JSON.parse(route.pending_material_change)
+                            : route.pending_material_change;
+                        } catch {
+                          return null;
+                        }
+                      })();
+                      const isProposalRejected = parsedMaterialChange?.status === 'REJECTED';
+                      const isProposalPending = route.change_pending_driver_approval || parsedMaterialChange?.status === 'PENDING';
+
                       return (
-                        <tr key={route.id} className="hover:bg-neutral-50/50 transition-colors">
-                          <td className="px-4 py-3.5 whitespace-nowrap">
+                        <tr
+                          key={route.id}
+                          className={`group transition-colors ${
+                            isProposalRejected
+                              ? 'bg-amber-50/70 hover:bg-amber-100/70 border-l-4 border-l-amber-500 ring-1 ring-amber-400/80'
+                              : hasRouteIssue
+                              ? 'bg-rose-50/60 hover:bg-rose-100/60 border-l-4 border-l-rose-500 ring-1 ring-rose-300/60'
+                              : hasPendingPayment
+                              ? 'bg-amber-50/60 hover:bg-amber-100/60 border-l-4 border-l-amber-500 ring-1 ring-amber-300/60'
+                              : 'hover:bg-neutral-50/60'
+                          }`}
+                        >
+                          <td className="px-3 py-3 whitespace-nowrap">
                             <div className="font-mono font-bold text-sm text-neutral-900">
                               #{route.id}
                             </div>
-                            <div className="mt-1">
-                              {route.status === 'DRAFT' && (
+                            <div className="mt-1 space-y-1">
+                              {isProposalRejected && (
+                                <div>
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-600 text-white animate-pulse ring-2 ring-amber-300 shadow-xs cursor-pointer"
+                                    onClick={() => setEditingRouteId(route.id)}
+                                    title="O motorista recusou a proposta anterior. As alterações foram salvas para ajuste."
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                    ⚠️ PROPOSTA RECUSADA
+                                  </span>
+                                </div>
+                              )}
+                              {isProposalPending && (
+                                <div>
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white animate-pulse ring-2 ring-blue-300 shadow-xs"
+                                    title="Proposta enviada ao motorista via Telegram. Aguardando aprovação."
+                                  >
+                                    <Clock className="w-3 h-3 text-white" />
+                                    EM APROVAÇÃO
+                                  </span>
+                                </div>
+                              )}
+                              {hasRouteIssue && (
+                                <div>
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-600 text-white animate-pulse ring-2 ring-rose-300 shadow-xs">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                    ⚠️ PENDÊNCIA
+                                  </span>
+                                </div>
+                              )}
+                              {hasPendingPayment && (
+                                <div>
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse ring-2 ring-amber-300 shadow-xs">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                    💰 REPASSE PENDENTE
+                                  </span>
+                                </div>
+                              )}
+                               {route.status === 'DRAFT' && (
                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                  RASCUNHO
+                                  📝 RASCUNHO
                                 </span>
                               )}
                               {route.status === 'OFFERED' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                                  EM OFERTA
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white animate-pulse ring-2 ring-blue-300 shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                  🚀 EM OFERTA
                                 </span>
                               )}
                               {route.status === 'ACCEPTED' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                  ACEITA
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white animate-pulse ring-2 ring-purple-300 shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                  ✅ ACEITA
                                 </span>
                               )}
                               {route.status === 'ARRIVED_PICKUP' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-600 text-white animate-pulse ring-2 ring-indigo-300 shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
                                   📍 NA COLETA
                                 </span>
                               )}
                               {route.status === 'PICKED_UP' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-600 text-white animate-pulse ring-2 ring-amber-300 shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
                                   📦 COLETADA
                                 </span>
                               )}
                               {route.status === 'IN_TRANSIT' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                                  🛵 EM ROTA
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white animate-pulse ring-2 ring-blue-300 shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                  {isCarTransit ? '🚗 EM ROTA' : '🛵 EM ROTA'}
                                 </span>
                               )}
                               {route.status === 'COMPLETED' && (
@@ -2469,10 +3226,19 @@ export default function App() {
                                   CANCELADA
                                 </span>
                               )}
+
+                              {/* Motorista Alocado com a Corrida na Linha */}
+                              {driverAllocated && (
+                                <div className="text-[10px] text-neutral-600 font-semibold flex items-center gap-1">
+                                  <span className="text-neutral-400">Motorista:</span>
+                                  <strong className="text-neutral-900">{driverAllocated.name}</strong>
+                                  <span className="text-neutral-500">({driverAllocated.vehicle_type === 'CAR' ? '🚗' : '🏍️'})</span>
+                                </div>
+                              )}
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5 max-w-[220px] 2xl:max-w-[280px]">
+                          <td className="px-3 py-3 max-w-[200px]">
                             <div className="font-bold text-neutral-900 flex items-center gap-1.5 flex-wrap">
                               <MapPin className="w-3.5 h-3.5 text-orange-600 shrink-0" />
                               <span className="truncate">{route.pickup_name}</span>
@@ -2491,44 +3257,192 @@ export default function App() {
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5 max-w-[220px] 2xl:max-w-[280px]">
-                            <div className="flex items-center gap-1.5 font-bold text-neutral-900">
-                              <Package className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                              <span>{stopsCount} {stopsCount === 1 ? 'Parada' : 'Paradas'}</span>
+                          {/* Paradas & Código do Cliente (Visível Diretamente) */}
+                          <td className="px-3 py-3 min-w-[220px]">
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              <div className="flex items-center gap-1 font-bold text-neutral-900">
+                                <Package className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+                                <span>{stopsCount} {stopsCount === 1 ? 'Parada' : 'Paradas'}</span>
+                              </div>
                             </div>
-                            <div className="text-[11px] text-neutral-500 font-medium truncate mt-0.5">
-                              {stopsSummary}
+
+                            <div className="space-y-1">
+                              {route.stops && route.stops.length > 0 ? (
+                                route.stops.map((stop, sIdx) => {
+                                  const customerInfo = extractCustomerData(stop);
+                                  return (
+                                    <div
+                                      key={stop.id || sIdx}
+                                      className="p-1.5 rounded-lg bg-neutral-50 border border-neutral-200/90 text-xs flex items-center justify-between gap-2"
+                                    >
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-semibold text-neutral-900 text-[11px] truncate flex items-center gap-1">
+                                          <span className="font-mono text-[9px] text-neutral-400">#{sIdx + 1}</span>
+                                          <span className="truncate">{stop.destination_neighborhood || stop.destination_address}</span>
+                                        </div>
+
+                                        {/* Dados do Cliente: Nome e Telefone Visíveis em Todos os Status */}
+                                        {(customerInfo.name || customerInfo.phone) && (
+                                          <div className="text-[10px] text-neutral-700 flex items-center gap-1.5 truncate mt-0.5">
+                                            {customerInfo.name && (
+                                              <span className="font-bold text-neutral-900 truncate flex items-center gap-0.5">
+                                                <UserCheck className="w-3 h-3 text-orange-600 shrink-0" />
+                                                <span className="truncate">{customerInfo.name}</span>
+                                              </span>
+                                            )}
+                                            {customerInfo.phone && (
+                                              <a
+                                                href={`https://wa.me/55${customerInfo.rawDigits || customerInfo.phone.replace(/\D/g, '')}`}
+                                                target="_blank"
+                                                rel="noreferrer noopener"
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="inline-flex items-center gap-0.5 text-emerald-700 hover:text-emerald-800 font-semibold bg-emerald-50 px-1 rounded hover:bg-emerald-100 transition-colors shrink-0"
+                                                title="Abrir WhatsApp com cliente"
+                                              >
+                                                <Phone className="w-2.5 h-2.5 shrink-0 text-emerald-600" />
+                                                <span>{customerInfo.phone}</span>
+                                              </a>
+                                            )}
+                                          </div>
+                                        )}
+
+                                        <div className="text-[10px] text-neutral-500 truncate max-w-[150px]">
+                                          {stop.cargo_description}
+                                        </div>
+                                      </div>
+
+                                      {/* Código do Cliente / PIN em Destaque */}
+                                      {stop.delivery_mode === 'IN_PERSON' ? (
+                                        <div className="shrink-0 text-right">
+                                          <span className="text-[9px] text-neutral-400 block font-medium">Cód. Cliente</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => stop.pin_code && copyToClipboard(stop.pin_code, `pin_${stop.id}`)}
+                                            onDoubleClick={(e) => {
+                                              e.stopPropagation();
+                                              handleOpenCustomerWhatsApp(stop);
+                                            }}
+                                            className="inline-flex items-center gap-1 font-mono font-bold text-xs bg-amber-100 hover:bg-amber-200 text-amber-950 px-2 py-0.5 rounded border border-amber-300 shadow-2xs transition-colors cursor-pointer select-none"
+                                            title="Clique simples: Copiar PIN | Clique duplo: Enviar mensagem amigável no WhatsApp para o cliente"
+                                          >
+                                            <span>🔑</span>
+                                            <strong>{stop.pin_code || '—'}</strong>
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="shrink-0 text-right">
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 text-[10px]">
+                                            📷 Foto
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <div className="text-[11px] text-neutral-500 font-medium truncate">
+                                  {stopsSummary}
+                                </div>
+                              )}
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5 font-semibold text-neutral-800 whitespace-nowrap">
+                          <td className="px-3 py-3 font-semibold text-neutral-800 whitespace-nowrap">
                             <div className="flex items-center gap-1">
                               <Clock className="w-3.5 h-3.5 text-neutral-400" />
                               <span>{route.final_deadline}</span>
                             </div>
                           </td>
 
-                          <td className="px-4 py-3.5 whitespace-nowrap">
-                            <span className="font-bold text-sm text-emerald-700">
+                          <td className="px-3 py-3 whitespace-nowrap w-[100px] min-w-[95px]">
+                            <span className="font-bold text-sm text-neutral-800 font-mono">
                               R$ {route.total_fee}
                             </span>
                           </td>
 
-                          <td className="px-4 py-3.5 whitespace-nowrap">
-                            {renderCompactVehicleBadges(route.accepted_vehicle_types)}
+                          {/* Frete Motorista (Líquido a Receber) */}
+                          <td className="px-3 py-3 whitespace-nowrap w-[140px] min-w-[135px]">
+                            {(() => {
+                              const driverFee = calculateDriverFee(route);
+                              return (
+                                <span className="inline-flex items-center gap-1 font-mono font-bold text-xs sm:text-sm text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 whitespace-nowrap shadow-2xs">
+                                  <span>🛵</span>
+                                  <span>R$ {driverFee.toFixed(2).replace('.', ',')}</span>
+                                </span>
+                              );
+                            })()}
                           </td>
 
-                          <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                          {/* Veículos Aceitos & Alteração Rápida em Rascunho */}
+                          <td className="px-3 py-3 whitespace-nowrap w-[140px]">
+                            <div className="space-y-1.5">
+                              <div>{renderCompactVehicleBadges(route.accepted_vehicle_types)}</div>
+
+                              {/* Alteração rápida do veículo quando em Rascunho */}
+                              {route.status === 'DRAFT' && (
+                                <div className="flex items-center gap-1 pt-0.5">
+                                  <span className="text-[9px] text-neutral-400 font-semibold">Mudar:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateVehicleType(route.id, ['CAR'])}
+                                    title="Alterar para Apenas Carro"
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition-colors ${
+                                      route.accepted_vehicle_types?.length === 1 && route.accepted_vehicle_types[0] === 'CAR'
+                                        ? 'bg-orange-600 text-white border-orange-600'
+                                        : 'bg-white hover:bg-neutral-100 text-neutral-700 border-neutral-300'
+                                    }`}
+                                  >
+                                    🚗 Carro
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateVehicleType(route.id, ['MOTO', 'MOTO_WITH_BAG'])}
+                                    title="Alterar para Apenas Moto"
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition-colors ${
+                                      !route.accepted_vehicle_types?.includes('CAR') && route.accepted_vehicle_types?.includes('MOTO')
+                                        ? 'bg-orange-600 text-white border-orange-600'
+                                        : 'bg-white hover:bg-neutral-100 text-neutral-700 border-neutral-300'
+                                    }`}
+                                  >
+                                    🏍️ Moto
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateVehicleType(route.id, ['CAR', 'MOTO', 'MOTO_WITH_BAG'])}
+                                    title="Alterar para Todos os Veículos"
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition-colors ${
+                                      route.accepted_vehicle_types?.includes('CAR') && route.accepted_vehicle_types?.includes('MOTO')
+                                        ? 'bg-orange-600 text-white border-orange-600'
+                                        : 'bg-white hover:bg-neutral-100 text-neutral-700 border-neutral-300'
+                                    }`}
+                                  >
+                                    🌐 Todos
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-3 py-3 text-right whitespace-nowrap sticky right-0 bg-white group-hover:bg-neutral-50/95 transition-colors z-10 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.06)] border-l border-neutral-200/80 w-[180px] min-w-[170px]">
                             <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                               <button
                                 onClick={() => openRouteDetails(route.id)}
-                                className="px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap"
+                                className="px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap shadow-2xs"
                               >
                                 Detalhes
                               </button>
 
-                              {/* M4.4: Botão Editar (A1) */}
-                              {['DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(route.status) ? (
+                              {/* M4.4: Botão Editar / Reajustar Proposta (A1) */}
+                              {isProposalRejected ? (
+                                <button
+                                  onClick={() => setEditingRouteId(route.id)}
+                                  className="px-2.5 py-1.5 rounded-lg border-2 border-amber-500 bg-amber-50 hover:bg-amber-100 text-amber-950 text-[11px] font-black transition-colors flex items-center gap-1 whitespace-nowrap shadow-xs animate-pulse ring-2 ring-amber-300 cursor-pointer"
+                                  title="Motorista recusou a proposta anterior. Clique para reajustar o frete/paradas e reenviar a proposta."
+                                >
+                                  <Pencil className="w-3 h-3 text-amber-700" />
+                                  <span>Reajustar Proposta</span>
+                                </button>
+                              ) : ['DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(route.status) ? (
                                 <button
                                   onClick={() => setEditingRouteId(route.id)}
                                   className="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold transition-colors flex items-center gap-1 whitespace-nowrap shadow-2xs"
@@ -2563,15 +3477,39 @@ export default function App() {
                                 </button>
                               )}
 
-                              {(route.status === 'DRAFT' || route.status === 'OFFERED') && (
+                              {route.status !== 'CANCELLED' && (
                                 <button
-                                  onClick={() => handleCancelRoute(route.id)}
+                                  type="button"
+                                  onClick={() => openCancelModal(route)}
                                   disabled={cancellingId === route.id}
-                                  className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold transition-colors whitespace-nowrap"
+                                  className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Cancelar corrida em qualquer status e encaminhar para Pendências Operacionais"
                                 >
-                                  Cancelar
+                                  {cancellingId === route.id ? 'Cancelando...' : 'Cancelar'}
                                 </button>
                               )}
+
+                              {route.status !== 'COMPLETED' &&
+                                route.status !== 'CANCELLED' &&
+                                (hasRouteIssue ||
+                                  route.stops?.every(
+                                    (s) => s.status === 'DELIVERED' || s.status === 'INCIDENT'
+                                  )) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFinalizeRoute(route.id)}
+                                    disabled={finalizingRouteId === route.id}
+                                    className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-xs transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                                    title="Finalizar corrida tratada e liberar para pagamento PIX"
+                                  >
+                                    <CheckCircle className="w-3 h-3" />
+                                    <span>
+                                      {finalizingRouteId === route.id
+                                        ? '...'
+                                        : 'Finalizar e Pagar'}
+                                    </span>
+                                  </button>
+                                )}
                             </div>
                           </td>
                         </tr>
@@ -2589,7 +3527,7 @@ export default function App() {
       {/* TAB 2: PONTOS DE COLETA (M2.1 Seção 12)                        */}
       {/* ============================================================== */}
       {activeTab === 'LOCATIONS' && (
-        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 mt-5 space-y-5">
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -2707,7 +3645,7 @@ export default function App() {
       {/* TAB 3: MOTORISTAS (M1 & M1.1)                                  */}
       {/* ============================================================== */}
       {activeTab === 'DRIVERS' && (
-        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 mt-5 space-y-5">
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -2717,19 +3655,33 @@ export default function App() {
                 {(
                   [
                     { key: 'ALL', label: 'Todos' },
-                    { key: 'PENDING', label: '⏳ Aguardando Aprovação' },
+                    {
+                      key: 'PENDING',
+                      label:
+                        pendingApprovalDriversCount > 0
+                          ? `⏳ Aguardando Aprovação (${pendingApprovalDriversCount})`
+                          : '⏳ Aguardando Aprovação',
+                      isAlert: pendingApprovalDriversCount > 0,
+                    },
                     { key: 'ACTIVE', label: '✅ Ativos' },
                     { key: 'BLOCKED', label: '🚫 Bloqueados' },
                     { key: 'EXCLUDED', label: '📁 Excluídos (Processo Zerado)' },
                     { key: 'REACTIVATION_REQUESTED', label: '🔄 Pedidos Reativação' },
                   ] as const
-                ).map((item) => (
+                ).map((item: any) => (
                   <button
                     key={item.key}
-                    onClick={() => setDriverFilter(item.key as any)}
+                    onClick={() => {
+                      setDriverFilter(item.key as any);
+                      fetchDrivers(item.key as any);
+                    }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                       driverFilter === item.key
-                        ? 'bg-neutral-900 text-white shadow-xs'
+                        ? item.isAlert
+                          ? 'bg-amber-600 text-white font-bold shadow-sm ring-2 ring-amber-400 animate-pulse'
+                          : 'bg-neutral-900 text-white shadow-xs'
+                        : item.isAlert
+                        ? 'bg-amber-100 text-amber-900 border-2 border-amber-400 font-bold animate-pulse ring-2 ring-amber-300'
                         : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                     }`}
                   >
@@ -2741,7 +3693,7 @@ export default function App() {
 
             <div className="flex items-center gap-2 self-start sm:self-auto">
               <button
-                onClick={fetchDrivers}
+                onClick={() => fetchDrivers()}
                 className="p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 text-neutral-700 transition-colors shadow-xs"
                 title="Atualizar lista"
               >
@@ -2879,8 +3831,20 @@ export default function App() {
                 ) : (
                   drivers.map((driver) => {
                     const isDriverExcluded = driver.status === 'EXCLUDED' || driver.is_excluded;
+                    const isPendingApproval =
+                      driver.status === 'PENDING' ||
+                      driver.reactivation_requested ||
+                      driver.reinclusion_requested;
+
                     return (
-                      <tr key={driver.id} className="hover:bg-neutral-50/50 transition-colors">
+                      <tr
+                        key={driver.id}
+                        className={`transition-colors ${
+                          isPendingApproval
+                            ? 'bg-amber-50/80 hover:bg-amber-100/70 border-l-4 border-l-amber-500 ring-1 ring-amber-300/80'
+                            : 'hover:bg-neutral-50/50'
+                        }`}
+                      >
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-neutral-900">{driver.name}</span>
@@ -2902,10 +3866,7 @@ export default function App() {
                           {driver.phone}
                         </td>
                         <td className="px-4 py-3.5">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-100 text-neutral-800 font-medium text-[11px] border border-neutral-200">
-                            <span>{VEHICLE_DISPLAY[driver.vehicle_type]?.icon}</span>
-                            <span>{VEHICLE_DISPLAY[driver.vehicle_type]?.label || driver.vehicle_type}</span>
-                          </span>
+                          {renderDriverVehicleBadges(driver.vehicle_type)}
                         </td>
                         <td className="px-4 py-3.5">
                           <div className="space-y-1">
@@ -2915,8 +3876,9 @@ export default function App() {
                               </span>
                             )}
                             {driver.status === 'PENDING' && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                PENDENTE
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow-xs animate-pulse ring-2 ring-amber-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                AGUARDANDO APROVAÇÃO
                               </span>
                             )}
                             {driver.status === 'BLOCKED' && (
@@ -2991,9 +3953,10 @@ export default function App() {
                               <button
                                 onClick={() => handleApproveDriver(driver.id)}
                                 disabled={actionLoadingId === driver.id}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold cursor-pointer animate-pulse ring-2 ring-emerald-400 shadow-sm flex items-center gap-1"
                               >
-                                Aprovar
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Aprovar</span>
                               </button>
                             )}
 
@@ -3069,7 +4032,7 @@ export default function App() {
       {/* TAB 4: INDICAÇÕES DE MOTORISTAS (M1.2)                         */}
       {/* ============================================================== */}
       {activeTab === 'REFERRALS' && (
-        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 mt-5 space-y-5">
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -3079,19 +4042,33 @@ export default function App() {
                 {(
                   [
                     { key: 'ALL', label: 'Todas' },
-                    { key: 'PENDING_REVIEW', label: '⏳ Em Análise' },
+                    {
+                      key: 'PENDING_REVIEW',
+                      label:
+                        pendingReferralsCount > 0
+                          ? `⏳ Em Análise (${pendingReferralsCount})`
+                          : '⏳ Em Análise',
+                      isAlert: pendingReferralsCount > 0,
+                    },
                     { key: 'APPROVED', label: '✅ Aprovadas' },
                     { key: 'INVITE_USED', label: '📲 Cadastro Realizado' },
                     { key: 'REJECTED', label: '🚫 Não Aprovadas' },
                     { key: 'EXPIRED', label: '⌛ Expiradas' },
                   ] as const
-                ).map((f) => (
+                ).map((f: any) => (
                   <button
                     key={f.key}
-                    onClick={() => setReferralFilter(f.key as any)}
+                    onClick={() => {
+                      setReferralFilter(f.key as any);
+                      fetchReferrals(f.key as any);
+                    }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                       referralFilter === f.key
-                        ? 'bg-neutral-900 text-white shadow-xs'
+                        ? f.isAlert
+                          ? 'bg-orange-600 text-white font-bold shadow-sm ring-2 ring-orange-400 animate-pulse'
+                          : 'bg-neutral-900 text-white shadow-xs'
+                        : f.isAlert
+                        ? 'bg-orange-100 text-orange-950 border-2 border-orange-400 font-bold animate-pulse ring-2 ring-orange-300'
                         : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                     }`}
                   >
@@ -3113,7 +4090,7 @@ export default function App() {
                 className="px-3 py-2 text-xs border border-neutral-300 rounded-xl bg-white w-48 sm:w-64"
               />
               <button
-                onClick={fetchReferrals}
+                onClick={() => fetchReferrals()}
                 className="p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 text-neutral-700 transition-colors shadow-xs"
                 title="Atualizar lista"
               >
@@ -3173,8 +4150,16 @@ export default function App() {
                   </tr>
                 ) : (
                   referralsList.map((ref) => {
+                    const isPending = ref.status === 'PENDING_REVIEW';
                     return (
-                      <tr key={ref.id} className="hover:bg-neutral-50/50 transition-colors">
+                      <tr
+                        key={ref.id}
+                        className={`transition-colors ${
+                          isPending
+                            ? 'bg-orange-50/80 hover:bg-orange-100/70 border-l-4 border-l-orange-500 ring-1 ring-orange-300/80'
+                            : 'hover:bg-neutral-50/50'
+                        }`}
+                      >
                         <td className="px-4 py-3 font-semibold text-neutral-900">
                           <div>{ref.referred_name}</div>
                           <div className="text-[11px] font-mono text-neutral-500 font-normal">
@@ -3197,9 +4182,8 @@ export default function App() {
                                   {ref.referred_by_driver.status}
                                 </span>
                               </div>
-                              <div className="text-[11px] text-neutral-500 flex items-center gap-1">
-                                <span>{VEHICLE_DISPLAY[ref.referred_by_driver.vehicle_type]?.icon}</span>
-                                <span>{VEHICLE_DISPLAY[ref.referred_by_driver.vehicle_type]?.label}</span>
+                              <div className="text-[11px] text-neutral-500 mt-0.5">
+                                {renderDriverVehicleBadges(ref.referred_by_driver.vehicle_type)}
                               </div>
                             </div>
                           ) : (
@@ -3212,25 +4196,29 @@ export default function App() {
                         </td>
 
                         <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              ref.status === 'PENDING_REVIEW'
-                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                : ref.status === 'APPROVED'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                : ref.status === 'INVITE_USED'
-                                ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                                : ref.status === 'REJECTED'
-                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                                : 'bg-neutral-100 text-neutral-600 border border-neutral-200'
-                            }`}
-                          >
-                            {ref.status === 'PENDING_REVIEW' && 'EM ANÁLISE'}
-                            {ref.status === 'APPROVED' && 'APROVADA — CONVITE ATIVO'}
-                            {ref.status === 'INVITE_USED' && 'CADASTRO REALIZADO'}
-                            {ref.status === 'REJECTED' && 'NÃO APROVADA'}
-                            {ref.status === 'EXPIRED' && 'CONVITE EXPIRADO'}
-                          </span>
+                          {ref.status === 'PENDING_REVIEW' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-orange-600 text-white shadow-xs animate-pulse ring-2 ring-orange-300">
+                              <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                              MOTORISTA INDICADO — EM ANÁLISE
+                            </span>
+                          ) : (
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                ref.status === 'APPROVED'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : ref.status === 'INVITE_USED'
+                                  ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                                  : ref.status === 'REJECTED'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : 'bg-neutral-100 text-neutral-600 border border-neutral-200'
+                              }`}
+                            >
+                              {ref.status === 'APPROVED' && 'APROVADA — CONVITE ATIVO'}
+                              {ref.status === 'INVITE_USED' && 'CADASTRO REALIZADO'}
+                              {ref.status === 'REJECTED' && 'NÃO APROVADA'}
+                              {ref.status === 'EXPIRED' && 'CONVITE EXPIRADO'}
+                            </span>
+                          )}
                           {ref.rejection_reason && (
                             <div className="text-[10px] text-rose-600 mt-0.5 italic">
                               Motivo: {ref.rejection_reason}
@@ -3291,9 +4279,9 @@ export default function App() {
                                 type="button"
                                 onClick={() => handleApproveReferral(ref.id)}
                                 disabled={actionLoadingReferralId === ref.id}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-xs transition-colors flex items-center gap-1"
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-sm transition-colors flex items-center gap-1 animate-pulse ring-2 ring-emerald-400 cursor-pointer"
                               >
-                                <Check className="w-3 h-3" />
+                                <Check className="w-3.5 h-3.5" />
                                 <span>Aprovar</span>
                               </button>
                               <button
@@ -3321,7 +4309,7 @@ export default function App() {
       {/* TAB 5: PENDÊNCIAS OPERACIONAIS (M4.1 PARTE B)                  */}
       {/* ============================================================== */}
       {activeTab === 'INCIDENTS' && (
-        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 mt-5 space-y-5">
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/80 backdrop-blur p-4 rounded-2xl border border-neutral-200 shadow-xs">
             <div>
               <h2 className="text-base font-bold text-neutral-950 flex items-center gap-2">
@@ -3335,16 +4323,30 @@ export default function App() {
                 {(
                   [
                     { key: 'ALL', label: 'Todas as Ocorrências' },
-                    { key: 'OPEN', label: '🔴 Não Resolvidas' },
+                    {
+                      key: 'OPEN',
+                      label:
+                        openIncidentsCount > 0
+                          ? `🔴 Não Resolvidas (${openIncidentsCount})`
+                          : '🔴 Não Resolvidas',
+                      isAlert: openIncidentsCount > 0,
+                    },
                     { key: 'RESOLVED', label: '🟢 Resolvidas' },
                   ] as const
-                ).map((f) => (
+                ).map((f: any) => (
                   <button
                     key={f.key}
-                    onClick={() => setIncidentResolutionFilter(f.key as any)}
+                    onClick={() => {
+                      setIncidentResolutionFilter(f.key as any);
+                      fetchIncidents(f.key as any);
+                    }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                       incidentResolutionFilter === f.key
-                        ? 'bg-neutral-900 text-white shadow-xs'
+                        ? f.isAlert
+                          ? 'bg-rose-600 text-white font-bold shadow-sm ring-2 ring-rose-400 animate-pulse'
+                          : 'bg-neutral-900 text-white shadow-xs'
+                        : f.isAlert
+                        ? 'bg-rose-100 text-rose-950 border-2 border-rose-400 font-bold animate-pulse ring-2 ring-rose-300'
                         : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                     }`}
                   >
@@ -3366,7 +4368,7 @@ export default function App() {
                 className="px-3 py-2 text-xs border border-neutral-300 rounded-xl bg-white w-48 sm:w-64"
               />
               <button
-                onClick={fetchIncidents}
+                onClick={() => fetchIncidents()}
                 className="p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 text-neutral-700 transition-colors shadow-xs"
                 title="Atualizar lista"
               >
@@ -3409,10 +4411,22 @@ export default function App() {
                     const resOption = INCIDENT_RESOLUTION_OPTIONS.find((o) => o.type === item.stop.resolution_type);
 
                     return (
-                      <tr key={item.stop.id} className="hover:bg-neutral-50/60 transition-colors">
+                      <tr
+                        key={item.stop.id}
+                        className={`transition-colors ${
+                          !isResolved
+                            ? 'bg-rose-50/80 hover:bg-rose-100/70 border-l-4 border-l-rose-500 ring-1 ring-rose-300/80'
+                            : 'hover:bg-neutral-50/60'
+                        }`}
+                      >
                         <td className="px-4 py-3 font-semibold text-neutral-900">
-                          <div className="font-mono text-sm text-neutral-950 font-bold">
-                            Rota #{item.route.id}
+                          <div className="font-mono text-sm text-neutral-950 font-bold flex items-center gap-1.5">
+                            <span>Rota #{item.route.id}</span>
+                            {item.route.status === 'CANCELLED' && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                CANCELADA
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-neutral-500 font-normal">
                             Parada #{item.stop.sequence}
@@ -3430,7 +4444,7 @@ export default function App() {
                               </div>
                             </div>
                           ) : (
-                            <span className="text-neutral-400">Não informado</span>
+                            <span className="text-neutral-400">Sem motorista</span>
                           )}
                         </td>
 
@@ -3471,6 +4485,11 @@ export default function App() {
                                 <span>{resOption?.icon}</span>
                                 <span>{resOption?.label || item.stop.resolution_type}</span>
                               </div>
+                              {item.stop.compensation_amount != null && (
+                                <div className="mt-1 text-[11px] font-mono font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block">
+                                  💰 Repasse: R$ {parseFloat(String(item.stop.compensation_amount)).toFixed(2)}
+                                </div>
+                              )}
                               {item.stop.resolution_note && (
                                 <div className="text-[11px] text-neutral-600 italic mt-0.5">
                                   "{item.stop.resolution_note}"
@@ -3482,29 +4501,109 @@ export default function App() {
                             </div>
                           ) : (
                             <div>
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                                <span>🔴</span>
-                                <span>NÃO RESOLVIDO</span>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-600 text-white shadow-xs animate-pulse ring-2 ring-rose-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                PENDÊNCIA ABERTA
                               </span>
-                              <div className="text-[11px] text-rose-600 font-medium mt-1">
-                                Encomenda retida aguardando destino
+                              <div className="text-[11px] text-rose-700 font-bold mt-1">
+                                {item.route.status === 'CANCELLED'
+                                  ? '⚠️ Corrida cancelada: definir destinação e repasse'
+                                  : '⚠️ Encomenda retida aguardando resolução'}
                               </div>
                             </div>
                           )}
                         </td>
 
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenResolveIncidentModal(item)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-xs ${
-                              isResolved
-                                ? 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'
-                                : 'bg-orange-600 hover:bg-orange-700 text-white'
-                            }`}
-                          >
-                            {isResolved ? 'Alterar Resolução' : 'Resolver'}
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {(() => {
+                              let isRejected = false;
+                              if (item.route.pending_material_change) {
+                                try {
+                                  const parsed =
+                                    typeof item.route.pending_material_change === 'string'
+                                      ? JSON.parse(item.route.pending_material_change)
+                                      : item.route.pending_material_change;
+                                  if (parsed?.status === 'REJECTED') isRejected = true;
+                                } catch {}
+                              }
+                              if (!isRejected) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingRouteId(item.route.id)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer animate-pulse ring-2 ring-amber-300"
+                                  title="O motorista recusou a proposta anterior. Clique para reajustar o frete/paradas e reenviar a proposta."
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                  <span>Reajustar Proposta</span>
+                                </button>
+                              );
+                            })()}
+
+                            {item.route.status !== 'CANCELLED' && (
+                              <button
+                                type="button"
+                                onClick={() => openCancelModal(item.route)}
+                                disabled={cancellingId === item.route.id}
+                                className="px-2.5 py-1.5 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs shadow-xs transition-colors cursor-pointer"
+                                title="Cancelar corrida em qualquer status"
+                              >
+                                Cancelar Corrida
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenResolveIncidentModal(item)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-xs ${
+                                isResolved
+                                  ? 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'
+                                  : 'bg-orange-600 hover:bg-orange-700 text-white animate-pulse ring-2 ring-orange-400 flex items-center gap-1 cursor-pointer'
+                              }`}
+                            >
+                              {!isResolved && <AlertTriangle className="w-3.5 h-3.5" />}
+                              <span>{isResolved ? 'Alterar Resolução' : 'Resolver & Valor'}</span>
+                            </button>
+
+                            {item.route.status === 'CANCELLED' && item.route.accepted_driver_id && (
+                              item.route.payment_status === 'PAID' ? (
+                                <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                                  ✅ Repasse Pago
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveTab('PAYMENTS');
+                                    setPaymentFilter('PENDING');
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                                  title="Ir para a aba de Pagamentos para repassar o valor ao motorista"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Pagar Repasse (R$ {item.route.total_fee})</span>
+                                </button>
+                              )
+                            )}
+
+                            {item.route.status !== 'COMPLETED' && item.route.status !== 'CANCELLED' && (
+                              <button
+                                type="button"
+                                onClick={() => handleFinalizeRoute(item.route.id)}
+                                disabled={finalizingRouteId === item.route.id}
+                                className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                                title="Finalizar corrida tratada e liberar para pagamento PIX"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                <span>
+                                  {finalizingRouteId === item.route.id
+                                    ? 'Finalizando...'
+                                    : 'Finalizar e Pagar'}
+                                </span>
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -3520,19 +4619,25 @@ export default function App() {
       {/* TAB 6: GESTÃO DE PAGAMENTOS (M4.1 PARTE C)                     */}
       {/* ============================================================== */}
       {activeTab === 'PAYMENTS' && (
-        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 mt-5 space-y-5">
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
           {/* Header & KPI Summary */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-4 rounded-2xl bg-white border border-amber-200 shadow-xs">
+            <div
+              className={`p-4 rounded-2xl transition-all ${
+                pendingPaymentsCount > 0
+                  ? 'bg-amber-500/15 border-2 border-amber-400 ring-2 ring-amber-400/80 shadow-md animate-pulse'
+                  : 'bg-white border border-amber-200 shadow-xs'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">A Pagar (Pendente)</span>
-                <span className="p-1.5 rounded-lg bg-amber-50 text-amber-600 font-bold">🟡</span>
+                <span className="p-1.5 rounded-lg bg-amber-100 text-amber-800 font-bold">🟡</span>
               </div>
               <div className="text-2xl font-bold text-neutral-950 mt-2 font-mono">
                 R$ {paymentsData ? paymentsData.summary.totalPendingAmount.toFixed(2).replace('.', ',') : '0,00'}
               </div>
-              <div className="text-[11px] text-amber-700 font-semibold mt-1">
-                {paymentsData?.summary.pendingRoutesCount || 0} rotas aguardando repasse
+              <div className="text-[11px] text-amber-800 font-bold mt-1">
+                {paymentsData?.summary.pendingRoutesCount || 0} rotas aguardando repasse imediato
               </div>
             </div>
 
@@ -3655,16 +4760,30 @@ export default function App() {
                 {(
                   [
                     { key: 'ALL', label: 'Todas as Rotas Concluídas' },
-                    { key: 'PENDING', label: '🟡 Pendentes de Repasse' },
+                    {
+                      key: 'PENDING',
+                      label:
+                        pendingPaymentsCount > 0
+                          ? `🟡 Pendentes de Repasse (${pendingPaymentsCount})`
+                          : '🟡 Pendentes de Repasse',
+                      isAlert: pendingPaymentsCount > 0,
+                    },
                     { key: 'PAID', label: '🟢 Repassadas (Pagas)' },
                   ] as const
-                ).map((f) => (
+                ).map((f: any) => (
                   <button
                     key={f.key}
-                    onClick={() => setPaymentFilter(f.key as any)}
+                    onClick={() => {
+                      setPaymentFilter(f.key as any);
+                      fetchPayments(f.key as any);
+                    }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
                       paymentFilter === f.key
-                        ? 'bg-neutral-900 text-white shadow-xs'
+                        ? f.isAlert
+                          ? 'bg-amber-600 text-white font-bold shadow-sm ring-2 ring-amber-400 animate-pulse'
+                          : 'bg-neutral-900 text-white shadow-xs'
+                        : f.isAlert
+                        ? 'bg-amber-100 text-amber-950 border-2 border-amber-400 font-bold animate-pulse ring-2 ring-amber-300'
                         : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                     }`}
                   >
@@ -3692,7 +4811,7 @@ export default function App() {
                   className="px-3 py-2 text-xs border border-neutral-300 rounded-xl bg-white w-48 sm:w-64"
                 />
                 <button
-                  onClick={fetchPayments}
+                  onClick={() => fetchPayments()}
                   className="p-2.5 rounded-xl border border-neutral-200 hover:bg-neutral-50 text-neutral-700 transition-colors shadow-xs"
                   title="Atualizar lista"
                 >
@@ -3708,7 +4827,7 @@ export default function App() {
                     <th className="px-4 py-3">Rota Concluída</th>
                     <th className="px-4 py-3">Motorista Vencedor</th>
                     <th className="px-4 py-3">Chave Pix</th>
-                    <th className="px-4 py-3">Valor do Repasse</th>
+                    <th className="px-4 py-3">Repasse Motorista</th>
                     <th className="px-4 py-3">Status de Pagamento</th>
                     <th className="px-4 py-3 text-right">Ação</th>
                   </tr>
@@ -3733,7 +4852,14 @@ export default function App() {
                       const pixKey = driver?.pix_key_value || driver?.pix_key || '';
 
                       return (
-                        <tr key={route.id} className="hover:bg-neutral-50/60 transition-colors">
+                        <tr
+                          key={route.id}
+                          className={`transition-colors ${
+                            !isPaid
+                              ? 'bg-amber-50/80 hover:bg-amber-100/70 border-l-4 border-l-amber-500 ring-1 ring-amber-300/80'
+                              : 'hover:bg-neutral-50/60'
+                          }`}
+                        >
                           <td className="px-4 py-3 font-semibold text-neutral-900">
                             <div className="font-mono text-sm text-neutral-950 font-bold">
                               Rota #{route.id}
@@ -3786,8 +4912,21 @@ export default function App() {
                             )}
                           </td>
 
-                          <td className="px-4 py-3 font-mono text-sm font-bold text-neutral-950">
-                            R$ {route.total_fee}
+                          <td className="px-4 py-3 font-mono">
+                            {(() => {
+                              const driverFee = calculateDriverFee(route);
+                              return (
+                                <div>
+                                  <span className="font-bold text-sm text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 inline-flex items-center gap-1">
+                                    <span>🛵</span>
+                                    <span>R$ {driverFee.toFixed(2).replace('.', ',')}</span>
+                                  </span>
+                                  <div className="text-[10px] text-neutral-500 font-normal mt-0.5">
+                                    Frete Total: R$ {route.total_fee}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </td>
 
                           <td className="px-4 py-3">
@@ -3813,9 +4952,9 @@ export default function App() {
                               </div>
                             ) : (
                               <div>
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                  <span>🟡</span>
-                                  <span>PENDENTE DE REPASSE</span>
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow-xs animate-pulse ring-2 ring-amber-300">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                  AGUARDANDO PAGAMENTO PIX
                                 </span>
                               </div>
                             )}
@@ -3828,9 +4967,10 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => handleOpenPayRouteModal(route, driver)}
-                                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors"
+                                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition-colors cursor-pointer animate-pulse ring-2 ring-emerald-400 flex items-center gap-1 ml-auto"
                               >
-                                Registrar Pagamento
+                                <DollarSign className="w-3.5 h-3.5" />
+                                <span>Registrar Pagamento</span>
                               </button>
                             )}
                           </td>
@@ -3842,6 +4982,57 @@ export default function App() {
               </table>
             </div>
           </div>
+        </main>
+      )}
+
+      {/* ============================================================== */}
+      {/* TAB 7: MOTOR DE FRETES & PRECIFICAÇÃO OFICIAL                  */}
+      {/* ============================================================== */}
+      {activeTab === 'SETTINGS' && (
+        <main id="main-content" className="w-full max-w-[1780px] mx-auto px-4 sm:px-6 lg:px-8 mt-5 space-y-5">
+          <FreightEngineSettings
+            getAuthHeaders={getAuthHeaders}
+            setSuccessMessage={setSuccessMessage}
+            setErrorMessage={setErrorMessage}
+            pickupLocations={pickupLocations}
+            onRouteDraftCreated={async () => {
+              setActiveTab('ROUTES');
+              await fetchRoutes();
+            }}
+            onLoadIntoRouteForm={(draft) => {
+              setNewRoute({
+                modality: draft.modality,
+                pickup_type: draft.pickup_type,
+                pickup_location_id: draft.pickup_location_id,
+                pickup_name: draft.pickup_name,
+                pickup_address: draft.pickup_address,
+                pickup_neighborhood: draft.pickup_neighborhood,
+                final_deadline: draft.final_deadline,
+                total_fee: draft.total_fee,
+                override_driver_fee: '',
+                override_reason: '',
+                accepted_vehicle_types: draft.accepted_vehicle_types,
+                stops: draft.stops.map((s) => ({
+                  destination_address: s.destination_address,
+                  destination_neighborhood: s.destination_neighborhood,
+                  neighborhood_id: null,
+                  modality_code: 'CONVENCIONAL',
+                  pricing_vehicle_category: draft.modality === 'CAR' ? 'CAR' : 'MOTO',
+                  customer_freight: '',
+                  cargo_description: s.cargo_description,
+                  delivery_mode: s.delivery_mode,
+                  desired_deadline: s.desired_deadline,
+                  observations: s.observations,
+                  is_horizontal_condo: s.is_horizontal_condo,
+                })),
+              });
+              setActiveTab('ROUTES');
+              setShowCreateRouteModal(true);
+            }}
+            onNavigateToRoutes={() => setActiveTab('ROUTES')}
+            pendingTakeatCount={pendingTakeatCount}
+            onRefreshPendingTakeatCount={() => fetchTakeatPendingCount(true)}
+          />
         </main>
       )}
 
@@ -3911,6 +5102,74 @@ export default function App() {
               </div>
             </div>
 
+            {/* Acordo Financeiro / Repasse ao Motorista */}
+            {resolvingStop.route.accepted_driver_id ? (
+              <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-amber-950">
+                    💰 Acordo Financeiro / Repasse ao Motorista (R$):
+                  </label>
+                  <span className="text-[11px] font-mono font-bold text-amber-900">
+                    Original: R$ {resolvingStop.route.total_fee}
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-900/80 leading-snug">
+                  Informe o valor acordado para pagar ao motorista ({resolvingStop.driver?.name || `#${resolvingStop.route.accepted_driver_id}`}) por esta ocorrência ou cancelamento (ex: taxa de deslocamento ou frete integral). Caso nenhum valor seja devido, selecione R$ 0,00.
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setResolutionCompensationInput('0.00')}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold cursor-pointer"
+                  >
+                    R$ 0,00 (Isento)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResolutionCompensationInput('10.00')}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold cursor-pointer"
+                  >
+                    R$ 10,00 (Deslocamento)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResolutionCompensationInput('15.00')}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold cursor-pointer"
+                  >
+                    R$ 15,00
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResolutionCompensationInput(resolvingStop.route.total_fee || '0.00')}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold cursor-pointer"
+                  >
+                    R$ {resolvingStop.route.total_fee} (Total)
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs font-bold text-amber-950 font-mono">R$</span>
+                  <input
+                    type="text"
+                    value={resolutionCompensationInput}
+                    onChange={(e) => setResolutionCompensationInput(e.target.value)}
+                    placeholder="0.00"
+                    className="w-32 px-3 py-1.5 text-xs font-mono font-bold border border-amber-300 rounded-lg bg-white focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  />
+                  <span className="text-[11px] text-amber-800 font-medium">
+                    {resolutionCompensationInput === '0.00' || resolutionCompensationInput === '0'
+                      ? 'Corrida isenta de repasse financeiro'
+                      : resolutionCompensationInput
+                      ? `Será atualizado para R$ ${resolutionCompensationInput} na fila de pagamentos`
+                      : 'Deixe em branco para manter frete atual'}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 text-[11px] text-neutral-500">
+                ℹ️ Esta corrida não possui motorista vinculado (cancelada antes do aceite), portanto não há repasse financeiro necessário.
+              </div>
+            )}
+
             {/* Nota Operacional / Instruções */}
             <div>
               <label className="block font-bold text-neutral-800 text-xs mb-1">
@@ -3918,7 +5177,7 @@ export default function App() {
               </label>
               <textarea
                 rows={3}
-                placeholder="Ex: Motorista avisado para retornar à Kantine Matriz com o bolo até as 19h..."
+                placeholder="Ex: Motorista avisado para retornar à Kantine Matriz com o bolo até as 19h... Solução tratada com cliente."
                 value={resolutionNoteInput}
                 onChange={(e) => setResolutionNoteInput(e.target.value)}
                 className="w-full px-3 py-2 border border-neutral-300 rounded-xl text-xs focus:ring-1 focus:ring-orange-600 focus:outline-none"
@@ -3973,9 +5232,12 @@ export default function App() {
             {/* Informações Financeiras e Pix */}
             <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-2.5">
               <div className="flex justify-between items-center">
-                <span className="text-neutral-600">Valor a Transferir:</span>
-                <span className="font-mono text-lg font-bold text-emerald-900">
-                  R$ {payingRoute.route.total_fee}
+                <div>
+                  <span className="text-neutral-700 block text-xs font-semibold">Valor a Transferir (Frete Motorista):</span>
+                  <span className="text-[10px] text-neutral-500">Frete Total: R$ {payingRoute.route.total_fee} (descontado 10% da loja)</span>
+                </div>
+                <span className="font-mono text-lg font-black text-emerald-900 bg-emerald-100/90 px-2.5 py-1 rounded-lg border border-emerald-300">
+                  R$ {calculateDriverFee(payingRoute.route).toFixed(2).replace('.', ',')}
                 </span>
               </div>
               <div className="flex justify-between items-center text-xs">
@@ -4009,6 +5271,57 @@ export default function App() {
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* Repasse Automatizado via Mercado Pago */}
+            <div className="p-3.5 rounded-xl bg-gradient-to-r from-sky-50 to-blue-50 border border-sky-200 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-bold text-sky-900 text-xs">
+                  <Zap className="w-4 h-4 text-sky-600" />
+                  <span>Repasse Automático via Mercado Pago</span>
+                </div>
+                <span className="text-[10px] bg-sky-200 text-sky-800 font-black px-2 py-0.5 rounded-full uppercase">
+                  Pix Direto
+                </span>
+              </div>
+              <p className="text-[11px] text-sky-800/90 leading-tight">
+                Transfere automaticamente <strong>R$ {calculateDriverFee(payingRoute.route).toFixed(2).replace('.', ',')}</strong> do saldo da sua conta Mercado Pago para a chave Pix do motorista.
+              </p>
+
+              {mpPayoutFeedback && (
+                <div className={`p-2.5 rounded-lg text-[11px] leading-relaxed ${
+                  mpPayoutFeedback.type === 'error'
+                    ? 'bg-rose-100/90 text-rose-800 border border-rose-300'
+                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                }`}>
+                  {mpPayoutFeedback.message}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handlePayWithMercadoPago}
+                disabled={submittingMpPayout || !(payingRoute.driver?.pix_key_value || payingRoute.driver?.pix_key)}
+                className="w-full py-2.5 px-3 rounded-xl bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white font-black text-xs flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submittingMpPayout ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Processando Pix no Mercado Pago...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>⚡ Pagar via Pix Mercado Pago (R$ {calculateDriverFee(payingRoute.route).toFixed(2).replace('.', ',')})</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-neutral-200"></div>
+              <span className="flex-shrink mx-2 text-[10px] text-neutral-400 font-bold uppercase tracking-wider">ou registro manual com comprovante</span>
+              <div className="flex-grow border-t border-neutral-200"></div>
             </div>
 
             {/* Código de Comprovante / Autenticação Bancária */}
@@ -4131,18 +5444,14 @@ export default function App() {
                             {item.indicator_name || `Motorista #${item.referred_by_driver_id}`}
                           </div>
                           {item.indicator_vehicle_type && (
-                            <div className="text-[11px] text-neutral-500 flex items-center gap-1">
-                              <span>{VEHICLE_DISPLAY[item.indicator_vehicle_type]?.icon}</span>
-                              <span>{VEHICLE_DISPLAY[item.indicator_vehicle_type]?.label}</span>
+                            <div className="text-[11px] text-neutral-500 mt-0.5">
+                              {renderDriverVehicleBadges(item.indicator_vehicle_type)}
                             </div>
                           )}
                         </td>
 
                         <td className="px-4 py-3">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-800 border border-neutral-200">
-                            <span>{VEHICLE_DISPLAY[item.vehicle_type]?.icon}</span>
-                            <span>{VEHICLE_DISPLAY[item.vehicle_type]?.label || item.vehicle_type}</span>
-                          </span>
+                          {renderDriverVehicleBadges(item.vehicle_type)}
                         </td>
 
                         <td className="px-4 py-3">
@@ -4416,18 +5725,18 @@ export default function App() {
                 <div>
                   <label className="block text-xs font-bold text-neutral-800 mb-1 flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-orange-600" />
-                    <span>Prazo Final da Rota (Obrigatório)</span>
+                    <span>Duração Máxima Desejada / Prazo (Obrigatório)</span>
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: 18:00 ou 19:30"
+                    placeholder="Ex: 50 min ou 18:00"
                     value={newRoute.final_deadline}
                     onChange={(e) => setNewRoute({ ...newRoute, final_deadline: e.target.value })}
                     className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:ring-2 focus:ring-orange-500 font-semibold"
                     required
                   />
                   <p className="text-[10px] text-neutral-500 mt-1">
-                    Horário máximo desejado para conclusão de todas as entregas.
+                    Defina em minutos (ex: <strong>50 min</strong>) para calcular o prazo exato no aceite, ou um horário fixo.
                   </p>
                 </div>
 
@@ -4444,27 +5753,74 @@ export default function App() {
                     className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:ring-2 focus:ring-orange-500 font-semibold"
                     required
                   />
-                  <p className="text-[10px] text-neutral-500 mt-1">
-                    Frete único pago pela rota completa com todas as paradas.
+                  <p className="text-[10px] text-neutral-500 mt-1 flex items-center justify-between">
+                    <span>Frete cobrado do cliente/operação.</span>
+                    {(() => {
+                      const totalNum = parseFloat(newRoute.total_fee.replace(',', '.')) || 0;
+                      const driverFee = Math.round(totalNum * 0.90 * 100) / 100;
+                      return (
+                        <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-mono text-[11px]">
+                          🛵 Repasse Motorista: R$ {driverFee.toFixed(2).replace('.', ',')}
+                        </span>
+                      );
+                    })()}
                   </p>
                 </div>
               </div>
 
               {/* Veículos Aceitos (Seção 18) */}
               <div>
-                <label className="block text-xs font-bold text-neutral-800 mb-1.5">
-                  🚗 Veículos Aceitáveis para esta Rota
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
+                  <label className="block text-xs font-bold text-neutral-800">
+                    🚗 Veículos Aceitáveis para esta Rota
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setNewRoute((prev) => ({ ...prev, modality: 'MOTO', accepted_vehicle_types: ['MOTO', 'MOTO_WITH_BAG'] }))}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors cursor-pointer ${
+                        newRoute.modality === 'MOTO'
+                          ? 'border-orange-600 bg-orange-600 text-white shadow-2xs'
+                          : 'border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700'
+                      }`}
+                    >
+                      🏍️ Moto (Raio Geodésico)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewRoute((prev) => ({ ...prev, modality: 'CAR', accepted_vehicle_types: ['CAR'] }))}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors cursor-pointer ${
+                        newRoute.modality === 'CAR'
+                          ? 'border-orange-600 bg-orange-600 text-white shadow-2xs'
+                          : 'border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700'
+                      }`}
+                    >
+                      🚗 Carro (70 Bairros)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewRoute((prev) => ({ ...prev, accepted_vehicle_types: ['CAR', 'MOTO', 'MOTO_WITH_BAG'] }))}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors ${
+                        newRoute.accepted_vehicle_types.includes('CAR') && newRoute.accepted_vehicle_types.includes('MOTO')
+                          ? 'border-orange-600 bg-orange-600 text-white shadow-2xs'
+                          : 'border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700'
+                      }`}
+                    >
+                      🌐 Todos
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {VEHICLE_OPTIONS.map((opt) => {
                     const checked = newRoute.accepted_vehicle_types.includes(opt.type);
                     return (
                       <label
                         key={opt.type}
-                        className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs cursor-pointer transition-all ${
+                        className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs cursor-pointer select-none transition-all ${
                           checked
-                            ? 'border-orange-500 bg-orange-50/50 text-neutral-900 font-bold'
-                            : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50'
+                            ? 'border-orange-500 bg-orange-50/70 text-neutral-900 font-bold shadow-2xs ring-1 ring-orange-500/20'
+                            : 'border-neutral-200 bg-white text-neutral-400 hover:bg-neutral-50 hover:text-neutral-700'
                         }`}
                       >
                         <input
@@ -4473,11 +5829,21 @@ export default function App() {
                           onChange={() => handleToggleVehicleType(opt.type)}
                           className="accent-orange-600 rounded"
                         />
-                        <span>{opt.icon}</span>
+                        <span className="text-base">{opt.icon}</span>
                         <span className="truncate">{opt.label}</span>
                       </label>
                     );
                   })}
+                </div>
+
+                <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                  <span className="text-neutral-500">
+                    Motoristas ativos compatíveis:{' '}
+                    <strong className="text-neutral-800">
+                      {drivers.filter((d) => d.status === 'ACTIVE' && isDriverCompatibleWithRoute(d.vehicle_type, newRoute.accepted_vehicle_types)).length}
+                    </strong>
+                    {' '}({drivers.filter((d) => d.status === 'ACTIVE' && isDriverCompatibleWithRoute(d.vehicle_type, newRoute.accepted_vehicle_types)).map(d => `${d.name} [${getVehicleTypeLabel(d.vehicle_type)}]`).join(', ') || 'Nenhum motorista ativo para este veículo'})
+                  </span>
                 </div>
               </div>
 
@@ -4548,21 +5914,45 @@ export default function App() {
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         <div>
-                          <input
-                            type="text"
-                            placeholder="Endereço de Destino (Rua, Número)"
+                          <AddressAutocompleteInput
                             value={stop.destination_address}
-                            onChange={(e) => handleUpdateStopField(idx, 'destination_address', e.target.value)}
-                            className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
+                            onChange={(val) => handleUpdateStopField(idx, 'destination_address', val)}
+                            onSelectSuggestion={(s: GeocodedAddressSuggestion) => {
+                              setNewRoute((prev) => {
+                                const stops = [...prev.stops];
+                                stops[idx] = {
+                                  ...stops[idx],
+                                  destination_address: s.formattedAddress,
+                                  destination_neighborhood: s.neighborhood,
+                                  dropoff_coords: s.coords,
+                                };
+                                return { ...prev, stops };
+                              });
+                            }}
+                            placeholder="Endereço (digite para autocompletar...)"
+                            isConfirmed={Boolean(stop.dropoff_coords)}
                             required
                           />
                         </div>
                         <div>
                           <input
                             type="text"
-                            placeholder="Bairro"
+                            list="uberlandia-bairros-list"
+                            placeholder="Bairro (ex: Centro, Tibery)"
                             value={stop.destination_neighborhood}
-                            onChange={(e) => handleUpdateStopField(idx, 'destination_neighborhood', e.target.value)}
+                            onChange={(e) => {
+                              const newN = e.target.value;
+                              const found = getAllMappedNeighborhoods().find((n) => n.name.toLowerCase() === newN.toLowerCase());
+                              setNewRoute((prev) => {
+                                const stops = [...prev.stops];
+                                stops[idx] = {
+                                  ...stops[idx],
+                                  destination_neighborhood: newN,
+                                  dropoff_coords: found ? found.coords : stops[idx].dropoff_coords,
+                                };
+                                return { ...prev, stops };
+                              });
+                            }}
                             className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
                             required
                           />
@@ -4610,9 +6000,182 @@ export default function App() {
                           className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white"
                         />
                       </div>
+
+                      {/* Seção 7: Condomínio Horizontal (+20% na tarifa base) - Exclusivo para CARRO */}
+                      {newRoute.modality === 'CAR' ? (
+                        <div className="pt-2 border-t border-neutral-200/70 flex items-center justify-between">
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={stop.is_horizontal_condo}
+                              onChange={(e) => handleUpdateStopField(idx, 'is_horizontal_condo', e.target.checked)}
+                              className="w-4 h-4 accent-orange-600 rounded"
+                            />
+                            <span className="font-bold text-neutral-800 text-[11px] flex items-center gap-1.5">
+                              <span>🏡 Condomínio Horizontal</span>
+                              <span className="text-[10px] text-orange-600 font-extrabold bg-orange-100 px-1.5 py-0.5 rounded-full">
+                                +20% na tarifa base (Carro)
+                              </span>
+                            </span>
+                          </label>
+                          <span className="text-[10px] text-neutral-400 font-semibold">
+                            {stop.is_horizontal_condo ? 'Acréscimo de 20% Ativo' : 'Tarifa Normal'}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="pt-2 border-t border-neutral-200/50 flex items-center justify-between text-[11px] text-neutral-400">
+                          <span className="flex items-center gap-1.5 text-[11px]">
+                            <span>🏍️ Moto: Sem adicional de condomínio</span>
+                          </span>
+                          <span className="text-[10px] text-neutral-400 font-mono">Tarifa por raio</span>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
+
+                {/* Datalist com os Bairros Mapeados de Uberlândia */}
+                <datalist id="uberlandia-bairros-list">
+                  {getAllMappedNeighborhoods().map((n) => (
+                    <option key={n.name} value={n.name} />
+                  ))}
+                </datalist>
+
+                {/* Painel Dinâmico de Precificação em Tempo Real */}
+                {(() => {
+                  const originInfo = (() => {
+                    if (newRoute.pickup_type === 'REGISTERED') {
+                      const loc = pickupLocations.find((l) => l.id === newRoute.pickup_location_id);
+                      if (loc?.name.toLowerCase().includes('vinhedos')) return PICKUP_PRESETS.VINHEDOS;
+                      return {
+                        name: loc?.name || 'Kantine Matriz',
+                        address: loc?.address || PICKUP_PRESETS.MATRIZ.address,
+                        neighborhood: loc?.neighborhood || PICKUP_PRESETS.MATRIZ.neighborhood,
+                        coords: loc?.name.toLowerCase().includes('vinhedos')
+                          ? PICKUP_PRESETS.VINHEDOS.coords
+                          : PICKUP_PRESETS.MATRIZ.coords,
+                      };
+                    }
+                    return {
+                      name: newRoute.pickup_name || 'Coleta Alternativa',
+                      address: newRoute.pickup_address || 'Uberlândia - MG',
+                      neighborhood: newRoute.pickup_neighborhood || '',
+                      coords: PICKUP_PRESETS.MATRIZ.coords,
+                    };
+                  })();
+
+                  const pricing = calculateRoutePricing(
+                    newRoute.modality,
+                    originInfo,
+                    newRoute.stops.map((s, idx) => ({
+                      sequence: idx + 1,
+                      destination_address: s.destination_address,
+                      destination_neighborhood: s.destination_neighborhood,
+                      is_horizontal_condo: s.is_horizontal_condo,
+                      dropoff_coords: s.dropoff_coords,
+                    }))
+                  );
+
+                  const whatsAppProposal = generateWhatsAppProposalMessage({
+                    modality: newRoute.modality,
+                    originNameOrAddress: originInfo.name + ' (' + originInfo.address + ')',
+                    stops: newRoute.stops,
+                    driverFee: pricing.driver_remuneration,
+                    googleMapsUrl: pricing.google_maps_url,
+                    observations: 'Entrega Kantine Gastronomia',
+                  });
+
+                  return (
+                    <div className="p-4 rounded-2xl bg-neutral-900 text-white space-y-3 shadow-md border border-neutral-800">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-neutral-800 pb-2">
+                        <div className="flex items-center gap-2">
+                          <DollarSign className="w-4 h-4 text-emerald-400" />
+                          <h5 className="text-xs font-black uppercase tracking-wider text-orange-400">
+                            Cálculo Automático do Motor de Fretes
+                          </h5>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300">
+                            {pricing.is_grouped ? '⚡ 70% Fator Agrupamento (2+ paradas)' : '⚡ 100% Tarifa Individual'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewRoute((prev) => ({
+                                ...prev,
+                                total_fee: pricing.route_operational_total.toFixed(2).replace('.', ','),
+                              }));
+                            }}
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-500 text-white transition-colors cursor-pointer"
+                            title="Atualizar o campo de frete total com o valor calculado pelo motor"
+                          >
+                            Aplicar R$ {pricing.route_operational_total.toFixed(2).replace('.', ',')}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Valores: Total, Entregador e Kantine */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                        <div className="bg-neutral-800/80 p-2.5 rounded-xl border border-neutral-700/80">
+                          <span className="text-[10px] text-neutral-400 block font-semibold">Total Operacional da Rota</span>
+                          <span className="text-base font-black text-orange-400 font-mono">
+                            R$ {pricing.route_operational_total.toFixed(2)}
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-800/80 p-2.5 rounded-xl border border-neutral-700/80">
+                          <span className="text-[10px] text-neutral-400 block font-semibold">🛵 Entregador (90%)</span>
+                          <span className="text-base font-black text-emerald-400 font-mono">
+                            R$ {pricing.driver_remuneration.toFixed(2)}
+                          </span>
+                        </div>
+
+                        <div className="bg-neutral-800/80 p-2.5 rounded-xl border border-neutral-700/80">
+                          <span className="text-[10px] text-neutral-400 block font-semibold">🏢 Gestão Kantine (10%)</span>
+                          <span className="text-base font-black text-amber-400 font-mono">
+                            R$ {pricing.kantine_administration.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Ações Rápidas: WhatsApp e Maps */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-neutral-800 text-xs">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(whatsAppProposal, 'create_route_whatsapp')}
+                            className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Copy className="w-3 h-3 text-orange-400" />
+                            <span>{copiedKey === 'create_route_whatsapp' ? 'Proposta Copiada!' : 'Copiar Proposta WhatsApp'}</span>
+                          </button>
+
+                          <a
+                            href={`https://wa.me/?text=${encodeURIComponent(whatsAppProposal)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Send className="w-3 h-3" />
+                            <span>Enviar WhatsApp</span>
+                          </a>
+                        </div>
+
+                        {pricing.google_maps_url && (
+                          <a
+                            href={pricing.google_maps_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Ver Rota no Google Maps</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="pt-3 border-t border-neutral-200 flex items-center justify-end gap-2">
@@ -4659,13 +6222,19 @@ export default function App() {
             </div>
 
             <div className="p-4 rounded-xl bg-orange-50/60 border border-orange-200 space-y-3 text-xs">
-              <div className="flex justify-between items-center border-b border-orange-200/60 pb-2">
+              <div className="flex justify-between items-center border-b border-orange-200/60 pb-2 flex-wrap gap-2">
                 <span className="font-bold text-sm text-neutral-950 font-mono">
                   ROTA #{routeToPublish.id}
                 </span>
-                <span className="font-bold text-sm text-emerald-700">
-                  Frete Total: R$ {routeToPublish.total_fee}
-                </span>
+                <div className="flex items-center gap-2.5">
+                  <span className="font-semibold text-xs text-neutral-600">
+                    Frete Total: <strong className="text-neutral-900">R$ {routeToPublish.total_fee}</strong>
+                  </span>
+                  <span className="font-bold text-xs text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded border border-emerald-300 inline-flex items-center gap-1">
+                    <span>🛵</span>
+                    <span>Frete Motorista: R$ {calculateDriverFee(routeToPublish).toFixed(2).replace('.', ',')}</span>
+                  </span>
+                </div>
               </div>
 
               <div>
@@ -4695,11 +6264,31 @@ export default function App() {
                   📦 {routeToPublish.stops?.length || 1} ENTREGA(S) NA SEQUÊNCIA:
                 </span>
                 <div className="space-y-1.5 mt-1">
-                  {routeToPublish.stops?.map((s, idx) => (
+                  {routeToPublish.stops?.map((s, idx) => {
+                    const customerInfo = extractCustomerData(s);
+                    return (
                     <div key={s.id || idx} className="flex items-start gap-2 bg-white p-2 rounded border border-neutral-200/80">
                       <span className="font-bold text-orange-600">{idx + 1} —</span>
-                      <div className="flex-1">
-                        <span className="font-bold text-neutral-900">{s.destination_neighborhood}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-bold text-neutral-900">{s.destination_neighborhood}</span>
+                          {(customerInfo.name || customerInfo.phone) && (
+                            <span className="text-[10px] text-neutral-600 flex items-center gap-1.5 font-medium bg-neutral-100 px-1.5 py-0.5 rounded">
+                              {customerInfo.name && (
+                                <span className="font-bold text-neutral-800 flex items-center gap-0.5">
+                                  <UserCheck className="w-2.5 h-2.5 text-orange-600" />
+                                  <span>{customerInfo.name}</span>
+                                </span>
+                              )}
+                              {customerInfo.phone && (
+                                <span className="text-emerald-700 flex items-center gap-0.5 font-semibold">
+                                  <Phone className="w-2.5 h-2.5 text-emerald-600" />
+                                  <span>{customerInfo.phone}</span>
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
                         <span className="text-neutral-500 text-[11px] block">{s.cargo_description}</span>
                         {s.desired_deadline && (
                           <span className="text-amber-700 font-semibold text-[10px] block">
@@ -4708,7 +6297,8 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -4761,35 +6351,52 @@ export default function App() {
       {/* MODAL: DETALHES DA ROTA & EXECUÇÃO OPERACIONAL (M4 / M2.1 / M3) */}
       {/* ============================================================== */}
       {selectedRouteDetails && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-xl border border-neutral-200 my-8 space-y-5">
-            <div className="flex items-start justify-between pb-3 border-b border-neutral-200">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-orange-600" />
-                <div>
-                  <h3 className="text-base font-bold text-neutral-950 flex items-center gap-2">
-                    <span>Rota #{selectedRouteDetails.route.id}</span>
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 md:p-6">
+          <div className="bg-white rounded-2xl max-w-4xl w-full h-[92vh] max-h-[92vh] flex flex-col shadow-2xl border border-neutral-200 overflow-hidden">
+            {/* Header Fixo no Topo: 100% visível, nunca corta */}
+            <div className="px-5 py-3.5 border-b border-neutral-200 flex items-center justify-between bg-neutral-50/95 shrink-0 z-20">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-orange-100 border border-orange-200 text-orange-600 flex items-center justify-center shrink-0 shadow-2xs">
+                  <Layers className="w-5 h-5 text-orange-600" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-bold text-neutral-950">
+                      Rota #{selectedRouteDetails.route.id}
+                    </h3>
                     <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
                       selectedRouteDetails.route.status === 'COMPLETED'
-                        ? 'bg-emerald-100 text-emerald-800'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                         : selectedRouteDetails.route.status === 'IN_TRANSIT'
-                        ? 'bg-blue-100 text-blue-800'
+                        ? 'bg-blue-100 text-blue-800 border border-blue-200'
                         : selectedRouteDetails.route.status === 'PICKED_UP'
-                        ? 'bg-amber-100 text-amber-800'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
                         : selectedRouteDetails.route.status === 'ARRIVED_PICKUP'
-                        ? 'bg-indigo-100 text-indigo-800'
+                        ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                         : selectedRouteDetails.route.status === 'ACCEPTED'
-                        ? 'bg-purple-100 text-purple-800'
-                        : 'bg-neutral-100 text-neutral-800'
+                        ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                        : 'bg-neutral-100 text-neutral-800 border border-neutral-200'
                     }`}>
                       {selectedRouteDetails.route.status}
                     </span>
-                  </h3>
-                  <p className="text-xs text-neutral-500">
+                  </div>
+                  <p className="text-xs text-neutral-500 truncate">
                     {selectedRouteDetails.route.accepted_driver_id ? (
                       <span>
-                        Motorista: <strong>{drivers.find((d) => d.id === selectedRouteDetails.route.accepted_driver_id)?.name || `#${selectedRouteDetails.route.accepted_driver_id}`}</strong>
-                        {' '}({drivers.find((d) => d.id === selectedRouteDetails.route.accepted_driver_id)?.vehicle_type})
+                        Motorista Alocado:{' '}
+                        <strong>
+                          {selectedRouteDetails.driver?.name ||
+                            selectedRouteDetails.route.accepted_driver?.name ||
+                            drivers.find((d) => d.id === selectedRouteDetails.route.accepted_driver_id)?.name ||
+                            `#${selectedRouteDetails.route.accepted_driver_id}`}
+                        </strong>
+                        {' '}(
+                        {selectedRouteDetails.driver?.vehicle_type === 'CAR' ||
+                        selectedRouteDetails.route.accepted_driver?.vehicle_type === 'CAR' ||
+                        drivers.find((d) => d.id === selectedRouteDetails.route.accepted_driver_id)?.vehicle_type === 'CAR'
+                          ? '🚗 Carro'
+                          : '🏍️ Moto'}
+                        )
                       </span>
                     ) : (
                       'Nenhum motorista alocado no momento'
@@ -4797,36 +6404,281 @@ export default function App() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                {['DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(selectedRouteDetails.route.status) ? (
-                  <button
-                    onClick={() => setEditingRouteId(selectedRouteDetails.route.id)}
-                    className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-colors flex items-center gap-1.5 shadow-2xs"
-                    title="Editar rota (M4.4)"
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Editar Rota</span>
-                  </button>
-                ) : (
-                  <span
-                    className="px-2.5 py-1 rounded-md text-[10px] font-medium bg-neutral-100 text-neutral-500 border border-neutral-200"
-                    title={
-                      selectedRouteDetails.route.status === 'COMPLETED'
-                        ? 'Rotas concluídas não podem ser alteradas (M4.4 Seção 21)'
-                        : 'Rotas canceladas não podem ser alteradas (M4.4 Seção 22)'
-                    }
-                  >
-                    Edição bloqueada ({selectedRouteDetails.route.status})
-                  </span>
-                )}
+              <div className="flex items-center gap-2 shrink-0">
+                {(() => {
+                  let isRejected = false;
+                  if (selectedRouteDetails.route.pending_material_change) {
+                    try {
+                      const parsed =
+                        typeof selectedRouteDetails.route.pending_material_change === 'string'
+                          ? JSON.parse(selectedRouteDetails.route.pending_material_change)
+                          : selectedRouteDetails.route.pending_material_change;
+                      if (parsed?.status === 'REJECTED') isRejected = true;
+                    } catch {}
+                  }
+
+                  if (isRejected) {
+                    return (
+                      <button
+                        onClick={() => setEditingRouteId(selectedRouteDetails.route.id)}
+                        className="px-3 py-1.5 rounded-lg border-2 border-amber-500 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-black transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer animate-pulse ring-2 ring-amber-300"
+                        title="Motorista recusou a proposta anterior. Clique para reajustar o frete/paradas e reenviar."
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Reajustar Proposta</span>
+                      </button>
+                    );
+                  }
+
+                  if (['DRAFT', 'OFFERED', 'ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(selectedRouteDetails.route.status)) {
+                    return (
+                      <button
+                        onClick={() => setEditingRouteId(selectedRouteDetails.route.id)}
+                        className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                        title="Editar rota (M4.4)"
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Editar Rota</span>
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <span
+                      className="px-2.5 py-1 rounded-md text-[10px] font-medium bg-neutral-100 text-neutral-500 border border-neutral-200"
+                      title={
+                        selectedRouteDetails.route.status === 'COMPLETED'
+                          ? 'Rotas concluídas não podem ser alteradas (M4.4 Seção 21)'
+                          : 'Rotas canceladas não podem ser alteradas (M4.4 Seção 22)'
+                      }
+                    >
+                      Edição bloqueada ({selectedRouteDetails.route.status})
+                    </span>
+                  );
+                })()}
                 <button
                   onClick={() => setSelectedRouteDetails(null)}
-                  className="text-neutral-400 hover:text-neutral-700 text-xl font-semibold p-1"
+                  className="w-8 h-8 rounded-lg bg-neutral-200/80 hover:bg-neutral-300 text-neutral-600 hover:text-neutral-900 flex items-center justify-center text-sm font-bold transition-colors cursor-pointer"
+                  title="Fechar (Esc)"
                 >
                   ✕
                 </button>
               </div>
             </div>
+
+            {/* Corpo Rolável com Scrollbar Interna Própria */}
+            <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-5">
+              {/* Card Destaque: Proposta de Alteração Recusada pelo Motorista (Pronta para Reajuste) */}
+              {(() => {
+                let rejectedChange: any = null;
+                if (selectedRouteDetails.route.pending_material_change) {
+                  try {
+                    const parsed =
+                      typeof selectedRouteDetails.route.pending_material_change === 'string'
+                        ? JSON.parse(selectedRouteDetails.route.pending_material_change)
+                        : selectedRouteDetails.route.pending_material_change;
+                    if (parsed?.status === 'REJECTED') {
+                      rejectedChange = parsed;
+                    }
+                  } catch {}
+                }
+                if (!rejectedChange) return null;
+
+                return (
+                  <div className="p-4.5 rounded-2xl bg-amber-50 border-2 border-amber-400 text-amber-950 shadow-sm space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-amber-200 text-amber-800 flex items-center justify-center shrink-0 mt-0.5">
+                          <AlertTriangle className="w-5 h-5 text-amber-700" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-extrabold text-sm text-amber-950">
+                              PROPOSTA DE ALTERAÇÃO RECUSADA PELO MOTORISTA
+                            </h4>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                              Pronta para Reajuste
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-amber-800 leading-relaxed">
+                            O motorista não aceitou a proposta anterior. As alterações feitas (novas paradas, novos endereços e frete proposto) <strong>foram mantidas intactas</strong> no sistema.
+                            Como o motorista já está com os pedidos coletados em trânsito, você pode <strong>reajustar o valor do frete</strong> ou as condições e enviar uma nova proposta para o motorista aceitar.
+                          </p>
+                          {rejectedChange.diff_summary && (
+                            <div className="mt-2 p-2 rounded-lg bg-white/80 border border-amber-200 text-[11px] font-mono text-amber-900 whitespace-pre-line">
+                              {rejectedChange.diff_summary}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex sm:flex-col items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setEditingRouteId(selectedRouteDetails.route.id)}
+                          className="w-full px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer animate-pulse ring-2 ring-amber-400"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          <span>Ajustar Proposta e Reenviar</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (confirm('Deseja descartar as alterações da proposta recusada e manter a rota original?')) {
+                              try {
+                                const headers = await getAuthHeaders();
+                                await fetch(`/api/admin/routes/${selectedRouteDetails.route.id}/discard-rejected-proposal`, {
+                                  method: 'POST',
+                                  headers,
+                                });
+                                await fetchRoutes();
+                                await openRouteDetails(selectedRouteDetails.route.id);
+                                setSuccessMessage('Proposta recusada descartada com sucesso.');
+                              } catch (e: any) {
+                                setErrorMessage(e.message);
+                              }
+                            }
+                          }}
+                          className="w-full px-3 py-1.5 rounded-xl border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-600 font-semibold text-[11px] transition-colors cursor-pointer"
+                        >
+                          Descartar Alteração
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Card Destaque: Dados Completos do Motorista Alocado (M4) */}
+              {(() => {
+                const allocatedDriver =
+                  selectedRouteDetails.driver ||
+                  selectedRouteDetails.route.accepted_driver ||
+                  drivers.find((d) => d.id === selectedRouteDetails.route.accepted_driver_id);
+
+                const isCar = allocatedDriver?.vehicle_type === 'CAR';
+
+                if (!allocatedDriver && !selectedRouteDetails.route.accepted_driver_id) {
+                  return (
+                    <div className="p-3.5 rounded-xl bg-neutral-50 border border-neutral-200 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-neutral-200 text-neutral-600 flex items-center justify-center font-bold text-xs">
+                          ?
+                        </div>
+                        <div>
+                          <span className="font-bold text-neutral-900 block">
+                            Nenhum motorista alocado ainda
+                          </span>
+                          <span className="text-[11px] text-neutral-500">
+                            {selectedRouteDetails.route.status === 'DRAFT'
+                              ? 'Rota em rascunho. Publique para liberar aos motoristas no Telegram.'
+                              : selectedRouteDetails.route.status === 'OFFERED'
+                              ? 'Oferta aberta no Telegram aguardando o primeiro motorista aceitar.'
+                              : 'Nenhum motorista parceiro vinculado.'}
+                          </span>
+                        </div>
+                      </div>
+                      {selectedRouteDetails.route.status === 'OFFERED' && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                          AGUARDANDO ACEITE
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="p-4 rounded-2xl bg-neutral-900 text-white shadow-md border border-neutral-800 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-orange-600 text-white flex items-center justify-center font-bold text-base shadow-sm">
+                        {allocatedDriver?.name ? allocatedDriver.name.charAt(0).toUpperCase() : 'M'}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-bold text-sm text-white">
+                            {allocatedDriver?.name || `Motorista #${selectedRouteDetails.route.accepted_driver_id}`}
+                          </h4>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            selectedRouteDetails.route.status === 'ARRIVED_PICKUP'
+                              ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+                              : selectedRouteDetails.route.status === 'ACCEPTED'
+                              ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                              : selectedRouteDetails.route.status === 'PICKED_UP'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                              : selectedRouteDetails.route.status === 'IN_TRANSIT'
+                              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                              : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          }`}>
+                            {selectedRouteDetails.route.status === 'ARRIVED_PICKUP'
+                              ? '📍 NA COLETA'
+                              : selectedRouteDetails.route.status === 'ACCEPTED'
+                              ? '✅ CORRIDA ACEITA'
+                              : selectedRouteDetails.route.status === 'PICKED_UP'
+                              ? '📦 PEDIDOS COLETADOS'
+                              : selectedRouteDetails.route.status === 'IN_TRANSIT'
+                              ? `${isCar ? '🚗' : '🛵'} EM DESLOCAMENTO`
+                              : 'MOTORISTA CONFIRMADO'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-neutral-400 mt-0.5">
+                          Cadastro Ativo no Telegram • Aceitou a corrida às{' '}
+                          {selectedRouteDetails.route.accepted_at
+                            ? new Date(selectedRouteDetails.route.accepted_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                            : '—'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {allocatedDriver?.phone && (
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={`https://wa.me/55${allocatedDriver.phone.replace(/\D/g, '')}?text=${encodeURIComponent(
+                            `Olá ${allocatedDriver.name}! Informações sobre a Rota #${selectedRouteDetails.route.id} da Kantine Delivery.`
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>WhatsApp</span>
+                        </a>
+                        <a
+                          href={`tel:${allocatedDriver.phone.replace(/\D/g, '')}`}
+                          className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs border border-neutral-700 transition-colors"
+                        >
+                          Ligar
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
+                    <div>
+                      <span className="text-neutral-400 block text-[10px] uppercase font-bold tracking-wider">Telefone</span>
+                      <span className="font-semibold text-neutral-100">{allocatedDriver?.phone || 'Não informado'}</span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-400 block text-[10px] uppercase font-bold tracking-wider">Veículo do Motorista</span>
+                      <span className="font-semibold text-neutral-100 flex items-center gap-1">
+                        {isCar ? '🚗 Carro' : allocatedDriver?.vehicle_type === 'MOTO_WITH_BAG' ? '🎒 Moto com Bag' : '🏍️ Moto'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-400 block text-[10px] uppercase font-bold tracking-wider">Chave PIX Repasse</span>
+                      <span className="font-mono text-neutral-100 truncate block" title={allocatedDriver?.pix_key || allocatedDriver?.pix_key_value || ''}>
+                        {allocatedDriver?.pix_key || allocatedDriver?.pix_key_value || 'Pendente'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-400 block text-[10px] uppercase font-bold tracking-wider">Telegram ID</span>
+                      <span className="font-mono text-neutral-300">
+                        {allocatedDriver?.telegram_user_id || allocatedDriver?.telegram_chat_id ? `#${allocatedDriver.telegram_user_id || allocatedDriver.telegram_chat_id}` : '—'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Stepper / Timeline Operacional (M4 Seção 26) */}
             <div className="p-3.5 rounded-xl bg-neutral-50 border border-neutral-200/80">
@@ -4889,7 +6741,7 @@ export default function App() {
             </div>
 
             {/* General Info */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-xl bg-neutral-50 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-3.5 rounded-xl bg-neutral-50 text-xs">
               <div>
                 <span className="text-neutral-500 block">Local de Coleta</span>
                 <span className="font-bold text-neutral-900 block">{selectedRouteDetails.route.pickup_name}</span>
@@ -4905,10 +6757,95 @@ export default function App() {
                 <span className="font-bold text-neutral-900 block font-mono">{selectedRouteDetails.route.final_deadline}</span>
               </div>
               <div>
-                <span className="text-neutral-500 block">Frete Total</span>
-                <span className="font-bold text-emerald-700 text-sm block">R$ {selectedRouteDetails.route.total_fee}</span>
+                <span className="text-neutral-500 block">Frete Total da Rota</span>
+                <span className="font-bold text-neutral-900 text-sm block font-mono">R$ {selectedRouteDetails.route.total_fee}</span>
+                <span className="text-[10px] text-amber-700 font-semibold block mt-0.5">
+                  🏢 Retenção Loja (10%): R$ {((parseFloat(String(selectedRouteDetails.route.total_fee).replace(',', '.')) || 0) * 0.10).toFixed(2).replace('.', ',')}
+                </span>
+              </div>
+              <div>
+                <span className="text-neutral-500 block">Frete Motorista</span>
+                {(() => {
+                  const driverFee = calculateDriverFee(selectedRouteDetails.route);
+                  return (
+                    <div>
+                      <span className="font-bold text-emerald-800 text-sm font-mono inline-flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        <span>🛵</span>
+                        <span>R$ {driverFee.toFixed(2).replace('.', ',')}</span>
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-semibold block mt-0.5">
+                        Valor líquido a receber
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
+
+            {/* Ações: WhatsApp Proposta & Google Maps */}
+            {(() => {
+              const fee = parseFloat(String(selectedRouteDetails.route.total_fee).replace(',', '.')) || 0;
+              const driverFee = Math.round(fee * 0.90 * 100) / 100;
+              const modality = (selectedRouteDetails.route.accepted_vehicle_types?.length === 1 && selectedRouteDetails.route.accepted_vehicle_types[0] === 'CAR') ? 'CAR' : 'MOTO';
+              const whatsAppText = generateWhatsAppProposalMessage({
+                modality,
+                originNameOrAddress: selectedRouteDetails.route.pickup_name + ' (' + selectedRouteDetails.route.pickup_address + ')',
+                stops: selectedRouteDetails.route.stops || [],
+                driverFee,
+                googleMapsUrl: (selectedRouteDetails.route.stops && selectedRouteDetails.route.stops.length > 0)
+                  ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(selectedRouteDetails.route.pickup_address)}&travelmode=driving${
+                      selectedRouteDetails.route.stops.length === 1
+                        ? `&destination=${encodeURIComponent(selectedRouteDetails.route.stops[0].destination_address)}`
+                        : `&waypoints=${encodeURIComponent(selectedRouteDetails.route.stops.slice(0, -1).map(s => s.destination_address).join('|'))}&destination=${encodeURIComponent(selectedRouteDetails.route.stops[selectedRouteDetails.route.stops.length - 1].destination_address)}`
+                    }`
+                  : null,
+                observations: 'Entrega Kantine Gastronomia',
+              });
+
+              return (
+                <div className="p-3 rounded-xl bg-orange-50/70 border border-orange-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-orange-950 flex items-center gap-1">
+                      <Send className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Proposta para WhatsApp:</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(whatsAppText, `wa_detail_${selectedRouteDetails.route.id}`)}
+                      className="px-2.5 py-1 rounded-lg bg-white hover:bg-orange-100 border border-orange-200 text-orange-800 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <Copy className="w-3 h-3 text-orange-600" />
+                      <span>{copiedKey === `wa_detail_${selectedRouteDetails.route.id}` ? 'Copiado!' : 'Copiar Texto Proposta'}</span>
+                    </button>
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(whatsAppText)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                    >
+                      <Send className="w-3 h-3" />
+                      <span>Enviar no WhatsApp</span>
+                    </a>
+                  </div>
+
+                  {selectedRouteDetails.route.stops && selectedRouteDetails.route.stops.length > 0 && (
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(selectedRouteDetails.route.pickup_address)}&travelmode=driving${
+                        selectedRouteDetails.route.stops.length === 1
+                          ? `&destination=${encodeURIComponent(selectedRouteDetails.route.stops[0].destination_address)}`
+                          : `&waypoints=${encodeURIComponent(selectedRouteDetails.route.stops.slice(0, -1).map(s => s.destination_address).join('|'))}&destination=${encodeURIComponent(selectedRouteDetails.route.stops[selectedRouteDetails.route.stops.length - 1].destination_address)}`
+                      }`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-700 hover:text-blue-900 font-bold flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3 text-blue-600" />
+                      <span>Abrir Rota Completa no Google Maps</span>
+                    </a>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Ações Operacionais da Rota (M4 Seção 8, 9, 10) */}
             {selectedRouteDetails.route.status === 'ACCEPTED' && (
@@ -4963,10 +6900,74 @@ export default function App() {
                   className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0 flex items-center gap-1.5"
                 >
                   <Navigation className="w-3.5 h-3.5" />
-                  <span>{operationalLoading ? 'Iniciando...' : '🛵 Iniciar Rota'}</span>
+                  <span>
+                    {operationalLoading
+                      ? 'Iniciando...'
+                      : (selectedRouteDetails.driver?.vehicle_type === 'CAR' ||
+                         selectedRouteDetails.route.accepted_driver?.vehicle_type === 'CAR' ||
+                         (selectedRouteDetails.route.accepted_vehicle_types?.length === 1 && selectedRouteDetails.route.accepted_vehicle_types[0] === 'CAR'))
+                      ? '🚗 Iniciar Rota'
+                      : '🛵 Iniciar Rota'}
+                  </span>
                 </button>
               </div>
             )}
+
+            {/* Tratamento de Incidentes & Finalizar e Pagar (M4.1) */}
+            {selectedRouteDetails.route.status !== 'COMPLETED' &&
+              selectedRouteDetails.route.status !== 'CANCELLED' && (
+                <div
+                  className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-all ${
+                    selectedRouteDetails.route.stops?.some(
+                      (s) => s.status === 'INCIDENT' || !!s.incident_type
+                    )
+                      ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-300'
+                      : 'bg-emerald-50 border-emerald-200'
+                  }`}
+                >
+                  <div>
+                    <div className="font-bold flex items-center gap-1.5 text-sm text-neutral-900">
+                      {selectedRouteDetails.route.stops?.some(
+                        (s) => s.status === 'INCIDENT' || !!s.incident_type
+                      ) ? (
+                        <>
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span className="text-amber-950 font-black">
+                            Tratamento de Ocorrência & Finalização
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span className="text-emerald-950 font-black">
+                            Finalização da Rota & Pagamento PIX
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-neutral-600 mt-1 leading-relaxed">
+                      {selectedRouteDetails.route.stops?.some(
+                        (s) => s.status === 'INCIDENT' || !!s.incident_type
+                      )
+                        ? 'Esta corrida possui incidente(s) reportado(s). Não prometemos pagamento imediato: a pendência deve ser tratada e resolvida primeiro via WhatsApp (34 9 9678 7881). Após o alinhamento, clique no botão ao lado para finalizar e liberar para pagamento PIX.'
+                        : 'Todas as entregas foram processadas. Clique no botão ao lado para finalizar a rota e enviá-la para o financeiro efetuar o pagamento PIX.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleFinalizeRoute(selectedRouteDetails.route.id)}
+                    disabled={finalizingRouteId === selectedRouteDetails.route.id}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-md shadow-emerald-600/30 flex items-center justify-center gap-2 shrink-0 cursor-pointer transition-all animate-pulse ring-2 ring-emerald-400"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    <span>
+                      {finalizingRouteId === selectedRouteDetails.route.id
+                        ? 'Finalizando...'
+                        : '💰 Finalizar e Pagar'}
+                    </span>
+                  </button>
+                </div>
+              )}
 
             {/* Paradas & Comprovantes (M4 Seção 26 & 27) */}
             <div>
@@ -4989,6 +6990,7 @@ export default function App() {
                     <tr>
                       <th className="px-3 py-2">Seq</th>
                       <th className="px-3 py-2">Destino / Bairro</th>
+                      <th className="px-3 py-2">Cliente / Contato</th>
                       <th className="px-3 py-2">Carga</th>
                       <th className="px-3 py-2">Modalidade</th>
                       <th className="px-3 py-2">Status</th>
@@ -4997,12 +6999,40 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
-                    {selectedRouteDetails.route.stops?.map((stop) => (
+                    {selectedRouteDetails.route.stops?.map((stop) => {
+                      const customerInfo = extractCustomerData(stop);
+                      return (
                       <tr key={stop.id} className="hover:bg-neutral-50/50">
                         <td className="px-3 py-2.5 font-mono font-bold">{stop.sequence}</td>
                         <td className="px-3 py-2.5">
                           <div className="font-semibold text-neutral-900">{stop.destination_address}</div>
                           <div className="text-[10px] text-neutral-500">{stop.destination_neighborhood}</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {customerInfo.name || customerInfo.phone ? (
+                            <div className="space-y-0.5">
+                              {customerInfo.name && (
+                                <div className="font-bold text-neutral-900 flex items-center gap-1">
+                                  <UserCheck className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                  <span>{customerInfo.name}</span>
+                                </div>
+                              )}
+                              {customerInfo.phone && (
+                                <a
+                                  href={`https://wa.me/55${customerInfo.rawDigits || customerInfo.phone.replace(/\D/g, '')}`}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-1.5 py-0.5 rounded transition-colors"
+                                  title="Abrir WhatsApp do cliente"
+                                >
+                                  <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                                  <span>{customerInfo.phone}</span>
+                                </a>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-neutral-400 italic text-[11px]">—</span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5 text-neutral-800">{stop.cargo_description}</td>
                         <td className="px-3 py-2.5">
@@ -5054,11 +7084,40 @@ export default function App() {
                             </span>
                           )}
                           {stop.status === 'PENDING' && stop.delivery_mode === 'IN_PERSON' && (
-                            <div className="text-[10px]">
-                              <span className="text-neutral-500">PIN do Cliente: </span>
-                              <strong className="font-mono bg-neutral-100 px-1.5 py-0.5 rounded text-neutral-900 border border-neutral-200">
+                            <div className="flex items-center gap-1.5 text-xs flex-wrap">
+                              <span className="text-neutral-500 text-[10px]">Cód. Cliente:</span>
+                              <strong
+                                onClick={() => stop.pin_code && copyToClipboard(stop.pin_code!, `dtl_pin_${stop.id}`)}
+                                onDoubleClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenCustomerWhatsApp(stop);
+                                }}
+                                className="font-mono bg-amber-100 hover:bg-amber-200 text-amber-950 px-2 py-0.5 rounded border border-amber-300 font-bold cursor-pointer select-none transition-colors"
+                                title="Clique simples: Copiar PIN | Clique duplo: Enviar mensagem no WhatsApp para o cliente"
+                              >
                                 {stop.pin_code || '—'}
                               </strong>
+                              {stop.pin_code && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard(stop.pin_code!, `dtl_pin_${stop.id}`)}
+                                  className="text-[9px] px-1.5 py-0.5 rounded border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-600 font-semibold"
+                                  title="Copiar PIN"
+                                >
+                                  {copiedKey === `dtl_pin_${stop.id}` ? '✓ Copiado' : 'Copiar'}
+                                </button>
+                              )}
+                              {stop.pin_code && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenCustomerWhatsApp(stop)}
+                                  className="inline-flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-colors cursor-pointer shadow-2xs"
+                                  title="Enviar mensagem amigável no WhatsApp informando que saiu para coleta e solicitando o código ao cliente"
+                                >
+                                  <Send className="w-2.5 h-2.5" />
+                                  <span>WhatsApp</span>
+                                </button>
+                              )}
                             </div>
                           )}
                           {stop.status === 'PENDING' && stop.delivery_mode === 'NO_CONTACT' && (
@@ -5107,10 +7166,65 @@ export default function App() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
+
+              {/* Paradas Adicionais da Proposta Recusada (Preservadas para Ajuste) */}
+              {(() => {
+                let extraStops: any[] = [];
+                if (selectedRouteDetails.route.pending_material_change) {
+                  try {
+                    const parsed =
+                      typeof selectedRouteDetails.route.pending_material_change === 'string'
+                        ? JSON.parse(selectedRouteDetails.route.pending_material_change)
+                        : selectedRouteDetails.route.pending_material_change;
+                    if (parsed?.status === 'REJECTED' && Array.isArray(parsed?.proposal?.stops)) {
+                      const existingIds = new Set(selectedRouteDetails.route.stops?.map((s) => s.id) || []);
+                      extraStops = parsed.proposal.stops.filter((s: any) => !s.id || !existingIds.has(s.id));
+                    }
+                  } catch {}
+                }
+                if (extraStops.length === 0) return null;
+
+                return (
+                  <div className="mt-3 p-3.5 rounded-xl bg-amber-50/80 border border-dashed border-amber-300 text-xs space-y-2">
+                    <div className="font-bold text-amber-950 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Package className="w-4 h-4 text-amber-600" />
+                        <span>Paradas Adicionais da Proposta Recusada (Preservadas no Sistema):</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditingRouteId(selectedRouteDetails.route.id)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shadow-xs cursor-pointer flex items-center gap-1"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span>Ajustar no Formulário</span>
+                      </button>
+                    </div>
+                    <div className="space-y-1.5">
+                      {extraStops.map((es, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between text-[11px] text-amber-900 bg-white/80 p-2 px-3 rounded-lg border border-amber-200"
+                        >
+                          <div>
+                            <strong>Parada #{es.sequence || (selectedRouteDetails.route.stops?.length || 0) + idx + 1}:</strong>{' '}
+                            {es.destination_address}{es.destination_neighborhood ? ` (${es.destination_neighborhood})` : ''} —{' '}
+                            <span className="italic">{es.cargo_description}</span>
+                          </div>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 shrink-0">
+                            Pronta para Reajuste
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Simulation / Acceptance Tool (M3 / M2.1 testing) */}
@@ -5209,13 +7323,32 @@ export default function App() {
               </div>
             </div>
 
-            <div className="pt-2 border-t border-neutral-200 flex justify-end">
-              <button
-                onClick={() => setSelectedRouteDetails(null)}
-                className="px-4 py-2 font-semibold text-xs rounded-lg bg-neutral-900 hover:bg-neutral-800 text-white transition-colors"
-              >
-                Fechar
-              </button>
+            </div>
+
+            {/* Footer Fixo no Rodapé: sempre acessível */}
+            <div className="px-5 py-3 border-t border-neutral-200 bg-neutral-50 flex items-center justify-between shrink-0">
+              <span className="text-[11px] text-neutral-500 font-medium">
+                {selectedRouteDetails.route.stops?.length || 0} paradas • Rota #{selectedRouteDetails.route.id}
+              </span>
+              <div className="flex items-center gap-2">
+                {selectedRouteDetails.route.status !== 'CANCELLED' && (
+                  <button
+                    type="button"
+                    onClick={() => openCancelModal(selectedRouteDetails.route)}
+                    disabled={cancellingId === selectedRouteDetails.route.id}
+                    className="px-3.5 py-2 font-bold text-xs rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors cursor-pointer shadow-xs"
+                    title="Cancelar esta corrida e encaminhar para Pendências"
+                  >
+                    {cancellingId === selectedRouteDetails.route.id ? 'Cancelando...' : 'Cancelar Rota'}
+                  </button>
+                )}
+                <button
+                  onClick={() => setSelectedRouteDetails(null)}
+                  className="px-4 py-2 font-bold text-xs rounded-lg bg-neutral-900 hover:bg-neutral-800 text-white transition-colors cursor-pointer shadow-xs"
+                >
+                  Fechar
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -5442,6 +7575,146 @@ export default function App() {
       )}
 
       {/* ============================================================== */}
+      {/* MODAL: CANCELAMENTO OPERACIONAL DE ROTA                        */}
+      {/* ============================================================== */}
+      {routeToCancel && (
+        <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-200">
+              <h4 className="text-base font-bold text-rose-600 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                <span>Cancelar Corrida #{routeToCancel.id}</span>
+              </h4>
+              <button
+                onClick={() => setRouteToCancel(null)}
+                className="text-neutral-400 hover:text-neutral-700 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-1.5 text-xs text-amber-950">
+              <div className="flex items-center justify-between">
+                <span><strong>Status Atual:</strong> {routeToCancel.status}</span>
+                <span className="font-mono font-bold">Frete: R$ {routeToCancel.total_fee}</span>
+              </div>
+              <div><strong>Coleta:</strong> {routeToCancel.pickup_name}</div>
+              {routeToCancel.accepted_driver_id && (
+                <div className="text-blue-900 font-semibold">
+                  🛵 Motorista vinculado: #{routeToCancel.accepted_driver_id} (será notificado via Telegram)
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 text-xs text-neutral-600 leading-relaxed">
+              <p className="font-bold text-neutral-800 mb-1">
+                ⚠️ Encaminhamento automático para Pendências:
+              </p>
+              <p>
+                Ao cancelar, esta rota sairá do fluxo ativo e será encaminhada imediatamente para a aba <strong>Pendências (M4.1)</strong> para você registrar a solução (ex: devolução à loja, descarte, cancelamento do pedido) e registrar repasses ou ressarcimentos devidos se necessário.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">
+                Motivo / Justificativa do Cancelamento:
+              </label>
+              <textarea
+                rows={3}
+                value={cancelReasonInput}
+                onChange={(e) => setCancelReasonInput(e.target.value)}
+                placeholder="Ex: Cliente desistiu do pedido, loja fechou antes da retirada, endereço incorreto..."
+                className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-xl focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                autoFocus
+              />
+            </div>
+
+            {routeToCancel.accepted_driver_id && (
+              <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-neutral-800">
+                    💰 Acordo Financeiro / Repasse ao Motorista (Opcional):
+                  </label>
+                  <span className="text-[10px] text-neutral-500">Frete original: R$ {routeToCancel.total_fee}</span>
+                </div>
+                <p className="text-[11px] text-neutral-500 leading-snug">
+                  Se você já combinou uma taxa de deslocamento ou cancelamento com o motoboy, informe o valor abaixo. Você também pode deixar em branco e definir depois na aba <strong>Pendências</strong>.
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCancelCompensationInput('0.00')}
+                    className="px-2 py-1 rounded-lg bg-white border border-neutral-300 hover:bg-neutral-100 text-neutral-700 text-[11px] font-semibold"
+                  >
+                    R$ 0,00 (Sem repasse)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCancelCompensationInput('10.00')}
+                    className="px-2 py-1 rounded-lg bg-white border border-neutral-300 hover:bg-neutral-100 text-neutral-700 text-[11px] font-semibold"
+                  >
+                    R$ 10,00
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCancelCompensationInput('15.00')}
+                    className="px-2 py-1 rounded-lg bg-white border border-neutral-300 hover:bg-neutral-100 text-neutral-700 text-[11px] font-semibold"
+                  >
+                    R$ 15,00
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCancelCompensationInput(routeToCancel.total_fee || '0.00')}
+                    className="px-2 py-1 rounded-lg bg-white border border-neutral-300 hover:bg-neutral-100 text-neutral-700 text-[11px] font-semibold"
+                  >
+                    R$ {routeToCancel.total_fee} (Integral)
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs font-bold text-neutral-600 font-mono">R$</span>
+                  <input
+                    type="text"
+                    value={cancelCompensationInput}
+                    onChange={(e) => setCancelCompensationInput(e.target.value)}
+                    placeholder="0.00"
+                    className="w-32 px-3 py-1.5 text-xs font-mono font-bold border border-neutral-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="pt-2 flex justify-end gap-2 border-t border-neutral-200">
+              <button
+                type="button"
+                onClick={() => setRouteToCancel(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-xs font-bold transition-colors cursor-pointer"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancelRoute}
+                disabled={cancellingId === routeToCancel.id}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {cancellingId === routeToCancel.id ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Cancelando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>Confirmar Cancelamento</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
       {/* SUBMODAL: VISUALIZADOR DE FOTO DE COMPROVANTE (M4)             */}
       {/* ============================================================== */}
       {viewingPhotoUrl && (
@@ -5604,7 +7877,7 @@ export default function App() {
 
             <div className="p-3.5 rounded-xl bg-neutral-50 text-xs space-y-1">
               <div><strong>Status Atual:</strong> {selectedDriver.status}</div>
-              <div><strong>Veículo:</strong> {VEHICLE_DISPLAY[selectedDriver.vehicle_type]?.label || selectedDriver.vehicle_type}</div>
+              <div className="flex items-center gap-1.5 flex-wrap"><strong>Veículo(s):</strong> {renderDriverVehicleBadges(selectedDriver.vehicle_type)}</div>
               <div><strong>Telefone:</strong> {selectedDriver.phone}</div>
               <div><strong>Chave Pix:</strong> {selectedDriver.pix_key_value || selectedDriver.pix_key || 'Não informada'}</div>
             </div>
@@ -6007,20 +8280,60 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block font-semibold text-neutral-700 mb-1">
-                  Tipo de Veículo
+                <label className="block font-semibold text-neutral-700 mb-1.5 text-xs">
+                  Tipos de Veículo Habilitados <span className="font-normal text-neutral-500">(Pode selecionar mais de um ou todos os 3)</span>
                 </label>
-                <select
-                  value={editFormData.vehicle_type}
-                  onChange={(e) => setEditFormData({ ...editFormData, vehicle_type: e.target.value as VehicleType })}
-                  className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-white"
-                >
-                  {VEHICLE_OPTIONS.map((opt) => (
-                    <option key={opt.type} value={opt.type}>
-                      {opt.icon} {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="grid grid-cols-3 gap-2">
+                  {VEHICLE_OPTIONS.map((opt) => {
+                    const isChecked = editFormData.vehicle_types.includes(opt.type);
+                    return (
+                      <button
+                        key={opt.type}
+                        type="button"
+                        onClick={() => {
+                          let updated: VehicleType[];
+                          if (isChecked) {
+                            if (editFormData.vehicle_types.length <= 1) return;
+                            updated = editFormData.vehicle_types.filter((t) => t !== opt.type);
+                          } else {
+                            updated = [...editFormData.vehicle_types, opt.type];
+                          }
+                          setEditFormData({
+                            ...editFormData,
+                            vehicle_types: updated,
+                            vehicle_type: updated.join(','),
+                          });
+                        }}
+                        className={`flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg border transition cursor-pointer ${
+                          isChecked
+                            ? 'bg-neutral-900 text-white border-neutral-900 shadow-sm'
+                            : 'bg-neutral-50 text-neutral-600 border-neutral-300 hover:bg-neutral-100'
+                        }`}
+                      >
+                        <span>{opt.icon}</span>
+                        <span>{opt.label}</span>
+                        {isChecked && <Check className="w-3.5 h-3.5 text-white ml-auto" />}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center justify-between mt-1.5 text-[11px] text-neutral-500">
+                  <span>Selecionados: <strong className="text-neutral-800">{getVehicleTypeLabel(editFormData.vehicle_type)}</strong></span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const all: VehicleType[] = ['CAR', 'MOTO', 'MOTO_WITH_BAG'];
+                      setEditFormData({
+                        ...editFormData,
+                        vehicle_types: all,
+                        vehicle_type: all.join(','),
+                      });
+                    }}
+                    className="text-blue-600 hover:underline font-medium text-[11px] cursor-pointer"
+                  >
+                    Marcar Todas as 3 Opções
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2">
@@ -6340,25 +8653,60 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-neutral-800 mb-1">
-                      Tipo de Veículo Sugerido (Opcional)
+                    <label className="block text-xs font-bold text-neutral-800 mb-1.5">
+                      Tipo(s) de Veículo Sugerido(s) <span className="font-normal text-neutral-500">(Opcional - selecione 1, 2 ou todos)</span>
                     </label>
-                    <select
-                      value={inviteFormData.vehicle_type}
-                      onChange={(e) =>
-                        setInviteFormData({
-                          ...inviteFormData,
-                          vehicle_type: e.target.value as VehicleType,
-                        })
-                      }
-                      className="w-full px-3 py-2 text-xs border border-neutral-300 rounded-lg bg-white focus:ring-2 focus:ring-orange-500 font-semibold"
-                    >
-                      {VEHICLE_OPTIONS.map((opt) => (
-                        <option key={opt.type} value={opt.type}>
-                          {opt.icon} {opt.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="grid grid-cols-3 gap-2">
+                      {VEHICLE_OPTIONS.map((opt) => {
+                        const isChecked = inviteFormData.vehicle_types.includes(opt.type);
+                        return (
+                          <button
+                            key={opt.type}
+                            type="button"
+                            onClick={() => {
+                              let updated: VehicleType[];
+                              if (isChecked) {
+                                if (inviteFormData.vehicle_types.length <= 1) return;
+                                updated = inviteFormData.vehicle_types.filter((t) => t !== opt.type);
+                              } else {
+                                updated = [...inviteFormData.vehicle_types, opt.type];
+                              }
+                              setInviteFormData({
+                                ...inviteFormData,
+                                vehicle_types: updated,
+                                vehicle_type: updated.join(','),
+                              });
+                            }}
+                            className={`flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-lg border transition cursor-pointer ${
+                              isChecked
+                                ? 'bg-orange-600 text-white border-orange-600 shadow-sm'
+                                : 'bg-neutral-50 text-neutral-600 border-neutral-300 hover:bg-neutral-100'
+                            }`}
+                          >
+                            <span>{opt.icon}</span>
+                            <span>{opt.label}</span>
+                            {isChecked && <Check className="w-3.5 h-3.5 text-white ml-auto" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center justify-between mt-1 text-[11px] text-neutral-500">
+                      <span>Selecionados: <strong className="text-neutral-800">{getVehicleTypeLabel(inviteFormData.vehicle_type)}</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const all: VehicleType[] = ['CAR', 'MOTO', 'MOTO_WITH_BAG'];
+                          setInviteFormData({
+                            ...inviteFormData,
+                            vehicle_types: all,
+                            vehicle_type: all.join(','),
+                          });
+                        }}
+                        className="text-orange-600 hover:underline font-medium text-[11px] cursor-pointer"
+                      >
+                        Selecionar Todos (3)
+                      </button>
+                    </div>
                   </div>
 
                   <div className="pt-1 flex items-center justify-end">

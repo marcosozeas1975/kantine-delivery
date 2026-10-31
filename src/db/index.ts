@@ -21,10 +21,21 @@ export const createPool = () => {
       database: targetDatabase,
       max: 10,
       connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 30000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     });
 
-    global._postgresPool.on('error', (err) => {
-      console.error('Unexpected error on idle SQL pool client:', err);
+    global._postgresPool.on('error', (err: any) => {
+      // Prevent idle client termination or unexpected server-side socket close from crashing Node process
+      console.warn('[Postgres Pool] Idle client connection issue (non-fatal, auto-recovering):', err?.message || err);
+    });
+
+    global._postgresPool.on('connect', (client: any) => {
+      // Attach an error listener directly to every client created in the pool so terminated connections never emit unhandled error
+      client.on('error', (err: any) => {
+        console.warn('[Postgres Client] Connection event error caught (recovering):', err?.message || err);
+      });
     });
   }
   return global._postgresPool;
@@ -60,6 +71,11 @@ export async function initDbConstraints() {
     password: adminPassword,
     database: targetDatabase,
     max: 1,
+    connectionTimeoutMillis: 10000,
+  });
+
+  adminPool.on('error', (err: any) => {
+    console.warn('[Postgres adminPool] Connection event caught:', err?.message || err);
   });
 
   try {
@@ -72,6 +88,13 @@ export async function initDbConstraints() {
         (status IN ('ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'COMPLETED') AND accepted_driver_id IS NOT NULL AND accepted_at IS NOT NULL) 
         OR (status NOT IN ('ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'COMPLETED'))
       )`);
+
+      // Permitir resolução por Cancelamento em route_stops
+      await client.query(`ALTER TABLE "route_stops" DROP CONSTRAINT IF EXISTS "route_stops_resolution_type_check"`);
+      await client.query(`ALTER TABLE "route_stops" ADD CONSTRAINT "route_stops_resolution_type_check" CHECK (
+        resolution_type IS NULL OR resolution_type IN ('RETURN_TO_ORIGIN', 'DELIVERED_LATER', 'DELIVERED_TO_ALTERNATIVE_LOCATION', 'CUSTOMER_PICKUP', 'DISCARDED', 'CANCELLATION', 'OTHER')
+      )`);
+      await client.query(`ALTER TABLE "route_stops" ADD COLUMN IF NOT EXISTS "compensation_amount" numeric(10,2)`);
 
       // M4.4 Versionamento e Edição Controlada
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);
@@ -86,7 +109,7 @@ export async function initDbConstraints() {
       await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_status_check"`);
       await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_status_check" CHECK (status IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED'))`);
       await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_vehicle_type_canonical_check"`);
-      await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_vehicle_type_canonical_check" CHECK (vehicle_type IN ('CAR', 'MOTO', 'MOTO_WITH_BAG', 'CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITHOUT_BAG', 'OTHER'))`);
+      await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_vehicle_type_canonical_check" CHECK (vehicle_type IS NOT NULL AND length(trim(vehicle_type)) > 0)`);
       await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "is_excluded" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "excluded_at" timestamp`);
       await client.query(`ALTER TABLE "drivers" ADD COLUMN IF NOT EXISTS "exclusion_reason" text`);
@@ -120,7 +143,70 @@ export async function initDbConstraints() {
         );
       `);
 
-      console.log('[initDbConstraints] Successfully updated routes constraints and M4.4 schema using admin pool.');
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS "takeat_configs" (
+          "id" serial PRIMARY KEY,
+          "store_key" text DEFAULT 'MATRIZ' NOT NULL,
+          "store_name" text DEFAULT 'Kantine Matriz' NOT NULL,
+          "api_key" text,
+          "webhook_secret" text,
+          "store_id" text,
+          "default_pickup_preset" text DEFAULT 'MATRIZ' NOT NULL,
+          "auto_calculate_freight" boolean DEFAULT true NOT NULL,
+          "preferred_modality" text DEFAULT 'MOTO' NOT NULL,
+          "notification_sound_enabled" boolean DEFAULT true NOT NULL,
+          "is_active" boolean DEFAULT true NOT NULL,
+          "last_webhook_received_at" timestamp,
+          "created_at" timestamp DEFAULT now() NOT NULL,
+          "updated_at" timestamp DEFAULT now() NOT NULL
+        );
+
+        -- Safe column migrations for multi-store support
+        ALTER TABLE "takeat_configs" ADD COLUMN IF NOT EXISTS "store_key" text DEFAULT 'MATRIZ';
+        ALTER TABLE "takeat_configs" ADD COLUMN IF NOT EXISTS "store_name" text DEFAULT 'Kantine Matriz';
+
+        CREATE TABLE IF NOT EXISTS "takeat_orders" (
+          "id" serial PRIMARY KEY,
+          "takeat_order_id" text UNIQUE NOT NULL,
+          "store_key" text DEFAULT 'MATRIZ' NOT NULL,
+          "store_id" text,
+          "display_id" text NOT NULL,
+          "customer_name" text NOT NULL,
+          "customer_phone" text,
+          "destination_address" text NOT NULL,
+          "destination_neighborhood" text NOT NULL,
+          "destination_city" text DEFAULT 'Uberlândia' NOT NULL,
+          "order_items_summary" text,
+          "order_items_json" jsonb,
+          "order_total" numeric(10, 2),
+          "delivery_fee_charged" numeric(10, 2),
+          "payment_method" text,
+          "change_for" numeric(10, 2),
+          "pickup_preset" text DEFAULT 'MATRIZ' NOT NULL,
+          "status" text DEFAULT 'PENDING_COURIER' NOT NULL CHECK (status IN ('PENDING_COURIER', 'IN_ROUTE', 'DELIVERED', 'DISMISSED')),
+          "calculated_freight_value" numeric(10, 2),
+          "calculated_freight_details" jsonb,
+          "created_route_id" integer REFERENCES "routes"("id") ON DELETE SET NULL,
+          "raw_payload" jsonb,
+          "created_at" timestamp DEFAULT now() NOT NULL,
+          "accepted_at" timestamp,
+          "dispatched_at" timestamp
+        );
+
+        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_key" text DEFAULT 'MATRIZ';
+        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_id" text;
+
+        -- Ensure both MATRIZ and VINHEDOS rows exist in takeat_configs
+        INSERT INTO "takeat_configs" ("store_key", "store_name", "store_id", "default_pickup_preset", "auto_calculate_freight", "preferred_modality", "is_active")
+        SELECT 'MATRIZ', 'Kantine Matriz', 'kantine-matriz', 'MATRIZ', true, 'MOTO', true
+        WHERE NOT EXISTS (SELECT 1 FROM "takeat_configs" WHERE "store_key" = 'MATRIZ');
+
+        INSERT INTO "takeat_configs" ("store_key", "store_name", "store_id", "default_pickup_preset", "auto_calculate_freight", "preferred_modality", "is_active")
+        SELECT 'VINHEDOS', 'Kantine Vinhedos', 'kantine-vinhedos', 'VINHEDOS', true, 'MOTO', true
+        WHERE NOT EXISTS (SELECT 1 FROM "takeat_configs" WHERE "store_key" = 'VINHEDOS');
+      `);
+
+      console.log('[initDbConstraints] Successfully updated routes constraints, M4.4 schema and Takeat tables using admin pool.');
     } finally {
       client.release();
     }

@@ -24,25 +24,6 @@ export const VEHICLE_OPTIONS: VehicleOption[] = [
   { canonical: 'MOTO_WITH_BAG', label: 'Moto com Bag', emoji: '🎒', buttonText: '🎒 Moto com Bag' },
 ];
 
-export function getVehicleTypeLabel(type: string): string {
-  if (!type) return 'Não informado';
-  const upper = type.toUpperCase().trim();
-  if (upper === 'CAR' || upper === 'CARRO' || upper === 'CAR_HATCH' || upper === 'CAR_SEDAN' || upper === 'CAR_SW') {
-    return 'Carro';
-  }
-  if (upper === 'MOTO' || upper === 'MOTO_WITHOUT_BAG') {
-    return 'Moto';
-  }
-  if (upper === 'MOTO_WITH_BAG' || upper === 'MOTO_COM_BAG') {
-    return 'Moto com Bag';
-  }
-  if (upper === 'OTHER') {
-    return 'Carro';
-  }
-  const match = VEHICLE_OPTIONS.find((v) => v.canonical === type);
-  return match ? match.label : type;
-}
-
 export function parseVehicleInput(input: string): VehicleType | null {
   if (!input) return null;
   const trimmed = input.trim();
@@ -57,7 +38,11 @@ export function parseVehicleInput(input: string): VehicleType | null {
   if (trimmed === 'CAR_HATCH' || trimmed === 'CAR_SEDAN' || trimmed === 'CAR_SW' || trimmed === 'OTHER') return 'CAR';
   if (trimmed === 'MOTO_WITHOUT_BAG') return 'MOTO';
 
-  // 2. Callback query prefix (e.g. veh_CAR, veh_MOTO, veh_MOTO_WITH_BAG)
+  // 2. Callback query prefix (e.g. veh_CAR, veh_MOTO, veh_MOTO_WITH_BAG, veh_toggle:CAR)
+  if (trimmed.startsWith('veh_toggle:')) {
+    const raw = trimmed.replace('veh_toggle:', '').trim();
+    return parseVehicleInput(raw);
+  }
   if (trimmed.startsWith('veh_')) {
     const raw = trimmed.replace('veh_', '').trim();
     if (raw === 'CAR' || raw === 'CARRO' || raw === 'CAR_HATCH' || raw === 'CAR_SEDAN' || raw === 'CAR_SW' || raw === 'OTHER') return 'CAR';
@@ -65,13 +50,109 @@ export function parseVehicleInput(input: string): VehicleType | null {
     if (raw === 'MOTO_WITH_BAG' || raw === 'MOTO_COM_BAG') return 'MOTO_WITH_BAG';
   }
 
-  // 3. User friendly text match
-  if (lower.includes('bag')) return 'MOTO_WITH_BAG';
+  // 3. User friendly text match (specific to general)
+  if (lower.includes('bag') || lower.includes('mochila')) return 'MOTO_WITH_BAG';
   if (lower.includes('moto')) return 'MOTO';
-  if (lower.includes('carro') || lower.includes('car')) return 'CAR';
+  if (lower.includes('carro') || lower.includes('car') || lower.includes('auto')) return 'CAR';
 
   return null;
 }
+
+/**
+ * Parses single or multiple vehicles from string, array, or comma-separated list
+ */
+export function parseDriverVehicleTypes(input: any): VehicleType[] {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    const res: VehicleType[] = [];
+    for (const item of input) {
+      const parsed = parseDriverVehicleTypes(item);
+      for (const p of parsed) {
+        if (!res.includes(p)) res.push(p);
+      }
+    }
+    return res;
+  }
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const arr = JSON.parse(trimmed);
+        if (Array.isArray(arr)) {
+          return parseDriverVehicleTypes(arr);
+        }
+      } catch {}
+    }
+
+    const lower = trimmed.toLowerCase();
+    // Check if user selected "todos", "todas", "os tres", "as tres opções"
+    if (
+      lower.includes('todos') ||
+      lower.includes('todas') ||
+      lower.includes('os tres') ||
+      lower.includes('as tres') ||
+      lower.includes('os 3') ||
+      lower.includes('as 3')
+    ) {
+      return ['CAR', 'MOTO', 'MOTO_WITH_BAG'];
+    }
+
+    // Split by comma, plus, slash, semicolon or " e "
+    const tokens = trimmed.split(/[,;/+&]|\s+e\s+|\s+ou\s+/i).map((t) => t.trim()).filter(Boolean);
+    const result: VehicleType[] = [];
+
+    for (const tok of tokens) {
+      const single = parseVehicleInput(tok);
+      if (single && !result.includes(single)) {
+        result.push(single);
+      }
+    }
+
+    if (result.length > 0) return result;
+
+    const single = parseVehicleInput(trimmed);
+    return single ? [single] : [];
+  }
+  return [];
+}
+
+export function formatDriverVehicleTypes(input: any): string {
+  const types = parseDriverVehicleTypes(input);
+  if (types.length === 0) return 'CAR';
+  return types.join(',');
+}
+
+export function getVehicleTypeLabel(type: string): string {
+  if (!type) return 'Não informado';
+  const types = parseDriverVehicleTypes(type);
+  if (types.length === 0) return type;
+  if (types.length === 1) {
+    const single = types[0];
+    if (single === 'CAR') return 'Carro';
+    if (single === 'MOTO') return 'Moto';
+    if (single === 'MOTO_WITH_BAG') return 'Moto com Bag';
+    return single;
+  }
+  const labels = types.map((t) => {
+    if (t === 'CAR') return 'Carro';
+    if (t === 'MOTO') return 'Moto';
+    if (t === 'MOTO_WITH_BAG') return 'Moto com Bag';
+    return t;
+  });
+  if (labels.length === 2) return `${labels[0]} e ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} e ${labels[labels.length - 1]}`;
+}
+
+export function getDriverVehicleBadges(type: string): { type: VehicleType; label: string; icon: string }[] {
+  const types = parseDriverVehicleTypes(type);
+  return types.map((t) => {
+    if (t === 'CAR') return { type: 'CAR', label: 'Carro', icon: '🚗' };
+    if (t === 'MOTO_WITH_BAG') return { type: 'MOTO_WITH_BAG', label: 'Moto com Bag', icon: '🎒' };
+    return { type: 'MOTO', label: 'Moto', icon: '🏍️' };
+  });
+}
+
 
 export type PixKeyType = 'CPF' | 'PHONE' | 'EMAIL' | 'RANDOM' | 'REQUIRES_UPDATE';
 
@@ -322,11 +403,13 @@ export interface RouteStop {
     | 'DELIVERED_TO_ALTERNATIVE_LOCATION'
     | 'CUSTOMER_PICKUP'
     | 'DISCARDED'
+    | 'CANCELLATION'
     | 'OTHER'
     | null;
   resolution_note?: string | null;
   resolved_at?: Date | null;
   resolved_by?: string | null;
+  compensation_amount?: number | null;
   // M4.2 Fields
   modality_code?: string;
   neighborhood_id?: number | null;
@@ -334,6 +417,7 @@ export interface RouteStop {
   customer_freight?: number | null;
   net_delivery_base?: number | null;
   management_amount?: number | null;
+  is_horizontal_condo?: boolean;
   created_at: Date;
   completed_at: Date | null;
 }
@@ -425,6 +509,7 @@ export type IncidentResolutionType =
   | 'DELIVERED_TO_ALTERNATIVE_LOCATION'
   | 'CUSTOMER_PICKUP'
   | 'DISCARDED'
+  | 'CANCELLATION'
   | 'OTHER';
 
 export const INCIDENT_RESOLUTION_OPTIONS: {
@@ -462,6 +547,12 @@ export const INCIDENT_RESOLUTION_OPTIONS: {
     label: 'Descarte / Avaria',
     description: 'Produto danificado ou perecível sem condições de reaproveitamento.',
     icon: '🗑️',
+  },
+  {
+    type: 'CANCELLATION',
+    label: 'Corrida Cancelada / Tratativa Administrativa',
+    description: 'Cancelamento operacional tratado com cliente/motorista.',
+    icon: '❌',
   },
   {
     type: 'OTHER',
@@ -513,6 +604,7 @@ export interface Route {
   created_at: Date;
   offered_at: Date | null;
   stops?: RouteStop[];
+  accepted_driver?: Driver | null;
 }
 
 export type RouteChangeType = 'OPERATIONAL' | 'MATERIAL' | 'DRAFT_EDIT' | 'OFFERED_REOFFER';
@@ -562,6 +654,7 @@ export interface EditRouteDTO {
     neighborhood_id?: number;
     pricing_vehicle_category?: PricingVehicleCategory;
     customer_freight?: number | string;
+    is_horizontal_condo?: boolean;
   }>;
 }
 
@@ -631,6 +724,7 @@ export interface CreateRouteStopDTO {
   customer_freight?: number | string;
   net_delivery_base?: number | string;
   management_amount?: number | string;
+  is_horizontal_condo?: boolean;
 }
 
 export interface CreateRouteDTO {

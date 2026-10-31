@@ -45,7 +45,7 @@ export const drivers = pgTable(
     check('drivers_status_check', sql`${table.status} IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED')`),
     check(
       'drivers_vehicle_type_canonical_check',
-      sql`${table.vehicle_type} IN ('CAR', 'MOTO', 'MOTO_WITH_BAG', 'CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'MOTO_WITHOUT_BAG', 'OTHER')`
+      sql`length(trim(${table.vehicle_type})) > 0`
     ),
     check(
       'drivers_pix_key_type_check',
@@ -270,6 +270,7 @@ export const routeStops = pgTable(
     resolution_note: text('resolution_note'),
     resolved_at: timestamp('resolved_at'),
     resolved_by: text('resolved_by'),
+    compensation_amount: numeric('compensation_amount', { precision: 10, scale: 2 }),
     // M4.2 Modalidade, Bairro e Frete Cobrado do Cliente por Parada
     modality_code: text('modality_code').default('CONVENCIONAL').notNull(),
     neighborhood_id: integer('neighborhood_id').references(() => neighborhoods.id, { onDelete: 'set null' }),
@@ -289,7 +290,7 @@ export const routeStops = pgTable(
     ),
     check(
       'route_stops_resolution_type_check',
-      sql`${table.resolution_type} IS NULL OR ${table.resolution_type} IN ('RETURN_TO_ORIGIN', 'DELIVERED_LATER', 'DELIVERED_TO_ALTERNATIVE_LOCATION', 'CUSTOMER_PICKUP', 'DISCARDED', 'OTHER')`
+      sql`${table.resolution_type} IS NULL OR ${table.resolution_type} IN ('RETURN_TO_ORIGIN', 'DELIVERED_LATER', 'DELIVERED_TO_ALTERNATIVE_LOCATION', 'CUSTOMER_PICKUP', 'DISCARDED', 'CANCELLATION', 'OTHER')`
     ),
   ]
 );
@@ -425,4 +426,62 @@ export const telegramBotSessions = pgTable('telegram_bot_sessions', {
   data: jsonb('data').default({}).notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+// ==========================================
+// INTEGRAÇÃO TAKEAT (PDV & DELIVERY PRÓPRIO)
+// ==========================================
+
+export const takeatConfigs = pgTable('takeat_configs', {
+  id: serial('id').primaryKey(),
+  store_key: text('store_key').default('MATRIZ').notNull(), // MATRIZ | VINHEDOS
+  store_name: text('store_name').default('Kantine Matriz').notNull(),
+  api_key: text('api_key'), // Chave de API / Token seguro do Takeat
+  webhook_secret: text('webhook_secret'), // Segredo de assinatura de webhooks
+  store_id: text('store_id'), // ID ou Slug da loja no Takeat (ex: kantine-matriz / kantine-vinhedos)
+  default_pickup_preset: text('default_pickup_preset').default('MATRIZ').notNull(), // MATRIZ | VINHEDOS
+  auto_calculate_freight: boolean('auto_calculate_freight').default(true).notNull(),
+  preferred_modality: text('preferred_modality').default('MOTO').notNull(), // MOTO | CAR
+  notification_sound_enabled: boolean('notification_sound_enabled').default(true).notNull(),
+  is_active: boolean('is_active').default(true).notNull(),
+  last_webhook_received_at: timestamp('last_webhook_received_at'),
+  created_at: timestamp('created_at').defaultNow().notNull(),
+  updated_at: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const takeatOrders = pgTable(
+  'takeat_orders',
+  {
+    id: serial('id').primaryKey(),
+    takeat_order_id: text('takeat_order_id').notNull().unique(), // ID original do Takeat
+    store_key: text('store_key').default('MATRIZ').notNull(), // MATRIZ | VINHEDOS
+    store_id: text('store_id'), // ID da loja de onde o pedido veio
+    display_id: text('display_id').notNull(), // Ex: "#1042"
+    customer_name: text('customer_name').notNull(),
+    customer_phone: text('customer_phone'),
+    destination_address: text('destination_address').notNull(),
+    destination_neighborhood: text('destination_neighborhood').notNull(),
+    destination_city: text('destination_city').default('Uberlândia').notNull(),
+    order_items_summary: text('order_items_summary'),
+    order_items_json: jsonb('order_items_json'),
+    order_total: numeric('order_total', { precision: 10, scale: 2 }),
+    delivery_fee_charged: numeric('delivery_fee_charged', { precision: 10, scale: 2 }), // Taxa cobrada pelo Takeat
+    payment_method: text('payment_method'),
+    change_for: numeric('change_for', { precision: 10, scale: 2 }),
+    pickup_preset: text('pickup_preset').default('MATRIZ').notNull(),
+    status: text('status').default('PENDING_COURIER').notNull(), // PENDING_COURIER | IN_ROUTE | DELIVERED | DISMISSED
+    calculated_freight_value: numeric('calculated_freight_value', { precision: 10, scale: 2 }), // Frete calculado pelo motor da Kantine
+    calculated_freight_details: jsonb('calculated_freight_details'),
+    created_route_id: integer('created_route_id').references(() => routes.id, { onDelete: 'set null' }),
+    raw_payload: jsonb('raw_payload'),
+    created_at: timestamp('created_at').defaultNow().notNull(),
+    accepted_at: timestamp('accepted_at'),
+    dispatched_at: timestamp('dispatched_at'),
+  },
+  (table) => [
+    check(
+      'takeat_orders_status_check',
+      sql`${table.status} IN ('PENDING_COURIER', 'IN_ROUTE', 'DELIVERED', 'DISMISSED')`
+    ),
+  ]
+);
 

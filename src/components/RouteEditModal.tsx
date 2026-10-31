@@ -14,7 +14,13 @@ import {
   X,
   RefreshCw,
   Info,
+  Calculator,
 } from 'lucide-react';
+import {
+  calculateRoutePricing,
+  UBERLANDIA_70_NEIGHBORHOODS,
+  PICKUP_PRESETS,
+} from '../shared/freightEngine.ts';
 import {
   Route,
   RouteStop,
@@ -23,6 +29,7 @@ import {
   RouteEditAnalysis,
   PickupType,
   DeliveryMode,
+  VehicleType,
 } from '../server/types.ts';
 
 interface RouteEditModalProps {
@@ -55,6 +62,13 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
   const [step, setStep] = useState<'EDIT' | 'PREVIEW'>('EDIT');
   const [previewAnalysis, setPreviewAnalysis] = useState<RouteEditAnalysis | null>(null);
 
+  // Rejected proposal recovery state
+  const [hasRejectedProposal, setHasRejectedProposal] = useState<boolean>(false);
+  const [rejectedProposalInfo, setRejectedProposalInfo] = useState<{
+    diff_summary?: string;
+    rejected_at?: string;
+  } | null>(null);
+
   // Form states
   const [pickupType, setPickupType] = useState<PickupType>('REGISTERED');
   const [pickupLocationId, setPickupLocationId] = useState<number | undefined>(undefined);
@@ -64,6 +78,7 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
   const [finalDeadline, setFinalDeadline] = useState('');
   const [finalDriverFee, setFinalDriverFee] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
+  const [acceptedVehicleTypes, setAcceptedVehicleTypes] = useState<VehicleType[]>(['CAR', 'MOTO', 'MOTO_WITH_BAG']);
 
   // Editable stops
   interface EditableStop {
@@ -78,8 +93,54 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
     status?: string;
     isDelivered: boolean;
     isNew?: boolean;
+    is_horizontal_condo?: boolean;
   }
   const [stopsList, setStopsList] = useState<EditableStop[]>([]);
+
+  const restoreOriginalRouteData = async () => {
+    if (!currentRoute) return;
+    try {
+      const headers = await getAuthHeaders();
+      await fetch(`/api/admin/routes/${routeId}/discard-rejected-proposal`, {
+        method: 'POST',
+        headers,
+      });
+    } catch (e) {
+      console.warn('Failed to discard rejected proposal in backend', e);
+    }
+    setHasRejectedProposal(false);
+    setRejectedProposalInfo(null);
+    setPickupType(currentRoute.pickup_type);
+    setPickupLocationId(currentRoute.pickup_location_id || undefined);
+    setPickupName(currentRoute.pickup_name || '');
+    setPickupAddress(currentRoute.pickup_address || '');
+    setPickupNeighborhood(currentRoute.pickup_neighborhood_snapshot || '');
+    setFinalDeadline(currentRoute.final_deadline || '');
+    setFinalDriverFee(
+      currentRoute.final_driver_fee !== null && currentRoute.final_driver_fee !== undefined
+        ? String(currentRoute.final_driver_fee)
+        : currentRoute.total_fee || ''
+    );
+    setOverrideReason(currentRoute.override_reason || '');
+    setAcceptedVehicleTypes(
+      currentRoute.accepted_vehicle_types || ['CAR', 'MOTO', 'MOTO_WITH_BAG']
+    );
+
+    setStopsList(
+      currentStops.map((s, index) => ({
+        id: s.id,
+        sequence: s.sequence || index + 1,
+        destination_address: s.destination_address,
+        destination_neighborhood: s.destination_neighborhood,
+        cargo_description: s.cargo_description,
+        observations: s.observations || '',
+        desired_deadline: s.desired_deadline || '',
+        delivery_mode: s.delivery_mode,
+        status: s.status,
+        isDelivered: s.status === 'DELIVERED',
+      }))
+    );
+  };
 
   const fetchFreshRoute = async (id: number) => {
     setLoading(true);
@@ -99,34 +160,159 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
       setCurrentRoute(route);
       setCurrentStops(stops);
 
-      // Populate form
-      setPickupType(route.pickup_type);
-      setPickupLocationId(route.pickup_location_id || undefined);
-      setPickupName(route.pickup_name || '');
-      setPickupAddress(route.pickup_address || '');
-      setPickupNeighborhood(route.pickup_neighborhood_snapshot || '');
-      setFinalDeadline(route.final_deadline || '');
-      setFinalDriverFee(
-        route.final_driver_fee !== null && route.final_driver_fee !== undefined
-          ? String(route.final_driver_fee)
-          : route.total_fee || ''
-      );
-      setOverrideReason(route.override_reason || '');
+      // Verificar se há uma proposta rejeitada recente para recuperar os dados editados
+      let rejectedProposal: EditRouteDTO | null = null;
+      let rejectedMeta: { diff_summary?: string; rejected_at?: string } | null = null;
 
-      setStopsList(
-        stops.map((s, index) => ({
-          id: s.id,
-          sequence: s.sequence || index + 1,
-          destination_address: s.destination_address,
-          destination_neighborhood: s.destination_neighborhood,
-          cargo_description: s.cargo_description,
-          observations: s.observations || '',
-          desired_deadline: s.desired_deadline || '',
-          delivery_mode: s.delivery_mode,
-          status: s.status,
-          isDelivered: s.status === 'DELIVERED',
-        }))
-      );
+      if (route.pending_material_change) {
+        try {
+          const parsed =
+            typeof route.pending_material_change === 'string'
+              ? JSON.parse(route.pending_material_change)
+              : route.pending_material_change;
+          if (parsed && parsed.status === 'REJECTED' && parsed.proposal) {
+            rejectedProposal = parsed.proposal;
+            rejectedMeta = {
+              diff_summary: parsed.diff_summary,
+              rejected_at: parsed.rejected_at,
+            };
+          }
+        } catch (e) {
+          console.warn('Failed to parse pending_material_change', e);
+        }
+      }
+
+      // Fallback: verificar histórico de updates por uma proposta com status REJECTED
+      if (!rejectedProposal) {
+        try {
+          const updatesRes = await fetch(`/api/admin/routes/${id}/updates`, { headers });
+          if (updatesRes.ok) {
+            const updatesData = await updatesRes.json();
+            const updatesList = Array.isArray(updatesData) ? updatesData : updatesData.updates || [];
+            const lastRejected = updatesList.find(
+              (u: any) => u.driver_approval_status === 'REJECTED' && u.pending_proposal
+            );
+            if (lastRejected) {
+              rejectedProposal =
+                typeof lastRejected.pending_proposal === 'string'
+                  ? JSON.parse(lastRejected.pending_proposal)
+                  : lastRejected.pending_proposal;
+              rejectedMeta = {
+                diff_summary: lastRejected.diff_summary,
+                rejected_at: lastRejected.driver_decision_at || lastRejected.created_at,
+              };
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch updates for rejected proposal fallback', e);
+        }
+      }
+
+      if (rejectedProposal) {
+        setHasRejectedProposal(true);
+        setRejectedProposalInfo(rejectedMeta);
+
+        // Preencher o formulário com os dados alterados da proposta recusada
+        setPickupType(rejectedProposal.pickup_type || route.pickup_type);
+        setPickupLocationId(
+          rejectedProposal.pickup_location_id !== undefined
+            ? (rejectedProposal.pickup_location_id ?? undefined)
+            : (route.pickup_location_id || undefined)
+        );
+        setPickupName(rejectedProposal.pickup_name || route.pickup_name || '');
+        setPickupAddress(rejectedProposal.pickup_address || route.pickup_address || '');
+        setPickupNeighborhood(
+          rejectedProposal.pickup_neighborhood || route.pickup_neighborhood_snapshot || ''
+        );
+        setFinalDeadline(rejectedProposal.final_deadline || route.final_deadline || '');
+        setFinalDriverFee(
+          rejectedProposal.final_driver_fee !== null &&
+            rejectedProposal.final_driver_fee !== undefined
+            ? String(rejectedProposal.final_driver_fee)
+            : route.final_driver_fee !== null && route.final_driver_fee !== undefined
+            ? String(route.final_driver_fee)
+            : route.total_fee || ''
+        );
+        setOverrideReason(
+          rejectedProposal.override_reason || route.override_reason || ''
+        );
+        setAcceptedVehicleTypes(
+          rejectedProposal.accepted_vehicle_types ||
+            route.accepted_vehicle_types || ['CAR', 'MOTO', 'MOTO_WITH_BAG']
+        );
+
+        if (Array.isArray(rejectedProposal.stops) && rejectedProposal.stops.length > 0) {
+          setStopsList(
+            rejectedProposal.stops.map((s: any, index: number) => {
+              const orig = stops.find((os) => os.id === s.id);
+              return {
+                id: s.id,
+                sequence: s.sequence || index + 1,
+                destination_address: s.destination_address || '',
+                destination_neighborhood: s.destination_neighborhood || '',
+                cargo_description: s.cargo_description || '',
+                observations: s.observations || '',
+                desired_deadline: s.desired_deadline || '',
+                delivery_mode: s.delivery_mode || 'IN_PERSON',
+                status: orig?.status || s.status,
+                isDelivered: orig?.status === 'DELIVERED',
+                isNew: !s.id,
+                is_horizontal_condo: Boolean(s.is_horizontal_condo || (s.observations && s.observations.includes('[Condomínio Horizontal]'))),
+              };
+            })
+          );
+        } else {
+          setStopsList(
+            stops.map((s, index) => ({
+              id: s.id,
+              sequence: s.sequence || index + 1,
+              destination_address: s.destination_address,
+              destination_neighborhood: s.destination_neighborhood,
+              cargo_description: s.cargo_description,
+              observations: s.observations || '',
+              desired_deadline: s.desired_deadline || '',
+              delivery_mode: s.delivery_mode,
+              status: s.status,
+              isDelivered: s.status === 'DELIVERED',
+              is_horizontal_condo: Boolean(s.is_horizontal_condo || (s.observations && s.observations.includes('[Condomínio Horizontal]'))),
+            }))
+          );
+        }
+      } else {
+        setHasRejectedProposal(false);
+        setRejectedProposalInfo(null);
+
+        // Preenchimento padrão a partir da rota ativa
+        setPickupType(route.pickup_type);
+        setPickupLocationId(route.pickup_location_id || undefined);
+        setPickupName(route.pickup_name || '');
+        setPickupAddress(route.pickup_address || '');
+        setPickupNeighborhood(route.pickup_neighborhood_snapshot || '');
+        setFinalDeadline(route.final_deadline || '');
+        setFinalDriverFee(
+          route.final_driver_fee !== null && route.final_driver_fee !== undefined
+            ? String(route.final_driver_fee)
+            : route.total_fee || ''
+        );
+        setOverrideReason(route.override_reason || '');
+        setAcceptedVehicleTypes(route.accepted_vehicle_types || ['CAR', 'MOTO', 'MOTO_WITH_BAG']);
+
+        setStopsList(
+          stops.map((s, index) => ({
+            id: s.id,
+            sequence: s.sequence || index + 1,
+            destination_address: s.destination_address,
+            destination_neighborhood: s.destination_neighborhood,
+            cargo_description: s.cargo_description,
+            observations: s.observations || '',
+            desired_deadline: s.desired_deadline || '',
+            delivery_mode: s.delivery_mode,
+            status: s.status,
+            isDelivered: s.status === 'DELIVERED',
+            is_horizontal_condo: Boolean(s.is_horizontal_condo || (s.observations && s.observations.includes('[Condomínio Horizontal]'))),
+          }))
+        );
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -180,6 +366,7 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
         delivery_mode: 'IN_PERSON',
         isDelivered: false,
         isNew: true,
+        is_horizontal_condo: false,
       },
     ]);
   };
@@ -213,6 +400,7 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
       pickup_neighborhood: pickupNeighborhood.trim(),
       pickup_neighborhood_snapshot: pickupNeighborhood.trim(),
       final_deadline: finalDeadline.trim(),
+      accepted_vehicle_types: acceptedVehicleTypes,
       final_driver_fee: finalDriverFee.trim() ? finalDriverFee.trim() : undefined,
       override_reason: overrideReason.trim() ? overrideReason.trim() : undefined,
       stops: stopsList.map((s, idx) => ({
@@ -221,14 +409,21 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
         destination_address: s.destination_address.trim(),
         destination_neighborhood: s.destination_neighborhood.trim(),
         cargo_description: s.cargo_description.trim(),
-        observations: s.observations.trim() || undefined,
+        observations: (() => {
+          let obs = s.observations.trim();
+          if (s.is_horizontal_condo && !obs.includes('[Condomínio Horizontal]')) {
+            obs = obs ? `[Condomínio Horizontal] ${obs}` : '[Condomínio Horizontal]';
+          }
+          return obs || undefined;
+        })(),
+        is_horizontal_condo: s.is_horizontal_condo,
         desired_deadline: s.desired_deadline.trim() || undefined,
         delivery_mode: s.delivery_mode,
       })),
     };
   };
 
-  // Step 1 -> Step 2: Preview
+  // Step 1 -> Step 2: Preview (or direct save if DRAFT)
   const handleRequestPreview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentRoute) return;
@@ -252,6 +447,17 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
         setError(`Descrição do pedido/carga obrigatória na Parada #${i + 1}.`);
         return;
       }
+    }
+
+    if (acceptedVehicleTypes.length === 0) {
+      setError('Selecione pelo menos um tipo de veículo aceitável.');
+      return;
+    }
+
+    // Se a rota for RASCUNHO (DRAFT), salva diretamente sem precisar de etapa intermediária de preview
+    if (currentRoute.status === 'DRAFT') {
+      await handleExecuteEdit();
+      return;
     }
 
     setSubmitting(true);
@@ -426,6 +632,39 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
           </div>
         )}
 
+        {/* Rejected Material Change Restored for Readjustment Banner */}
+        {!loading && currentRoute && isRouteEditable && hasRejectedProposal && (
+          <div className="p-4 rounded-xl bg-amber-50 border-2 border-amber-400 text-amber-950 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold text-sm text-amber-900 flex items-center gap-2">
+                  <span>Alteração Recusada Anteriormente Recuperada</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+                    Pronta para Reajuste
+                  </span>
+                </div>
+                <p className="mt-1 text-amber-800 leading-relaxed text-[11px]">
+                  O motorista não aceitou a proposta anterior. As alterações feitas nos dados da corrida foram <strong>recuperadas e mantidas no formulário</strong> abaixo. Você pode ajustar o frete do motorista ou os dados e enviar uma nova proposta para o motorista aprovar.
+                </p>
+                {rejectedProposalInfo?.diff_summary && (
+                  <p className="mt-1 text-[10px] text-amber-700 font-mono">
+                    Última proposta: {rejectedProposalInfo.diff_summary}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={restoreOriginalRouteData}
+              className="px-3 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700 font-bold text-[11px] whitespace-nowrap transition-colors shrink-0 cursor-pointer shadow-2xs"
+              title="Descartar as alterações da proposta recusada e recarregar os dados originais da rota"
+            >
+              Restaurar Original
+            </button>
+          </div>
+        )}
+
         {/* Concurrency Conflict Warning */}
         {conflictWarning && (
           <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-xs flex items-start gap-2.5">
@@ -524,29 +763,38 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-neutral-200/60">
                 <div>
                   <label className="block text-neutral-600 font-semibold mb-1">
-                    Prazo Final da Rota
+                    Duração / Prazo Final da Rota
                   </label>
                   <input
                     type="text"
                     value={finalDeadline}
                     onChange={(e) => setFinalDeadline(e.target.value)}
-                    placeholder="Ex: 18:30"
+                    placeholder="Ex: 50 min ou 18:30"
                     className="w-full px-3 py-2 rounded-lg border border-neutral-300 bg-white font-mono focus:outline-hidden focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
-                <div>
+                <div className={hasRejectedProposal ? 'p-2.5 rounded-xl bg-amber-50/80 border-2 border-amber-400' : ''}>
                   <label className="block text-neutral-600 font-semibold mb-1">
                     Frete do Motorista (R$)
                     <span className="text-[10px] text-amber-700 font-normal ml-1">
                       (Alteração Material)
                     </span>
+                    {hasRejectedProposal && (
+                      <span className="text-[10px] text-amber-900 font-bold block mt-0.5">
+                        💡 Reajuste o valor do frete para nova negociação com o motorista
+                      </span>
+                    )}
                   </label>
                   <input
                     type="text"
                     value={finalDriverFee}
                     onChange={(e) => setFinalDriverFee(e.target.value)}
                     placeholder="Ex: 45.00"
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-300 bg-white font-mono font-bold text-emerald-800 focus:outline-hidden focus:ring-2 focus:ring-orange-500"
+                    className={`w-full px-3 py-2 rounded-lg border bg-white font-mono font-bold text-emerald-800 focus:outline-hidden focus:ring-2 ${
+                      hasRejectedProposal
+                        ? 'border-amber-400 ring-2 ring-amber-300 text-amber-950 focus:ring-amber-500'
+                        : 'border-neutral-300 focus:ring-orange-500'
+                    }`}
                   />
                 </div>
                 <div>
@@ -560,6 +808,87 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
                     placeholder="Ex: Adicionado parada ou chuva"
                     className="w-full px-3 py-2 rounded-lg border border-neutral-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-orange-500"
                   />
+                </div>
+              </div>
+
+              {/* Veículos Aceitos */}
+              <div className="pt-2 border-t border-neutral-200/60">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-2">
+                  <label className="block text-neutral-700 font-bold text-xs">
+                    🚗 Veículos Aceitáveis para esta Rota
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAcceptedVehicleTypes(['MOTO', 'MOTO_WITH_BAG'])}
+                      className={`px-2.5 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                        !acceptedVehicleTypes.includes('CAR') && (acceptedVehicleTypes.includes('MOTO') || acceptedVehicleTypes.includes('MOTO_WITH_BAG'))
+                          ? 'border-orange-600 bg-orange-600 text-white'
+                          : 'border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700'
+                      }`}
+                    >
+                      🏍️ Apenas Moto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAcceptedVehicleTypes(['CAR'])}
+                      className={`px-2.5 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                        acceptedVehicleTypes.length === 1 && acceptedVehicleTypes[0] === 'CAR'
+                          ? 'border-orange-600 bg-orange-600 text-white'
+                          : 'border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700'
+                      }`}
+                    >
+                      🚗 Apenas Carro
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAcceptedVehicleTypes(['CAR', 'MOTO', 'MOTO_WITH_BAG'])}
+                      className={`px-2.5 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                        acceptedVehicleTypes.includes('CAR') && acceptedVehicleTypes.includes('MOTO')
+                          ? 'border-orange-600 bg-orange-600 text-white'
+                          : 'border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700'
+                      }`}
+                    >
+                      🌐 Todos
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {[
+                    { type: 'CAR' as const, label: 'Carro', icon: '🚗' },
+                    { type: 'MOTO' as const, label: 'Moto', icon: '🏍️' },
+                    { type: 'MOTO_WITH_BAG' as const, label: 'Moto com Bag', icon: '🎒' },
+                  ].map((opt) => {
+                    const checked = acceptedVehicleTypes.includes(opt.type);
+                    return (
+                      <label
+                        key={opt.type}
+                        className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer select-none transition-all ${
+                          checked
+                            ? 'border-orange-500 bg-orange-50 text-neutral-900 font-bold ring-1 ring-orange-500/20'
+                            : 'border-neutral-200 bg-white text-neutral-400 hover:bg-neutral-50 hover:text-neutral-700'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            if (checked) {
+                              if (acceptedVehicleTypes.length > 1) {
+                                setAcceptedVehicleTypes(acceptedVehicleTypes.filter((v) => v !== opt.type));
+                              }
+                            } else {
+                              setAcceptedVehicleTypes([...acceptedVehicleTypes, opt.type]);
+                            }
+                          }}
+                          className="accent-orange-600 rounded"
+                        />
+                        <span className="text-base">{opt.icon}</span>
+                        <span>{opt.label}</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -714,7 +1043,12 @@ export const RouteEditModal: React.FC<RouteEditModalProps> = ({
                   {submitting ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Analisando...</span>
+                      <span>{currentRoute.status === 'DRAFT' ? 'Salvando...' : 'Analisando...'}</span>
+                    </>
+                  ) : currentRoute.status === 'DRAFT' ? (
+                    <>
+                      <CheckCircle className="w-3.5 h-3.5" />
+                      <span>Salvar Rascunho</span>
                     </>
                   ) : (
                     <>

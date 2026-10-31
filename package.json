@@ -10,10 +10,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:tg-accept": "tsx tests/tg_accept_suite.ts",
-    "test:m44": "tsx tests/m4_4_suite.ts && tsx tests/m4_4_e2e_suite.ts",
-    "test:m44b": "tsx tests/m4_4b_suite.ts",
-    "test:regression": "tsx tests/m1_2_controlled_referral_suite.ts && tsx tests/m4_operational_suite.ts && tsx tests/m4_1_suite.ts && tsx tests/m4_2_suite.ts && tsx tests/m4_3_maps_suite.ts && tsx tests/m4_4_suite.ts && tsx tests/m4_4_e2e_suite.ts && tsx tests/tg_accept_suite.ts && tsx tests/m4_4b_suite.ts",
+    "test:tg-accept": "FORCE_DEV_DB=true tsx tests/tg_accept_suite.ts",
+    "test:m44": "FORCE_DEV_DB=true tsx tests/m4_4_suite.ts && FORCE_DEV_DB=true tsx tests/m4_4_e2e_suite.ts",
+    "test:m44b": "FORCE_DEV_DB=true tsx tests/m4_4b_suite.ts",
+    "test:regression": "FORCE_DEV_DB=true tsx tests/m1_2_controlled_referral_suite.ts && FORCE_DEV_DB=true tsx tests/m4_operational_suite.ts && FORCE_DEV_DB=true tsx tests/m4_1_suite.ts && FORCE_DEV_DB=true tsx tests/m4_2_suite.ts && FORCE_DEV_DB=true tsx tests/m4_3_maps_suite.ts && FORCE_DEV_DB=true tsx tests/m4_4_suite.ts && FORCE_DEV_DB=true tsx tests/m4_4_e2e_suite.ts && FORCE_DEV_DB=true tsx tests/tg_accept_suite.ts && FORCE_DEV_DB=true tsx tests/m4_4b_suite.ts",
     "test": "npm run test:tg-accept"
   },
   "dependencies": {
@@ -22,6 +22,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.3",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "firebase": "^12.19.0",
     "firebase-admin": "^14.5.0",

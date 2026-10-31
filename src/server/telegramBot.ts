@@ -9,6 +9,8 @@ import {
   VEHICLE_OPTIONS,
   getVehicleTypeLabel,
   parseVehicleInput,
+  parseDriverVehicleTypes,
+  formatDriverVehicleTypes,
   Driver,
   PixKeyType,
   Route,
@@ -24,7 +26,7 @@ import {
   buildGoogleMapsDestinationUrl,
 } from './mapsNavigation.ts';
 import { routeEditService } from './routeEditService.ts';
-import { db, prodDb } from '../db/index.ts';
+import { db, prodDb, createPool } from '../db/index.ts';
 import { eq } from 'drizzle-orm';
 import { telegramBotSessions } from '../db/schema.ts';
 
@@ -61,6 +63,14 @@ export function buildRouteOfferClosedText(route: Route): string {
       .join('\n\n');
   }
 
+  const totalNum = parseFloat(String(route.total_fee || '0').replace(',', '.')) || 0;
+  const storeRate =
+    route.management_rate_snapshot != null && !isNaN(parseFloat(String(route.management_rate_snapshot)))
+      ? parseFloat(String(route.management_rate_snapshot))
+      : 0.10;
+  const driverFeeNum = Math.round(totalNum * (1 - storeRate) * 100) / 100;
+  const driverFeeStr = driverFeeNum.toFixed(2).replace('.', ',');
+
   let feeStr = (route.total_fee || '').trim();
   if (!feeStr.includes(',')) {
     const num = parseFloat(feeStr);
@@ -71,12 +81,13 @@ export function buildRouteOfferClosedText(route: Route): string {
   const pickupNeighborhoodLine = pickupNeighborhood ? `\nBairro: ${pickupNeighborhood}` : '';
 
   return (
-    `🔒 *ROTA #${route.id} — JÁ ACEITA POR OUTRO MOTORISTA*\n\n` +
+    `🔒 *CORRIDA #${route.id} — ROTA JÁ ACEITA POR OUTRO MOTORISTA*\n` +
+    `🆔 *Corrida:* #${route.id}\n\n` +
     `📍 *RETIRADA:*\n${route.pickup_name}${pickupNeighborhoodLine}\n\n` +
     `📦 *${stopsHeader}*\n\n` +
     `${stopsText}\n\n` +
     `🏁 *ENCERRAMENTO MÁXIMO:*\n${route.final_deadline}\n\n` +
-    `💰 *FRETE TOTAL:*\nR$ ${feeStr}\n\n` +
+    `💰 *FRETE:*\nR$ ${driverFeeStr}\n\n` +
     `🔒 ROTA JÁ ACEITA POR OUTRO MOTORISTA`
   );
 }
@@ -92,7 +103,8 @@ export function buildRouteOfferReplacedText(
   newVersion: number
 ): string {
   return (
-    `🔄 *ROTA #${routeId} — OFERTA ATUALIZADA*\n\n` +
+    `🔄 *ROTA #${routeId} (CORRIDA) — OFERTA ATUALIZADA*\n` +
+    `🆔 *Corrida:* #${routeId}\n\n` +
     `Esta versão da oferta foi substituída por uma nova versão.\n` +
     `Consulte a nova oferta enviada abaixo.\n\n` +
     `• *Versão anterior:* v${oldVersion}\n` +
@@ -105,7 +117,8 @@ interface WizardState {
   data: {
     name?: string;
     phone?: string;
-    vehicle_type?: VehicleType;
+    vehicle_type?: string;
+    vehicle_types?: VehicleType[];
     pix_key_type?: PixKeyType;
     pix_key_value?: string;
     pix_key?: string;
@@ -120,7 +133,8 @@ interface EditProfileState {
   pendingData: {
     name?: string;
     phone?: string;
-    vehicle_type?: VehicleType;
+    vehicle_type?: string;
+    vehicle_types?: VehicleType[];
     pix_key_type?: PixKeyType;
     pix_key_value?: string;
   };
@@ -251,23 +265,11 @@ export class TelegramBotService {
   }
 
   public async getSession(telegramUserId: string): Promise<WizardState | null> {
-    const memory = this.sessions.get(telegramUserId);
-    if (memory) return memory;
-
     try {
-      let res = await db
+      const res = await db
         .select()
         .from(telegramBotSessions)
         .where(eq(telegramBotSessions.userId, telegramUserId));
-
-      if ((!res || res.length === 0) && process.env.SQL_DB_NAME !== 'cloud_sql_production_database') {
-        try {
-          res = await prodDb
-            .select()
-            .from(telegramBotSessions)
-            .where(eq(telegramBotSessions.userId, telegramUserId));
-        } catch {}
-      }
 
       if (res && res[0] && res[0].sessionType === 'WIZARD') {
         const rawData = typeof res[0].data === 'string' ? JSON.parse(res[0].data) : res[0].data;
@@ -279,10 +281,13 @@ export class TelegramBotService {
         this.sessions.set(telegramUserId, loaded);
         return loaded;
       }
+      // If DB has no active session, clear memory as well
+      this.sessions.delete(telegramUserId);
+      return null;
     } catch (e: any) {
       console.warn('[TelegramBot.getSession] DB lookup warning:', e?.message);
+      return this.sessions.get(telegramUserId) || null;
     }
-    return null;
   }
 
   public async saveSession(telegramUserId: string, state: WizardState) {
@@ -478,6 +483,25 @@ export class TelegramBotService {
         console.warn(`[Telegram] Failed to send message to chat ${chatId}:`, err.message);
       }
       return false;
+    }
+  }
+
+  public async editMessageReplyMarkup(
+    chatId: string | number,
+    messageId: number | string,
+    extra: { reply_markup?: any } = {}
+  ): Promise<any> {
+    try {
+      return await this.callTelegramApi('editMessageReplyMarkup', {
+        chat_id: chatId,
+        message_id: messageId,
+        ...extra,
+      });
+    } catch (err: any) {
+      if (err.message && err.message.includes('message is not modified')) {
+        return null;
+      }
+      throw err;
     }
   }
 
@@ -712,11 +736,19 @@ export class TelegramBotService {
         .join('\n\n');
     }
 
-    // Normalize fee formatting to R$ X,XX
-    let feeStr = route.total_fee.trim();
-    if (!feeStr.includes(',')) {
-      const num = parseFloat(feeStr);
-      if (!isNaN(num)) feeStr = num.toFixed(2).replace('.', ',');
+    // Frete Total e Frete do Motorista (descontado o % de retenção da loja)
+    const totalNum = parseFloat(String(route.total_fee || '0').replace(',', '.')) || 0;
+    const storeRate =
+      route.management_rate_snapshot != null && !isNaN(parseFloat(String(route.management_rate_snapshot)))
+        ? parseFloat(String(route.management_rate_snapshot))
+        : 0.10;
+    const driverFeeNum = Math.round(totalNum * (1 - storeRate) * 100) / 100;
+    const driverFeeStr = driverFeeNum.toFixed(2).replace('.', ',');
+
+    let totalFeeStr = route.total_fee.trim();
+    if (!totalFeeStr.includes(',')) {
+      const num = parseFloat(totalFeeStr);
+      if (!isNaN(num)) totalFeeStr = num.toFixed(2).replace('.', ',');
     }
 
     const pickupNeighborhood = route.pickup_neighborhood_snapshot?.trim();
@@ -727,20 +759,31 @@ export class TelegramBotService {
         ? `\n🔄 *OFERTA ATUALIZADA — v${route.route_version}*`
         : '';
 
+    const isCarOnly =
+      Array.isArray(route.accepted_vehicle_types) &&
+      route.accepted_vehicle_types.includes('CAR') &&
+      !route.accepted_vehicle_types.includes('MOTO') &&
+      !route.accepted_vehicle_types.includes('MOTO_WITH_BAG');
+    const isMotoOnly =
+      Array.isArray(route.accepted_vehicle_types) &&
+      !route.accepted_vehicle_types.includes('CAR');
+    const routeVehicleIcon = isCarOnly ? '🚗' : isMotoOnly ? '🛵' : '🚗/🛵';
+
     const text =
-      `🛵 *NOVA ROTA #${route.id}*${updatedVersionHeader}\n\n` +
+      `${routeVehicleIcon} *NOVA CORRIDA #${route.id}*${updatedVersionHeader}\n` +
+      `🆔 *Corrida:* #${route.id}\n\n` +
       `📍 *RETIRADA:*\n${route.pickup_name}${pickupNeighborhoodLine}\n\n` +
       `📦 *${stopsHeader}*\n\n` +
       `${stopsText}\n\n` +
       `🏁 *ENCERRAMENTO MÁXIMO:*\n${route.final_deadline}\n\n` +
-      `💰 *FRETE TOTAL:*\nR$ ${feeStr}\n\n` +
+      `💰 *FRETE:*\nR$ ${driverFeeStr}\n\n` +
       `🚗 *Compatível com seu veículo*`;
 
     const replyMarkup = {
       inline_keyboard: [
         [
           {
-            text: '✅ ACEITAR ROTA',
+            text: `✅ ACEITAR CORRIDA #${route.id} (R$ ${driverFeeStr})`,
             callback_data: `accept_route:${route.id}:${route.route_version || 1}`,
           },
         ],
@@ -798,25 +841,34 @@ export class TelegramBotService {
         .join('\n');
     }
 
-    let feeStr = (route.total_fee || '').trim();
-    if (!feeStr.includes(',')) {
-      const num = parseFloat(feeStr);
-      if (!isNaN(num)) feeStr = num.toFixed(2).replace('.', ',');
+    const totalNum = parseFloat(String(route.total_fee || '0').replace(',', '.')) || 0;
+    const storeRate =
+      route.management_rate_snapshot != null && !isNaN(parseFloat(String(route.management_rate_snapshot)))
+        ? parseFloat(String(route.management_rate_snapshot))
+        : 0.10;
+    const driverFeeNum = Math.round(totalNum * (1 - storeRate) * 100) / 100;
+    const driverFeeStr = driverFeeNum.toFixed(2).replace('.', ',');
+
+    let totalFeeStr = (route.total_fee || '').trim();
+    if (!totalFeeStr.includes(',')) {
+      const num = parseFloat(totalFeeStr);
+      if (!isNaN(num)) totalFeeStr = num.toFixed(2).replace('.', ',');
     }
 
     const navLinks = generateRouteNavigationLinks(route);
 
     let text =
-      `✅ *ROTA #${route.id} ACEITA*\n\n` +
+      `✅ *CORRIDA #${route.id} ACEITA!*\n` +
+      `🆔 *Corrida:* #${route.id}\n\n` +
       `📍 *RETIRADA*\n` +
       `${route.pickup_name}\n` +
       `${route.pickup_address}${neighborhoodLine}\n\n` +
       `📦 *${total} ${total === 1 ? 'ENTREGA' : 'ENTREGAS'}*\n\n` +
       (stopsSummary ? `${stopsSummary}\n\n` : '') +
       (navLinks.maxStopsExceeded
-        ? `ℹ️ Esta rota possui várias entregas. Utilize a navegação disponível em cada parada.\n\n`
+        ? `ℹ️ Esta corrida possui várias entregas. Utilize a navegação disponível em cada parada.\n\n`
         : '') +
-      `💰 *FRETE*\nR$ ${feeStr}\n\n` +
+      `💰 *FRETE:*\nR$ ${driverFeeStr}\n\n` +
       `🏁 *Encerramento desejado:*\n${route.final_deadline}`;
 
     const inlineKeyboard: any[] = [];
@@ -825,7 +877,7 @@ export class TelegramBotService {
     if (navLinks.generalRouteUrl) {
       inlineKeyboard.push([
         {
-          text: '🗺️ ABRIR ROTA NO GOOGLE MAPS',
+          text: `🗺️ MAPS GERAL (Corrida #${route.id})`,
           url: navLinks.generalRouteUrl,
         },
       ]);
@@ -835,7 +887,7 @@ export class TelegramBotService {
     if (navLinks.pickupUrl) {
       inlineKeyboard.push([
         {
-          text: '🗺️ IR PARA COLETA',
+          text: `🗺️ IR PARA COLETA (Corrida #${route.id})`,
           url: navLinks.pickupUrl,
         },
       ]);
@@ -844,7 +896,7 @@ export class TelegramBotService {
     // Preservar botão de confirmação de chegada na coleta
     inlineKeyboard.push([
       {
-        text: '📦 CHEGUEI PARA COLETA',
+        text: `📦 CHEGUEI PARA COLETA (Corrida #${route.id})`,
         callback_data: `route_arrived_pickup:${route.id}`,
       },
     ]);
@@ -870,6 +922,7 @@ export class TelegramBotService {
     const observations = stop.observations ? stop.observations : 'Nenhuma';
 
     const text =
+      `🆔 *CORRIDA #${route.id}*\n` +
       `📦 *ENTREGA ${stop.sequence} DE ${total}*\n\n` +
       `📍 *Endereço:*\n${stop.destination_address}\n\n` +
       `🏘️ *Bairro:*\n${stop.destination_neighborhood}\n\n` +
@@ -886,7 +939,7 @@ export class TelegramBotService {
       if (stopMapsUrl) {
         buttons.push([
           {
-            text: '🗺️ ABRIR NO MAPS',
+            text: `🗺️ ABRIR NO MAPS (Corrida #${route.id})`,
             url: stopMapsUrl,
           },
         ]);
@@ -895,14 +948,14 @@ export class TelegramBotService {
       console.warn(`[Google Maps] Parada #${stop.id} sem endereço válido para gerar navegação.`);
     }
 
-    buttons.push([{ text: '📦 REALIZAR ENTREGA', callback_data: `stop_deliver:${stop.id}` }]);
-    buttons.push([{ text: '⚠️ PROBLEMA NESTA ENTREGA', callback_data: `stop_incident:${stop.id}` }]);
+    buttons.push([{ text: `📦 REALIZAR ENTREGA (Corrida #${route.id})`, callback_data: `stop_deliver:${stop.id}` }]);
+    buttons.push([{ text: `⚠️ PROBLEMA NESTA ENTREGA (Corrida #${route.id})`, callback_data: `stop_incident:${stop.id}` }]);
 
     // M4 Seção 12: Preservar sequence como ordem recomendada, permitindo acessar outra parada pendente
     const pendingStops = (route.stops || []).filter((s) => s.status === 'PENDING' && s.id !== stop.id);
     if (pendingStops.length > 0) {
       buttons.push([
-        { text: '🔄 VER OUTRAS PARADAS PENDENTES', callback_data: `route_choose_stop:${route.id}` },
+        { text: `🔄 OUTRAS PARADAS (Corrida #${route.id})`, callback_data: `route_choose_stop:${route.id}` },
       ]);
     }
 
@@ -914,7 +967,8 @@ export class TelegramBotService {
   }
 
   /**
-   * M4 Seção 25: Resumo final para o motorista ao concluir a rota
+   * M4 Seção 25: Resumo final para o motorista ao concluir a rota (substituído por mensagem amigável com chave PIX)
+   * Se houver incidente reportado e a rota ainda não foi finalizada pelo atendente, não promete pagamento nem conclui.
    */
   public async sendFinalRouteSummary(
     chatId: string | number,
@@ -923,20 +977,49 @@ export class TelegramBotService {
     const route = await this.routeService?.getRouteById(routeId);
     if (!route) return false;
 
-    const total = route.stops?.length || 0;
-    const deliveredCount = (route.stops || []).filter((s: RouteStop) => s.status === 'DELIVERED').length;
-    const incidentCount = (route.stops || []).filter((s: RouteStop) => s.status === 'INCIDENT').length;
+    // Se houver incidentes/pendências não resolvidas ou rota não finalizada com incidente, notificar sobre tratamento
+    const hasAnyIncident = (route.stops || []).some(
+      (s: any) => s.status === 'INCIDENT' || !!s.incident_type
+    );
+    if (hasAnyIncident && route.status !== 'COMPLETED') {
+      return this.sendIncidentRouteNotification(chatId, routeId);
+    }
 
-    const completedDate = route.completed_at ? new Date(route.completed_at) : new Date();
-    const timeStr = completedDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    let driverPix = 'chave cadastrada';
+    if (route.accepted_driver_id && this.driverService) {
+      const driver = await this.driverService.getDriverById(route.accepted_driver_id).catch(() => null);
+      if (driver?.pix_key_value || driver?.pix_key) {
+        driverPix = (driver.pix_key_value || driver.pix_key)!.trim();
+      }
+    }
 
     const text =
-      `🏁 *ROTA #${route.id} ENCERRADA*\n\n` +
-      `📦 ${total} entregas\n\n` +
-      `✅ Entregues: ${deliveredCount}\n` +
-      `⚠️ Com problema: ${incidentCount}\n\n` +
-      `⏱️ *Encerrada às:*\n${timeStr}\n\n` +
-      `Obrigado.`;
+      `🆔 *Corrida #${route.id}*\n\n` +
+      `Entrega finalizada com sucesso!\n` +
+      `Em breve seu pagamento será realizado no pix: ${driverPix}.\n\n` +
+      `Qualquer dúvida pode nos chamar no whatsapp 34 9 9678 7881\n\n` +
+      `Muito Obrigado!\n` +
+      `Kantine Gastronomia`;
+
+    return this.sendMessage(chatId, text);
+  }
+
+  /**
+   * Mensagem para quando a corrida possui incidentes/pendências reportadas
+   * Informa que a pendência será tratada via WhatsApp e que a Kantine fará os pagamentos devidos por PIX o mais breve possível
+   */
+  public async sendIncidentRouteNotification(
+    chatId: string | number,
+    routeId: number
+  ): Promise<boolean> {
+    const text =
+      `⚠️ *Corrida #${routeId}*\n\n` +
+      `Identificamos que houve uma pendência/ocorrência nesta entrega.\n\n` +
+      `A pendência será tratada com você por WhatsApp e a Kantine vai efetuar os pagamentos devidos por PIX o mais breve possível.\n\n` +
+      `Você pode nos chamar a qualquer momento no WhatsApp:\n` +
+      `📲 *34 9 9678 7881*\n\n` +
+      `Muito Obrigado!\n` +
+      `*Kantine Gastronomia*`;
 
     return this.sendMessage(chatId, text);
   }
@@ -949,7 +1032,7 @@ export class TelegramBotService {
     routeId: number
   ): Promise<boolean> {
     if (!this.token && !isMockChatId(chatId)) return false;
-    const text = `❌ *ROTA #${routeId} CANCELADA*`;
+    const text = `❌ *CORRIDA #${routeId} CANCELADA*`;
     return this.sendMessage(chatId, text);
   }
 
@@ -968,8 +1051,8 @@ export class TelegramBotService {
     const navLinks = generateRouteNavigationLinks(route);
 
     const text =
-      `⚠️ *ROTA #${route.id} ATUALIZADA*\n\n` +
-      `A loja realizou uma correção na sua rota.\n\n` +
+      `⚠️ *CORRIDA #${route.id} ATUALIZADA*\n\n` +
+      `A loja realizou uma correção na sua Corrida #${route.id}.\n\n` +
       `*Versão anterior:* ${oldVersion}\n` +
       `*Nova versão:* ${newVersion}\n\n` +
       `${diffSummary}\n\n` +
@@ -981,14 +1064,14 @@ export class TelegramBotService {
     if (navLinks.generalRouteUrl) {
       inlineKeyboard.push([
         {
-          text: '🗺️ ABRIR ROTA ATUALIZADA',
+          text: `🗺️ MAPS ATUALIZADO (Corrida #${route.id})`,
           url: navLinks.generalRouteUrl,
         },
       ]);
     } else if (navLinks.pickupUrl) {
       inlineKeyboard.push([
         {
-          text: '🗺️ ABRIR ROTA ATUALIZADA',
+          text: `🗺️ MAPS ATUALIZADO (Corrida #${route.id})`,
           url: navLinks.pickupUrl,
         },
       ]);
@@ -997,7 +1080,7 @@ export class TelegramBotService {
     // Botão CIENTE (Seção 12)
     inlineKeyboard.push([
       {
-        text: '✅ CIENTE',
+        text: `✅ CIENTE (Corrida #${route.id})`,
         callback_data: `route_ack:${route.id}:${newVersion}`,
       },
     ]);
@@ -1021,19 +1104,19 @@ export class TelegramBotService {
     if (!this.token && !isMockChatId(chatId)) return false;
 
     const text =
-      `⚠️ *ALTERAÇÃO IMPORTANTE — ROTA #${route.id}*\n\n` +
-      `A loja alterou as condições da rota que você aceitou.\n\n` +
+      `⚠️ *CORRIDA #${route.id}: PROPOSTA DE ALTERAÇÃO*\n\n` +
+      `A loja alterou as condições da Corrida #${route.id} que você aceitou.\n\n` +
       `${diffSummary}\n\n` +
-      `Você aceita as novas condições desta rota?`;
+      `Você aceita as novas condições desta corrida?`;
 
     const inlineKeyboard: any[] = [
       [
         {
-          text: '✅ ACEITAR ALTERAÇÃO',
+          text: `✅ ACEITAR (Corrida #${route.id})`,
           callback_data: `route_mat_accept:${route.id}:${updateId}`,
         },
         {
-          text: '❌ NÃO ACEITAR',
+          text: `❌ NÃO ACEITAR (Corrida #${route.id})`,
           callback_data: `route_mat_reject:${route.id}:${updateId}`,
         },
       ],
@@ -1059,22 +1142,22 @@ export class TelegramBotService {
     if (accepted) {
       const navLinks = generateRouteNavigationLinks(route);
       const text =
-        `✅ *ALTERAÇÃO APROVADA*\n\n` +
-        `Você aceitou as novas condições da Rota #${route.id} (v${route.route_version}).\n` +
+        `✅ *CORRIDA #${route.id}: ALTERAÇÃO APROVADA*\n\n` +
+        `Você aceitou as novas condições da Corrida #${route.id} (v${route.route_version}).\n` +
         `As novas informações já estão em vigor no seu painel.`;
 
       const inlineKeyboard: any[] = [];
       if (navLinks.generalRouteUrl) {
         inlineKeyboard.push([
           {
-            text: '🗺️ ABRIR ROTA ATUALIZADA',
+            text: `🗺️ MAPS ATUALIZADO (Corrida #${route.id})`,
             url: navLinks.generalRouteUrl,
           },
         ]);
       } else if (navLinks.pickupUrl) {
         inlineKeyboard.push([
           {
-            text: '🗺️ ABRIR ROTA ATUALIZADA',
+            text: `🗺️ MAPS ATUALIZADO (Corrida #${route.id})`,
             url: navLinks.pickupUrl,
           },
         ]);
@@ -1085,9 +1168,9 @@ export class TelegramBotService {
       });
     } else {
       const text =
-        `❌ *ALTERAÇÃO RECUSADA*\n\n` +
-        `Você não aceitou a alteração da Rota #${route.id}.\n` +
-        `As condições anteriores da rota continuam válidas e vigentes.`;
+        `❌ *CORRIDA #${route.id}: ALTERAÇÃO RECUSADA*\n\n` +
+        `Você não aceitou a alteração da Corrida #${route.id}.\n` +
+        `As condições anteriores da corrida continuam válidas e vigentes.`;
 
       return this.sendMessage(chatId, text);
     }
@@ -1248,7 +1331,7 @@ export class TelegramBotService {
     } else {
       // No message ID available -> send short fallback notification
       try {
-        const fallbackText = `🔄 A Rota #${routeId} foi atualizada de v${oldVersion} para v${newVersion}. Verifique a nova oferta.`;
+        const fallbackText = `🔄 A Corrida #${routeId} foi atualizada de v${oldVersion} para v${newVersion}. Verifique a nova oferta.`;
         await this.sendMessage(chatId, fallbackText);
         return { success: true, mode: 'FALLBACK_SENT_NO_MESSAGE_ID' };
       } catch (err: any) {
@@ -1258,6 +1341,78 @@ export class TelegramBotService {
         return { success: false, mode: 'FAILED', error: err.message };
       }
     }
+  }
+
+  /**
+   * Helper: Lista corridas em andamento do motorista com acesso direto às ações de cada corrida
+   */
+  public async sendDriverActiveRoutes(chatId: string | number, telegramUserId: string) {
+    if (!this.driverService || !this.routeService) {
+      await this.sendMessage(chatId, 'Serviço temporariamente indisponível.');
+      return;
+    }
+
+    const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
+    if (!driver) {
+      await this.sendMessage(chatId, 'Motorista não encontrado. Envie /start para iniciar seu cadastro.');
+      return;
+    }
+
+    const allRoutes = await this.routeService.getRoutes();
+    const activeRoutes = (allRoutes || []).filter(
+      (r: Route) =>
+        r.accepted_driver_id === driver.id &&
+        ['ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(r.status)
+    );
+
+    if (activeRoutes.length === 0) {
+      await this.sendMessage(
+        chatId,
+        'Você não possui nenhuma corrida em andamento no momento.\n\nQuando uma nova corrida for disponibilizada, você receberá a notificação aqui!'
+      );
+      return;
+    }
+
+    let text = `📦 *SUAS CORRIDAS EM ANDAMENTO (${activeRoutes.length}):*\n\n`;
+    const buttons: any[] = [];
+
+    for (const r of activeRoutes) {
+      let statusDesc = 'Aceita (a caminho da coleta)';
+      if (r.status === 'ARRIVED_PICKUP') statusDesc = 'Na coleta (aguardando pedidos)';
+      if (r.status === 'PICKED_UP') statusDesc = 'Coletada (pronta para iniciar)';
+      if (r.status === 'IN_TRANSIT') statusDesc = 'Em trânsito / realizando entregas';
+
+      const stopsCount = r.stops?.length || 1;
+      const totalNum = parseFloat(String(r.total_fee || '0').replace(',', '.')) || 0;
+      const storeRate =
+        r.management_rate_snapshot != null && !isNaN(parseFloat(String(r.management_rate_snapshot)))
+          ? parseFloat(String(r.management_rate_snapshot))
+          : 0.10;
+      const driverFeeNum = Math.round(totalNum * (1 - storeRate) * 100) / 100;
+      const driverFeeStr = driverFeeNum.toFixed(2).replace('.', ',');
+
+      text +=
+        `🆔 *Corrida #${r.id}*\n` +
+        `• *Retirada:* ${r.pickup_name}\n` +
+        `• *Status:* ${statusDesc}\n` +
+        `• *Entregas:* ${stopsCount} ${stopsCount === 1 ? 'parada' : 'paradas'}\n` +
+        `• *Frete:* R$ ${driverFeeStr}\n\n`;
+
+      buttons.push([
+        {
+          text: `👉 ABRIR CORRIDA #${r.id}`,
+          callback_data: `open_active_route:${r.id}`,
+        },
+      ]);
+    }
+
+    text += `Selecione a corrida desejada para visualizar o endereço e ações da entrega:`;
+
+    await this.sendMessage(chatId, text, {
+      reply_markup: {
+        inline_keyboard: buttons,
+      },
+    });
   }
 
   /**
@@ -1318,10 +1473,47 @@ export class TelegramBotService {
   }
 
   private async pollLoop() {
-    console.log('[Telegram Bot] Starting long polling loop...');
+    console.log('[Telegram Bot] Starting long polling loop with leader election...');
     let consecutiveTransientErrors = 0;
+    const ADVISORY_LOCK_ID = 987654321;
+    let lockClient: any = null;
+    let hasLock = false;
 
     while (!this.shouldStop && this.token) {
+      // 1. Leader Election: Ensure only ONE node in the entire cluster runs polling!
+      if (!hasLock) {
+        try {
+          if (!lockClient) {
+            lockClient = await createPool().connect();
+            lockClient.on('error', (clientErr: any) => {
+              console.warn('[Telegram Bot] Advisory lock client socket terminated (recovering):', clientErr?.message || clientErr);
+              hasLock = false;
+              try { lockClient?.release(true); } catch {}
+              lockClient = null;
+            });
+          }
+          const lockRes = await lockClient.query('SELECT pg_try_advisory_lock($1) as locked', [ADVISORY_LOCK_ID]);
+          if (lockRes.rows[0]?.locked) {
+            hasLock = true;
+            console.log('[Telegram Bot] Acquired leader lock via pg_advisory_lock. Active Telegram poller.');
+          } else {
+            // Standby worker: wait 5s and re-attempt to acquire lock if leader goes down
+            await new Promise((r) => setTimeout(r, 5000));
+            continue;
+          }
+        } catch (lockErr: any) {
+          console.warn('[Telegram Bot] Advisory lock error:', lockErr?.message);
+          hasLock = false;
+          if (lockClient) {
+            try { lockClient.release(true); } catch {}
+            lockClient = null;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+      }
+
+      // 2. Poll updates
       try {
         const updates = await this.callTelegramApi(
           'getUpdates',
@@ -1347,6 +1539,19 @@ export class TelegramBotService {
         if (this.shouldStop) break;
 
         const errMsg = err?.message || String(err);
+        const isConflict = errMsg.includes('409') || errMsg.includes('Conflict');
+        if (isConflict) {
+          console.warn('[Telegram Bot] 409 Conflict: another worker active. Re-checking cluster lock in 5s...');
+          hasLock = false;
+          if (lockClient) {
+            try { await lockClient.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_ID]); } catch {}
+            try { lockClient.release(); } catch {}
+            lockClient = null;
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+
         const isTransientNetwork =
           errMsg.includes('fetch failed') ||
           errMsg.includes('timed out') ||
@@ -1364,28 +1569,71 @@ export class TelegramBotService {
         } else if (errMsg.includes('401') || errMsg.includes('Unauthorized') || errMsg.includes('Not Found')) {
           console.warn('[Telegram Bot] Invalid or revoked bot token. Pausing polling until token update:', errMsg);
           this.isPolling = false;
-          return;
+          break;
         } else {
           console.warn('[Telegram Bot] Polling issue (retrying in 5s):', errMsg);
           await new Promise((r) => setTimeout(r, 5000));
         }
       }
     }
+
+    if (lockClient) {
+      try { await lockClient.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_ID]); } catch {}
+      try { lockClient.release(); } catch {}
+      lockClient = null;
+    }
     this.isPolling = false;
     console.log('[Telegram Bot] Polling stopped.');
   }
 
   /**
-   * Helper to build inline keyboard for simplified vehicle types
+   * Helper to build inline keyboard for simplified vehicle types (supports multi-selection toggles)
    */
-  private getVehicleInlineKeyboard() {
-    return {
-      inline_keyboard: [
-        [{ text: '🚗 Carro', callback_data: 'veh_CAR' }],
-        [{ text: '🏍️ Moto', callback_data: 'veh_MOTO' }],
-        [{ text: '🎒 Moto com Bag', callback_data: 'veh_MOTO_WITH_BAG' }],
-      ],
-    };
+  private getVehicleInlineKeyboard(selectedVehicles: VehicleType[] = []) {
+    const isSelected = (v: VehicleType) => selectedVehicles.includes(v);
+    const count = selectedVehicles.length;
+
+    const keyboard: any[][] = [
+      [{ text: `${isSelected('CAR') ? '✅ ' : '⬜ '}🚗 Carro`, callback_data: 'veh_toggle:CAR' }],
+      [{ text: `${isSelected('MOTO') ? '✅ ' : '⬜ '}🏍️ Moto`, callback_data: 'veh_toggle:MOTO' }],
+      [{ text: `${isSelected('MOTO_WITH_BAG') ? '✅ ' : '⬜ '}🎒 Moto com Bag`, callback_data: 'veh_toggle:MOTO_WITH_BAG' }],
+    ];
+
+    const actionsRow: any[] = [];
+    if (count < 3) {
+      actionsRow.push({ text: '🌟 Todas as 3 opções', callback_data: 'veh_all' });
+    }
+    if (count > 0) {
+      actionsRow.push({ text: `➡️ Concluir Seleção (${count})`, callback_data: 'veh_done' });
+    }
+    if (actionsRow.length > 0) {
+      keyboard.push(actionsRow);
+    }
+
+    return { inline_keyboard: keyboard };
+  }
+
+  private getEditVehicleInlineKeyboard(selectedVehicles: VehicleType[] = []) {
+    const isSelected = (v: VehicleType) => selectedVehicles.includes(v);
+    const count = selectedVehicles.length;
+
+    const keyboard: any[][] = [
+      [{ text: `${isSelected('CAR') ? '✅ ' : '⬜ '}🚗 Carro`, callback_data: 'edit_veh_toggle:CAR' }],
+      [{ text: `${isSelected('MOTO') ? '✅ ' : '⬜ '}🏍️ Moto`, callback_data: 'edit_veh_toggle:MOTO' }],
+      [{ text: `${isSelected('MOTO_WITH_BAG') ? '✅ ' : '⬜ '}🎒 Moto com Bag`, callback_data: 'edit_veh_toggle:MOTO_WITH_BAG' }],
+    ];
+
+    const actionsRow: any[] = [];
+    if (count < 3) {
+      actionsRow.push({ text: '🌟 Todas as 3', callback_data: 'edit_veh_all' });
+    }
+    if (count > 0) {
+      actionsRow.push({ text: `➡️ Confirmar (${count})`, callback_data: 'edit_veh_done' });
+    }
+    actionsRow.push({ text: '❌ Cancelar', callback_data: 'cancel_edit' });
+    keyboard.push(actionsRow);
+
+    return { inline_keyboard: keyboard };
   }
 
   /**
@@ -1455,6 +1703,21 @@ export class TelegramBotService {
       lowerText === '📋 minhas indicacoes'
     ) {
       await this.showMyReferrals(telegramUserId, chatId);
+      return;
+    }
+
+    // Commands to view active corridas in progress
+    if (
+      lowerText === '/corridas' ||
+      lowerText === '/rotas' ||
+      lowerText === '/minhasrotas' ||
+      lowerText === '/minhascorridas' ||
+      lowerText === 'minhas corridas' ||
+      lowerText === 'minhas rotas' ||
+      lowerText === '📦 minhas corridas' ||
+      lowerText === '📦 minhas rotas'
+    ) {
+      await this.sendDriverActiveRoutes(chatId, telegramUserId);
       return;
     }
 
@@ -1785,6 +2048,20 @@ export class TelegramBotService {
         { text: '📋 MINHAS INDICAÇÕES', callback_data: 'menu_my_referrals' },
       ]);
     } else if (driver.status === 'ACTIVE') {
+      try {
+        const allRoutes = await this.routeService?.getRoutes();
+        const activeRoutes = (allRoutes || []).filter(
+          (r: Route) =>
+            r.accepted_driver_id === driver.id &&
+            ['ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(r.status)
+        );
+        if (activeRoutes.length > 0) {
+          buttons.push([
+            { text: `📦 MINHAS CORRIDAS EM ANDAMENTO (${activeRoutes.length})`, callback_data: 'menu_my_routes' },
+          ]);
+        }
+      } catch {}
+
       buttons.push([
         { text: '👤 MEU CADASTRO', callback_data: 'menu_my_profile' },
       ]);
@@ -2190,36 +2467,47 @@ export class TelegramBotService {
     }
 
     if (session.step === 'PHONE') {
-      const cleaned = text.replace(/\D/g, '');
-      if (cleaned.length < 8) {
+      const digits = text.replace(/\D/g, '');
+      const localDigits = (digits.startsWith('55') && digits.length >= 12) ? digits.slice(2) : digits;
+      if (localDigits.length < 10 || localDigits.length > 11) {
         await this.sendMessage(
           chatId,
-          'Telefone inválido. Por favor, informe seu telefone com DDD (ex: 34999999999):'
+          'Telefone inválido. Por favor, informe seu *telefone com DDD* (10 ou 11 dígitos, ex: 34999006476):'
         );
         return;
       }
-      session.data.phone = normalizeGeneralPhone(text);
+      session.data.phone = normalizeGeneralPhone(localDigits);
       session.step = 'VEHICLE';
+      session.data.vehicle_types = session.data.vehicle_types || [];
       await this.saveSession(telegramUserId, session);
 
-      // Send vehicle selection with 2-column inline keyboard
-      await this.sendMessage(chatId, 'Selecione o *tipo de veículo*:', {
-        reply_markup: this.getVehicleInlineKeyboard(),
-      });
+      // Send vehicle selection with multi-select inline keyboard
+      await this.sendMessage(
+        chatId,
+        'Selecione o(s) *tipo(s) de veículo*:\n_(Você pode selecionar mais de uma opção ou todas as 3)_',
+        {
+          reply_markup: this.getVehicleInlineKeyboard(session.data.vehicle_types),
+        }
+      );
       return;
     }
 
     if (session.step === 'VEHICLE') {
-      const parsed = parseVehicleInput(text);
+      const parsedList = parseDriverVehicleTypes(text);
 
-      if (!parsed) {
-        await this.sendMessage(chatId, 'Selecione uma das opções abaixo:', {
-          reply_markup: this.getVehicleInlineKeyboard(),
-        });
+      if (parsedList.length === 0) {
+        await this.sendMessage(
+          chatId,
+          'Selecione ou informe uma ou mais das opções abaixo (ex: Carro e Moto, ou Todas as 3):',
+          {
+            reply_markup: this.getVehicleInlineKeyboard(session.data.vehicle_types || []),
+          }
+        );
         return;
       }
 
-      session.data.vehicle_type = parsed;
+      session.data.vehicle_types = parsedList;
+      session.data.vehicle_type = parsedList.join(',');
       session.step = 'PIX_TYPE';
       await this.saveSession(telegramUserId, session);
       await this.sendMessage(
@@ -2595,7 +2883,7 @@ export class TelegramBotService {
     if (session.mode === 'AWAITING_PIN') {
       const pin = (message.text || '').trim();
       if (!pin) {
-        await this.sendMessage(chatId, 'Informe o PIN de entrega fornecido pelo cliente:');
+        await this.sendMessage(chatId, `🆔 *Corrida #${session.routeId}*\n\nInforme o PIN de entrega fornecido pelo cliente:`);
         return;
       }
 
@@ -2610,25 +2898,37 @@ export class TelegramBotService {
         const route = await this.routeService.getRouteById(session.routeId);
         const totalStops = route?.stops?.length || 1;
 
-        await this.sendMessage(
-          chatId,
-          `✅ ENTREGA ${result.stop.sequence} DE ${totalStops} CONCLUÍDA\n\nRestam:\n${result.remainingCount} entregas`
-        );
-
+        // Confirmação de entrega realizada com ID da corrida
         if (result.routeCompleted) {
+          await this.sendMessage(
+            chatId,
+            `✅ *Corrida #${session.routeId}*: Entrega realizada com sucesso!`
+          );
           await this.sendFinalRouteSummary(chatId, session.routeId);
-        } else if (result.nextStop && route) {
-          await this.sendStopCard(chatId, route, result.nextStop);
+        } else if (result.remainingCount === 0 && (result.hasIncident || result.hasUnresolvedIncident)) {
+          await this.sendMessage(
+            chatId,
+            `✅ *Corrida #${session.routeId}*: Entrega ${result.stop?.sequence || 1} de ${totalStops} confirmada com sucesso!`
+          );
+          await this.sendIncidentRouteNotification(chatId, session.routeId);
+        } else {
+          await this.sendMessage(
+            chatId,
+            `✅ *Corrida #${session.routeId}*: Entrega ${result.stop?.sequence || 1} de ${totalStops} confirmada com sucesso!`
+          );
+          if (result.nextStop && route) {
+            await this.sendStopCard(chatId, route, result.nextStop);
+          }
         }
       } catch (err: any) {
-        await this.sendMessage(chatId, `Erro: ${err.message}`);
+        await this.sendMessage(chatId, `⚠️ *Corrida #${session.routeId}*: Erro: ${err.message}`);
       }
       return;
     }
 
     if (session.mode === 'AWAITING_PHOTO') {
       if (!message.photo || !Array.isArray(message.photo) || message.photo.length === 0) {
-        await this.sendMessage(chatId, '📷 Envie uma foto mostrando onde o pedido foi deixado.');
+        await this.sendMessage(chatId, `🆔 *Corrida #${session.routeId}*\n\n📷 Envie uma foto mostrando onde o pedido da entrega foi deixado.`);
         return;
       }
 
@@ -2641,18 +2941,30 @@ export class TelegramBotService {
         const route = await this.routeService.getRouteById(session.routeId);
         const totalStops = route?.stops?.length || 1;
 
-        await this.sendMessage(
-          chatId,
-          `✅ ENTREGA ${result.stop.sequence} DE ${totalStops} CONCLUÍDA\n\nRestam:\n${result.remainingCount} entregas`
-        );
-
+        // Confirmação de entrega realizada com ID da corrida
         if (result.routeCompleted) {
+          await this.sendMessage(
+            chatId,
+            `✅ *Corrida #${session.routeId}*: Entrega realizada com sucesso!`
+          );
           await this.sendFinalRouteSummary(chatId, session.routeId);
-        } else if (result.nextStop && route) {
-          await this.sendStopCard(chatId, route, result.nextStop);
+        } else if (result.remainingCount === 0 && (result.hasIncident || result.hasUnresolvedIncident)) {
+          await this.sendMessage(
+            chatId,
+            `✅ *Corrida #${session.routeId}*: Entrega ${result.stop?.sequence || 1} de ${totalStops} confirmada com sucesso!`
+          );
+          await this.sendIncidentRouteNotification(chatId, session.routeId);
+        } else {
+          await this.sendMessage(
+            chatId,
+            `✅ *Corrida #${session.routeId}*: Entrega ${result.stop?.sequence || 1} de ${totalStops} confirmada com sucesso!`
+          );
+          if (result.nextStop && route) {
+            await this.sendStopCard(chatId, route, result.nextStop);
+          }
         }
       } catch (err: any) {
-        await this.sendMessage(chatId, `⚠️ ${err.message}`);
+        await this.sendMessage(chatId, `⚠️ *Corrida #${session.routeId}*: ${err.message}`);
       }
       return;
     }
@@ -2660,7 +2972,7 @@ export class TelegramBotService {
     if (session.mode === 'AWAITING_INCIDENT_NOTE') {
       const note = (message.text || '').trim();
       if (!note) {
-        await this.sendMessage(chatId, 'Descreva brevemente o motivo do problema nesta entrega:');
+        await this.sendMessage(chatId, `🆔 *Corrida #${session.routeId}*\n\nDescreva brevemente o motivo do problema nesta entrega:`);
         return;
       }
 
@@ -2676,16 +2988,16 @@ export class TelegramBotService {
 
         await this.sendMessage(
           chatId,
-          `⚠️ Incidente registrado para a Parada #${result.stop.sequence}: Outro (${note})\n\nRestam: ${result.remainingCount} entregas pendentes.`
+          `⚠️ *Corrida #${session.routeId}*: Incidente registrado para a Parada #${result.stop.sequence}: Outro (${note})\n\nRestam: ${result.remainingCount} entregas pendentes nesta corrida.`
         );
 
-        if (result.routeCompleted) {
-          await this.sendFinalRouteSummary(chatId, session.routeId);
+        if (result.remainingCount === 0) {
+          await this.sendIncidentRouteNotification(chatId, session.routeId);
         } else if (result.nextStop && route) {
           await this.sendStopCard(chatId, route, result.nextStop);
         }
       } catch (err: any) {
-        await this.sendMessage(chatId, `⚠️ Erro ao registrar incidente: ${err.message}`);
+        await this.sendMessage(chatId, `⚠️ *Corrida #${session.routeId}*: Erro ao registrar incidente: ${err.message}`);
       }
       return;
     }
@@ -2731,16 +3043,16 @@ export class TelegramBotService {
         });
 
         if (result.status === 'WON') {
-          await this.answerCallbackQuery(query.id, '✅ Rota aceita por você!');
+          await this.answerCallbackQuery(query.id, `✅ Corrida #${routeId} aceita por você!`);
           if (result.route) {
             await this.sendRouteAcceptedWon(chatId, result.route);
           }
         } else if (result.status === 'ALREADY_WON') {
-          await this.answerCallbackQuery(query.id, 'Esta rota já está confirmada para você.');
-          await this.sendMessage(chatId, 'Esta rota já está confirmada para você.');
+          await this.answerCallbackQuery(query.id, `Corrida #${routeId} já confirmada para você.`);
+          await this.sendMessage(chatId, `Corrida #${routeId}: Esta corrida já está confirmada para você.`);
         } else if (result.status === 'LOST') {
-          await this.answerCallbackQuery(query.id, '❌ Esta rota já foi aceita por outro motorista.', true);
-          await this.sendMessage(chatId, '❌ Esta rota já foi aceita por outro motorista.');
+          await this.answerCallbackQuery(query.id, `❌ Corrida #${routeId} já foi aceita por outro motorista.`, true);
+          await this.sendMessage(chatId, `❌ Corrida #${routeId} já foi aceita por outro motorista.`);
           if (query.message?.message_id) {
             const currentRoute = await this.routeService.getRouteById(routeId);
             if (currentRoute) {
@@ -2752,7 +3064,7 @@ export class TelegramBotService {
         } else {
           // REJECTED (e.g. STALE_ROUTE_VERSION, OUTDATED_ROUTE_VERSION, VEHICLE_INCOMPATIBLE, DRIVER_PENDING, DRIVER_BLOCKED, ROUTE_CANCELLED)
           await this.answerCallbackQuery(query.id, result.message, true);
-          await this.sendMessage(chatId, result.message);
+          await this.sendMessage(chatId, `Corrida #${routeId}: ${result.message}`);
           if ((result.error === 'OUTDATED_ROUTE_VERSION' || result.error === 'STALE_ROUTE_VERSION') && query.message?.message_id) {
             const currentRoute = await this.routeService.getRouteById(routeId);
             if (currentRoute) {
@@ -2788,7 +3100,7 @@ export class TelegramBotService {
         if (driver) {
           await routeEditService.handleDriverOperationalAck(routeId, version, driver.id);
           await this.answerCallbackQuery(query.id, '✅ Ciência confirmada!');
-          await this.sendMessage(chatId, `✅ Você confirmou ciência da atualização da Rota #${routeId} (v${version}).`);
+          await this.sendMessage(chatId, `✅ Você confirmou ciência da atualização da Corrida #${routeId} (v${version}).`);
         }
       }
       return;
@@ -2851,18 +3163,18 @@ export class TelegramBotService {
 
       try {
         await this.routeService.markArrivedPickup(routeId, { telegramUserId });
-        await this.answerCallbackQuery(query.id, '📍 Chegada na coleta registrada!');
+        await this.answerCallbackQuery(query.id, `📍 Corrida #${routeId}: Chegada registrada!`);
 
         const text =
-          `📍 *Chegada registrada.*\n\n` +
-          `Quando estiver com todos os pedidos da rota:`;
+          `📍 *Corrida #${routeId}: Chegada na Coleta Registrada!*\n\n` +
+          `Quando estiver com os pedidos carregados, clique no botão abaixo:`;
 
         await this.sendMessage(chatId, text, {
           reply_markup: {
             inline_keyboard: [
               [
                 {
-                  text: '📦 PEDIDOS COLETADOS',
+                  text: `📦 PEDIDOS COLETADOS (Corrida #${routeId})`,
                   callback_data: `route_picked_up:${routeId}`,
                 },
               ],
@@ -2885,19 +3197,23 @@ export class TelegramBotService {
 
       try {
         const route = await this.routeService.markPickedUp(routeId, { telegramUserId });
-        await this.answerCallbackQuery(query.id, '📦 Coleta confirmada!');
+        await this.answerCallbackQuery(query.id, `📦 Corrida #${routeId}: Coleta confirmada!`);
 
         const totalStops = route.stops?.length || 0;
+        const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId).catch(() => null);
+        const isCar = driver?.vehicle_type === 'CAR' || (route.accepted_vehicle_types?.length === 1 && route.accepted_vehicle_types[0] === 'CAR');
+        const vIcon = isCar ? '🚗' : '🛵';
+
         const text =
-          `📦 *Coleta confirmada.*\n\n` +
-          `${totalStops} entregas carregadas.`;
+          `📦 *Corrida #${routeId}: Coleta Confirmada!*\n\n` +
+          `${totalStops} ${totalStops === 1 ? 'entrega carregada' : 'entregas carregadas'} para a Corrida #${routeId}.`;
 
         await this.sendMessage(chatId, text, {
           reply_markup: {
             inline_keyboard: [
               [
                 {
-                  text: '🛵 INICIAR ROTA',
+                  text: `${vIcon} INICIAR CORRIDA #${routeId}`,
                   callback_data: `route_start:${routeId}`,
                 },
               ],
@@ -2920,7 +3236,9 @@ export class TelegramBotService {
 
       try {
         const result = await this.routeService.startRoute(routeId, { telegramUserId });
-        await this.answerCallbackQuery(query.id, '🛵 Rota iniciada!');
+        const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId).catch(() => null);
+        const isCar = driver?.vehicle_type === 'CAR';
+        await this.answerCallbackQuery(query.id, isCar ? `🚗 Corrida #${routeId} iniciada!` : `🛵 Corrida #${routeId} iniciada!`);
 
         if (result.nextStop) {
           await this.sendStopCard(chatId, result.route, result.nextStop);
@@ -2958,18 +3276,18 @@ export class TelegramBotService {
 
       const pending = (route.stops || []).filter((s: RouteStop) => s.status === 'PENDING');
       if (pending.length === 0) {
-        await this.sendMessage(chatId, 'Todas as paradas desta rota já foram concluídas ou possuem incidente.');
+        await this.sendMessage(chatId, `Corrida #${routeId}: Todas as paradas desta corrida já foram concluídas ou possuem incidente.`);
         return;
       }
 
       const buttons = pending.map((s: RouteStop) => [
         {
-          text: `#${s.sequence} - ${s.destination_neighborhood} (${s.cargo_description})`,
+          text: `Corrida #${routeId} • Parada #${s.sequence} - ${s.destination_neighborhood} (${s.cargo_description})`,
           callback_data: `stop_view:${s.id}`,
         },
       ]);
 
-      await this.sendMessage(chatId, 'Selecione a parada que deseja realizar agora:', {
+      await this.sendMessage(chatId, `🆔 *Corrida #${routeId}*\n\nSelecione a parada que deseja realizar agora:`, {
         reply_markup: {
           inline_keyboard: buttons,
         },
@@ -2999,7 +3317,7 @@ export class TelegramBotService {
 
         await this.sendMessage(
           chatId,
-          `Informe o PIN de entrega fornecido pelo cliente para a Parada #${stop.sequence}:`,
+          `🆔 *Corrida #${stop.route_id}*\n\nInforme o PIN de entrega fornecido pelo cliente para a Entrega #${stop.sequence}:`,
           {
             reply_markup: {
               inline_keyboard: [[{ text: '❌ CANCELAR', callback_data: `stop_view:${stop.id}` }]],
@@ -3016,7 +3334,7 @@ export class TelegramBotService {
 
         await this.sendMessage(
           chatId,
-          `📷 Envie uma foto mostrando onde o pedido da Parada #${stop.sequence} foi deixado.`,
+          `🆔 *Corrida #${stop.route_id}*\n\n📷 Envie uma foto mostrando onde o pedido da Entrega #${stop.sequence} foi deixado.`,
           {
             reply_markup: {
               inline_keyboard: [[{ text: '❌ CANCELAR', callback_data: `stop_view:${stop.id}` }]],
@@ -3042,7 +3360,7 @@ export class TelegramBotService {
 
       await this.sendMessage(
         chatId,
-        `⚠️ *Problema na Entrega #${stop.sequence}*\n\nSelecione o motivo do incidente:`,
+        `⚠️ *Corrida #${stop.route_id} — Problema na Entrega #${stop.sequence}*\n\nSelecione o motivo do incidente:`,
         {
           reply_markup: {
             inline_keyboard: [
@@ -3088,7 +3406,7 @@ export class TelegramBotService {
 
         await this.sendMessage(
           chatId,
-          `Descreva brevemente o motivo do problema nesta entrega:`,
+          `🆔 *Corrida #${stop.route_id}*\n\nDescreva brevemente o motivo do problema na Entrega #${stop.sequence}:`,
           {
             reply_markup: {
               inline_keyboard: [[{ text: '❌ CANCELAR', callback_data: `stop_view:${stop.id}` }]],
@@ -3115,11 +3433,11 @@ export class TelegramBotService {
 
         await this.sendMessage(
           chatId,
-          `⚠️ Incidente registrado para a Parada #${result.stop.sequence}: ${label}\n\nRestam: ${result.remainingCount} entregas pendentes.`
+          `⚠️ *Corrida #${route?.id || result.stop.route_id}*: Incidente registrado para a Entrega #${result.stop.sequence}: ${label}\n\nRestam: ${result.remainingCount} entregas pendentes nesta corrida.`
         );
 
-        if (result.routeCompleted) {
-          await this.sendFinalRouteSummary(chatId, result.stop.route_id);
+        if (result.remainingCount === 0) {
+          await this.sendIncidentRouteNotification(chatId, route?.id || result.stop.route_id);
         } else if (result.nextStop && route) {
           await this.sendStopCard(chatId, route, result.nextStop);
         }
@@ -3156,15 +3474,15 @@ export class TelegramBotService {
             await this.sendDeliveryAcceptedWon(chatId, result.delivery);
           }
         } else if (result.status === 'ALREADY_WON') {
-          await this.answerCallbackQuery(query.id, 'Esta entrega já está confirmada para você.');
-          await this.sendMessage(chatId, 'Esta entrega já está confirmada para você.');
+          await this.answerCallbackQuery(query.id, `Corrida #${deliveryId}: Esta entrega já está confirmada para você.`);
+          await this.sendMessage(chatId, `Corrida #${deliveryId}: Esta entrega já está confirmada para você.`);
         } else if (result.status === 'LOST') {
-          await this.answerCallbackQuery(query.id, '❌ Esta entrega já foi aceita por outro motorista.', true);
-          await this.sendMessage(chatId, '❌ Esta entrega já foi aceita por outro motorista.');
+          await this.answerCallbackQuery(query.id, `❌ Corrida #${deliveryId} já foi aceita por outro motorista.`, true);
+          await this.sendMessage(chatId, `❌ Corrida #${deliveryId} já foi aceita por outro motorista.`);
         } else {
           // REJECTED (PENDING, BLOCKED, NO_DISPATCH, CANCELLED)
-          await this.answerCallbackQuery(query.id, result.message, true);
-          await this.sendMessage(chatId, result.message);
+          await this.answerCallbackQuery(query.id, `Corrida #${deliveryId}: ${result.message}`, true);
+          await this.sendMessage(chatId, `Corrida #${deliveryId}: ${result.message}`);
         }
       } catch (err: any) {
         await this.answerCallbackQuery(query.id, 'Erro ao processar aceite.', true);
@@ -3232,6 +3550,75 @@ export class TelegramBotService {
     }
 
     // ==========================================
+    // Active Routes Navigation
+    // ==========================================
+    if (data === 'menu_my_routes') {
+      await this.sendDriverActiveRoutes(chatId, telegramUserId);
+      return;
+    }
+
+    if (data && data.startsWith('open_active_route:')) {
+      const routeId = parseInt(data.replace('open_active_route:', '').trim(), 10);
+      if (isNaN(routeId) || !this.routeService) return;
+
+      const route = await this.routeService.getRouteById(routeId);
+      if (!route) {
+        await this.sendMessage(chatId, `Corrida #${routeId} não encontrada.`);
+        return;
+      }
+
+      if (route.status === 'ACCEPTED') {
+        await this.sendRouteAcceptedWon(chatId, route);
+      } else if (route.status === 'ARRIVED_PICKUP') {
+        await this.sendMessage(
+          chatId,
+          `📍 *Corrida #${route.id}: Chegada na Coleta Registrada!*\n\nQuando estiver com os pedidos carregados, clique no botão abaixo:`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: `📦 PEDIDOS COLETADOS (Corrida #${route.id})`,
+                    callback_data: `route_picked_up:${route.id}`,
+                  },
+                ],
+              ],
+            },
+          }
+        );
+      } else if (route.status === 'PICKED_UP') {
+        const isCar = (route.accepted_vehicle_types?.length === 1 && route.accepted_vehicle_types[0] === 'CAR');
+        const vIcon = isCar ? '🚗' : '🛵';
+        await this.sendMessage(
+          chatId,
+          `📦 *Corrida #${route.id}: Coleta Confirmada!*\n\nClique abaixo para iniciar as entregas:`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: `${vIcon} INICIAR CORRIDA #${route.id}`,
+                    callback_data: `route_start:${route.id}`,
+                  },
+                ],
+              ],
+            },
+          }
+        );
+      } else if (route.status === 'IN_TRANSIT') {
+        const nextStop = await this.routeService.getNextPendingStop(route.id);
+        if (nextStop) {
+          await this.sendStopCard(chatId, route, nextStop);
+        } else {
+          await this.sendFinalRouteSummary(chatId, route.id);
+        }
+      } else {
+        await this.sendMessage(chatId, `Corrida #${route.id} não está mais ativa.`);
+      }
+      return;
+    }
+
+    // ==========================================
     // M1.2: Referral Actions (Indicação Controlada)
     // ==========================================
     if (data === 'menu_refer_driver') {
@@ -3294,33 +3681,104 @@ export class TelegramBotService {
       if (!this.driverService) return;
       const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
       if (!driver) return;
-      this.editSessions.set(telegramUserId, { driverId: driver.id, field: 'VEHICLE', pendingData: {} });
-      await this.sendMessage(chatId, 'Selecione o novo *tipo de veículo*:', {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🚗 Carro', callback_data: 'edit_veh:CAR' }],
-            [{ text: '🏍️ Moto', callback_data: 'edit_veh:MOTO' }],
-            [{ text: '🎒 Moto com Bag', callback_data: 'edit_veh:MOTO_WITH_BAG' }],
-            [{ text: '❌ CANCELAR', callback_data: 'cancel_edit' }],
-          ],
-        },
+      const initialVehs = parseDriverVehicleTypes(driver.vehicle_type);
+      this.editSessions.set(telegramUserId, {
+        driverId: driver.id,
+        field: 'VEHICLE',
+        pendingData: { vehicle_types: initialVehs, vehicle_type: initialVehs.join(',') },
       });
+      await this.sendMessage(
+        chatId,
+        'Selecione seu(s) novo(s) *tipo(s) de veículo*:\n_(Você pode selecionar mais de uma opção ou todas as 3)_',
+        {
+          reply_markup: this.getEditVehicleInlineKeyboard(initialVehs),
+        }
+      );
       return;
     }
 
-    if (data && data.startsWith('edit_veh:')) {
-      const chosenVeh = data.replace('edit_veh:', '') as VehicleType;
+    if (
+      data &&
+      (data.startsWith('edit_veh:') ||
+        data.startsWith('edit_veh_toggle:') ||
+        data === 'edit_veh_all' ||
+        data === 'edit_veh_done')
+    ) {
+      await this.answerCallbackQuery(query.id);
       let editSession = this.editSessions.get(telegramUserId);
       if (!editSession && this.driverService) {
         const driver = await this.driverService.getDriverByTelegramUserId(telegramUserId);
         if (driver) {
-          editSession = { driverId: driver.id, field: 'VEHICLE', pendingData: {} };
+          const initVehs = parseDriverVehicleTypes(driver.vehicle_type);
+          editSession = { driverId: driver.id, field: 'VEHICLE', pendingData: { vehicle_types: initVehs } };
           this.editSessions.set(telegramUserId, editSession);
         }
       }
       if (editSession) {
         const driver = await this.driverService.getDriverById(editSession.driverId);
+        let selected: VehicleType[] = editSession.pendingData.vehicle_types || [];
+
+        if (data === 'edit_veh_all') {
+          selected = ['CAR', 'MOTO', 'MOTO_WITH_BAG'];
+          editSession.pendingData.vehicle_types = selected;
+          editSession.pendingData.vehicle_type = selected.join(',');
+          await this.editMessageReplyMarkup(chatId, query.message.message_id, {
+            reply_markup: this.getEditVehicleInlineKeyboard(selected),
+          }).catch(() => {});
+          return;
+        }
+
+        if (data.startsWith('edit_veh_toggle:')) {
+          const v = data.replace('edit_veh_toggle:', '') as VehicleType;
+          if (selected.includes(v)) {
+            selected = selected.filter((x) => x !== v);
+          } else {
+            selected.push(v);
+          }
+          editSession.pendingData.vehicle_types = selected;
+          editSession.pendingData.vehicle_type = selected.join(',');
+          await this.editMessageReplyMarkup(chatId, query.message.message_id, {
+            reply_markup: this.getEditVehicleInlineKeyboard(selected),
+          }).catch(() => {});
+          return;
+        }
+
+        if (data === 'edit_veh_done') {
+          if (selected.length === 0) {
+            await this.sendMessage(chatId, '⚠️ Por favor, selecione ao menos um tipo de veículo antes de confirmar.', {
+              reply_markup: this.getEditVehicleInlineKeyboard(selected),
+            });
+            return;
+          }
+          editSession.pendingData.vehicle_type = selected.join(',');
+          editSession.field = 'CONFIRM';
+
+          const oldVehLabel = driver ? getVehicleTypeLabel(driver.vehicle_type) : '';
+          const newVehLabel = getVehicleTypeLabel(selected.join(','));
+
+          const msg =
+            `<b>CONFIRMAR ALTERAÇÃO DE VEÍCULO(S)</b>\n\n` +
+            `<b>Veículo(s) atual(is):</b> ${escapeHtml(oldVehLabel)}\n` +
+            `<b>Novo(s) veículo(s):</b> ${escapeHtml(newVehLabel)}`;
+
+          await this.sendMessage(chatId, msg, {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ CONFIRMAR', callback_data: 'confirm_edit' },
+                  { text: '❌ CANCELAR', callback_data: 'cancel_edit' },
+                ],
+              ],
+            },
+          });
+          return;
+        }
+
+        // Direct legacy edit_veh:CAR, edit_veh:MOTO, etc.
+        const chosenVeh = data.replace('edit_veh:', '') as VehicleType;
         editSession.pendingData.vehicle_type = chosenVeh;
+        editSession.pendingData.vehicle_types = [chosenVeh];
         editSession.field = 'CONFIRM';
 
         const oldVehLabel = driver ? getVehicleTypeLabel(driver.vehicle_type) : '';
@@ -3342,6 +3800,7 @@ export class TelegramBotService {
             ],
           },
         });
+        return;
       }
       return;
     }
@@ -3451,12 +3910,78 @@ export class TelegramBotService {
       return;
     }
 
-    // Vehicle selection callback in registration
-    if (data && data.startsWith('veh_')) {
+    // Vehicle selection callback in registration (supports toggle, all, done, and single click)
+    if (data && (data.startsWith('veh_') || data.startsWith('veh_toggle:'))) {
       await this.answerCallbackQuery(query.id);
       if (session && (session.step === 'VEHICLE' || session.step === 'PHONE')) {
+        let currentSelected: VehicleType[] = session.data.vehicle_types || [];
+        if (currentSelected.length === 0 && session.data.vehicle_type) {
+          currentSelected = parseDriverVehicleTypes(session.data.vehicle_type);
+        }
+
+        if (data === 'veh_all') {
+          currentSelected = ['CAR', 'MOTO', 'MOTO_WITH_BAG'];
+          session.data.vehicle_types = currentSelected;
+          session.data.vehicle_type = currentSelected.join(',');
+          await this.saveSession(telegramUserId, session);
+          await this.editMessageReplyMarkup(chatId, query.message?.message_id, {
+            reply_markup: this.getVehicleInlineKeyboard(currentSelected),
+          }).catch(() => {});
+          return;
+        }
+
+        if (data.startsWith('veh_toggle:')) {
+          const v = data.replace('veh_toggle:', '') as VehicleType;
+          if (currentSelected.includes(v)) {
+            currentSelected = currentSelected.filter((x) => x !== v);
+          } else {
+            currentSelected.push(v);
+          }
+          session.data.vehicle_types = currentSelected;
+          session.data.vehicle_type = currentSelected.join(',');
+          await this.saveSession(telegramUserId, session);
+          await this.editMessageReplyMarkup(chatId, query.message?.message_id, {
+            reply_markup: this.getVehicleInlineKeyboard(currentSelected),
+          }).catch(() => {});
+          return;
+        }
+
+        if (data === 'veh_done') {
+          if (currentSelected.length === 0) {
+            await this.sendMessage(chatId, '⚠️ Por favor, selecione ao menos um tipo de veículo antes de prosseguir.', {
+              reply_markup: this.getVehicleInlineKeyboard(currentSelected),
+            });
+            return;
+          }
+          session.data.vehicle_type = currentSelected.join(',');
+          session.data.vehicle_types = currentSelected;
+          session.step = 'PIX_TYPE';
+          await this.saveSession(telegramUserId, session);
+          await this.sendMessage(
+            chatId,
+            'Selecione o *tipo de chave Pix* para recebimento dos repasses:',
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: 'CPF', callback_data: 'reg_pixtype:CPF' },
+                    { text: 'TELEFONE', callback_data: 'reg_pixtype:PHONE' },
+                  ],
+                  [
+                    { text: 'E-MAIL', callback_data: 'reg_pixtype:EMAIL' },
+                    { text: 'ALEATÓRIA', callback_data: 'reg_pixtype:RANDOM' },
+                  ],
+                ],
+              },
+            }
+          );
+          return;
+        }
+
+        // Direct single click backward compatibility (veh_CAR, veh_MOTO, etc.)
         const parsed = parseVehicleInput(data);
         if (parsed) {
+          session.data.vehicle_types = [parsed];
           session.data.vehicle_type = parsed;
           session.step = 'PIX_TYPE';
           await this.saveSession(telegramUserId, session);

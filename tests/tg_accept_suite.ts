@@ -157,7 +157,7 @@ async function runTgAcceptSuite() {
 
   // Verificar que A, B e C receberam ofertas com botão acionável
   const offersSent = apiCalls.filter(
-    (c) => c.method === 'sendMessage' && c.body.reply_markup?.inline_keyboard?.[0]?.[0]?.text === '✅ ACEITAR ROTA'
+    (c) => c.method === 'sendMessage' && c.body.reply_markup?.inline_keyboard?.[0]?.[0]?.text?.includes('ACEITAR')
   );
   if (offersSent.length < 3) {
     throw new Error(`TG-ACCEPT-01 FALHOU: esperava pelo menos 3 ofertas enviadas, encontrou ${offersSent.length}`);

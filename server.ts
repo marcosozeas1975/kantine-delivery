@@ -1,18 +1,33 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { generateFreightExcelWorkbook } from './scripts/generate_freight_excel.ts';
 import { driverService } from './src/server/driverService.ts';
 import { deliveryService } from './src/server/deliveryService.ts';
 import { routeService } from './src/server/routeService.ts';
 import { routeEditService } from './src/server/routeEditService.ts';
 import { referralService } from './src/server/referralService.ts';
 import { deliveryConfigService } from './src/server/deliveryConfigService.ts';
+import {
+  calculateRoutePricing as calculateFreightPricing,
+  generateWhatsAppProposalMessage,
+  UBERLANDIA_70_NEIGHBORHOODS,
+  MOTO_RADIUS_TARIFF_TABLE,
+  DEFAULT_FREIGHT_PARAMETERS,
+  PICKUP_PRESETS,
+  findNeighborhoodRecord,
+} from './src/server/freightEngine.ts';
 import { telegramBot } from './src/server/telegramBot.ts';
 import { requireAdminAuth, AuthRequest } from './src/middleware/auth.ts';
 import { canReceiveDeliveryOffers, canReceiveRouteOffer } from './src/server/eligibility.ts';
 import { DriverStatus, DeliveryStatus, RouteStatus, PricingVehicleCategory } from './src/server/types.ts';
+import { takeatService } from './src/server/takeatService.ts';
+import { initDbConstraints } from './src/db/index.ts';
+import { mercadoPagoService } from './src/server/mercadoPagoService.ts';
+import { searchAddressSuggestions } from './src/server/geocodingService.ts';
 
 dotenv.config();
 
@@ -20,9 +35,47 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const args = process.argv.slice(2);
+const portFlagIndex = args.indexOf('--port');
+const cliPort = portFlagIndex !== -1 && args[portFlagIndex + 1] ? Number(args[portFlagIndex + 1]) : null;
+const PORT = cliPort || (process.env.PORT ? Number(process.env.PORT) : 3000);
+
+// Process-level resilience against transient DB socket drops or external service resets
+process.on('uncaughtException', (err: any) => {
+  const isPgSocketDrop =
+    err?.message?.includes('Connection terminated unexpectedly') ||
+    err?.message?.includes('Connection terminated') ||
+    err?.code === 'ECONNRESET' ||
+    err?.code === 'EPIPE';
+
+  if (isPgSocketDrop) {
+    console.warn('[Server] Caught transient socket termination error (recovering):', err.message);
+    return;
+  }
+  console.error('[Server] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.warn('[Server] Unhandled Promise Rejection (handled):', reason?.message || reason);
+});
 
 app.use(express.json());
+
+// Autocomplete & Reconhecimento de Endereço em Uberlândia (Tipo Apps de Transporte)
+app.get('/api/geocode/autocomplete', async (req, res) => {
+  try {
+    const q = (req.query.q as string) || '';
+    const originLat = req.query.originLat ? parseFloat(req.query.originLat as string) : undefined;
+    const originLng = req.query.originLng ? parseFloat(req.query.originLng as string) : undefined;
+
+    const originCoords = originLat && originLng ? { lat: originLat, lng: originLng } : undefined;
+    const suggestions = await searchAddressSuggestions(q, originCoords);
+    res.json({ suggestions });
+  } catch (err: any) {
+    console.error('[API /api/geocode/autocomplete error]:', err?.message || err);
+    res.status(500).json({ error: 'Falha no reconhecimento de endereço', suggestions: [] });
+  }
+});
 
 // Wire services to Telegram Bot
 telegramBot.setDriverService(driverService);
@@ -699,7 +752,19 @@ app.patch('/api/admin/pickup-locations/:id', requireAdminAuth, async (req: AuthR
 app.get('/api/admin/routes', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const status = req.query.status as RouteStatus | undefined;
-    if (status && !['DRAFT', 'OFFERED', 'ACCEPTED', 'CANCELLED'].includes(status)) {
+    if (
+      status &&
+      ![
+        'DRAFT',
+        'OFFERED',
+        'ACCEPTED',
+        'ARRIVED_PICKUP',
+        'PICKED_UP',
+        'IN_TRANSIT',
+        'COMPLETED',
+        'CANCELLED',
+      ].includes(status)
+    ) {
       return res.status(400).json({ error: 'INVALID_STATUS_FILTER' });
     }
     const routesList = await routeService.getRoutes(status);
@@ -736,6 +801,30 @@ app.get('/api/admin/routes/:id', requireAdminAuth, async (req: AuthRequest, res)
   }
 });
 
+// Update Route accepted vehicle types (instant change for DRAFT and OFFERED routes)
+app.patch('/api/admin/routes/:id/vehicle-types', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+
+    const { accepted_vehicle_types } = req.body;
+    if (!Array.isArray(accepted_vehicle_types) || accepted_vehicle_types.length === 0) {
+      return res.status(400).json({ error: 'AT_LEAST_ONE_VEHICLE_TYPE_REQUIRED' });
+    }
+
+    const updated = await routeService.updateRouteVehicleTypes(
+      id,
+      accepted_vehicle_types,
+      req.user?.email || 'ADMIN'
+    );
+    res.json({ success: true, route: updated });
+  } catch (err: any) {
+    console.error(`[API PATCH /api/admin/routes/${req.params.id}/vehicle-types failed]`, err.message);
+    if (err.message === 'ROUTE_NOT_FOUND') return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to update vehicle types' });
+  }
+});
+
 // Publish Route (DRAFT -> OFFERED, distributes offer only to compatible ACTIVE drivers)
 app.post('/api/admin/routes/:id/publish', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
@@ -768,25 +857,31 @@ app.post('/api/admin/routes/:id/publish', requireAdminAuth, async (req: AuthRequ
   }
 });
 
-// Cancel Route (DRAFT -> CANCELLED or OFFERED -> CANCELLED)
+// Cancel Route (Allows cancellation in any status, automatically forwarding to Pendências for resolution)
 app.post('/api/admin/routes/:id/cancel', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
 
-    const route = await routeService.cancelRoute(id, req.user?.email || 'ADMIN');
-    res.json({ success: true, route });
+    const { reason, compensation_amount, resolution_type, resolution_note } = req.body || {};
+    const route = await routeService.cancelRoute(id, req.user?.email || 'ADMIN', reason, {
+      compensation_amount:
+        compensation_amount !== undefined && compensation_amount !== '' && compensation_amount !== null
+          ? parseFloat(String(compensation_amount).replace(',', '.'))
+          : undefined,
+      resolution_type,
+      resolution_note,
+    });
+    res.json({
+      success: true,
+      route,
+      message: `Rota #${id} cancelada com sucesso e encaminhada para o setor de Pendências Operacionais.`,
+    });
   } catch (err: any) {
     console.error(`[API POST /api/admin/routes/${req.params.id}/cancel failed]`, err.message);
     if (err.message === 'ROUTE_NOT_FOUND') return res.status(404).json({ error: err.message });
     if (err.message === 'ROUTE_ALREADY_CANCELLED') return res.status(400).json({ error: err.message });
-    if (err.message === 'CANNOT_CANCEL_ACCEPTED_ROUTE') {
-      return res.status(400).json({
-        error: 'CANNOT_CANCEL_ACCEPTED_ROUTE',
-        message: 'Rotas já aceitas não podem ser canceladas neste marco.',
-      });
-    }
-    res.status(500).json({ error: 'Failed to cancel route' });
+    res.status(500).json({ error: err.message || 'Failed to cancel route' });
   }
 });
 
@@ -838,6 +933,20 @@ app.get('/api/admin/routes/:id/updates', requireAdminAuth, async (req: AuthReque
 
     const updates = await routeEditService.getRouteUpdates(id);
     res.json(updates);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// M4.4 Descartar Proposta Rejeitada
+app.post('/api/admin/routes/:id/discard-rejected-proposal', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+
+    await routeEditService.discardRejectedProposal(id, req.user?.email || 'ADMIN');
+    const refreshed = await routeService.getRouteById(id);
+    res.json({ success: true, route: refreshed });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1058,7 +1167,7 @@ app.get('/api/admin/incidents', requireAdminAuth, async (req, res) => {
 app.post('/api/admin/stops/:id/resolve', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const stopId = parseInt(req.params.id, 10);
-    const { resolution_type, resolution_note } = req.body;
+    const { resolution_type, resolution_note, compensation_amount, adjust_route_fee } = req.body;
     const actor = req.user?.email || req.user?.uid || 'ADMIN';
 
     if (!resolution_type) {
@@ -1069,6 +1178,11 @@ app.post('/api/admin/stops/:id/resolve', requireAdminAuth, async (req: AuthReque
       resolution_type,
       resolution_note,
       resolved_by: actor,
+      compensation_amount:
+        compensation_amount !== undefined && compensation_amount !== '' && compensation_amount !== null
+          ? parseFloat(String(compensation_amount).replace(',', '.'))
+          : undefined,
+      adjust_route_fee: adjust_route_fee !== false,
     });
 
     res.json({
@@ -1079,6 +1193,31 @@ app.post('/api/admin/stops/:id/resolve', requireAdminAuth, async (req: AuthReque
   } catch (err: any) {
     console.error(`[API POST /api/admin/stops/${req.params.id}/resolve error]`, err.message);
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Finalizar corrida tratada e liberar para pagamento
+app.post('/api/admin/routes/:id/finalize', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const routeId = parseInt(req.params.id, 10);
+    if (isNaN(routeId)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+
+    const actor = req.user?.email || req.user?.uid || 'ADMIN';
+    const updatedRoute = await routeService.finalizeAndCompleteRoute(routeId, actor);
+
+    // Notificar motorista pelo Telegram que a corrida foi finalizada
+    if (updatedRoute.accepted_driver_id) {
+      const driver = await driverService.getDriverById(updatedRoute.accepted_driver_id).catch(() => null);
+      const chatId = driver?.telegram_chat_id || driver?.telegram_user_id;
+      if (chatId) {
+        await telegramBot.sendFinalRouteSummary(chatId, updatedRoute.id).catch(() => null);
+      }
+    }
+
+    res.json({ success: true, route: updatedRoute });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/routes/${req.params.id}/finalize error]`, err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1124,7 +1263,88 @@ app.post('/api/admin/routes/:id/pay', requireAdminAuth, async (req: AuthRequest,
     });
   } catch (err: any) {
     console.error(`[API POST /api/admin/routes/${req.params.id}/pay error]`, err.message);
-    res.status(400).json({ error: err.message });
+  }
+});
+
+// Mercado Pago: Status de Conexão e Informações da Conta
+app.get('/api/admin/payments/mercadopago/status', requireAdminAuth, async (_req, res) => {
+  try {
+    const info = await mercadoPagoService.getAccountInfo();
+    res.json(info);
+  } catch (err: any) {
+    res.status(500).json({ configured: false, error: err.message });
+  }
+});
+
+// Mercado Pago: Repasse Automatizado via Transferência Pix para Motorista
+app.post('/api/admin/routes/:id/pay-mercadopago', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const routeId = parseInt(req.params.id, 10);
+    const actor = req.user?.email || req.user?.uid || 'ADMIN';
+
+    const route = await routeService.getRouteById(routeId);
+    if (!route) {
+      return res.status(404).json({ error: 'ROUTE_NOT_FOUND' });
+    }
+    if (route.status !== 'COMPLETED' && route.status !== 'CANCELLED') {
+      return res.status(400).json({ error: `Apenas rotas concluídas ou canceladas podem receber repasse (Status atual: ${route.status}).` });
+    }
+    if (route.payment_status === 'PAID') {
+      return res.status(400).json({ error: 'Esta rota já foi paga anteriormente.' });
+    }
+    if (!route.accepted_driver_id) {
+      return res.status(400).json({ error: 'Rota não possui motorista associado.' });
+    }
+
+    const driver = await driverService.getDriverById(route.accepted_driver_id);
+    if (!driver) {
+      return res.status(404).json({ error: 'Motorista não encontrado no sistema.' });
+    }
+
+    const pixKey = (driver.pix_key_value || driver.pix_key || '').trim();
+    if (!pixKey) {
+      return res.status(400).json({ error: 'O motorista não possui chave Pix cadastrada para repasse.' });
+    }
+
+    const totalNum = parseFloat(String(route.total_fee || '0').replace(',', '.')) || 0;
+    const storeRate =
+      route.management_rate_snapshot != null && !isNaN(parseFloat(String(route.management_rate_snapshot)))
+        ? parseFloat(String(route.management_rate_snapshot))
+        : 0.10;
+    const driverFeeNum = Math.round(totalNum * (1 - storeRate) * 100) / 100;
+
+    const payoutResult = await mercadoPagoService.executePixPayout({
+      routeId,
+      amount: driverFeeNum,
+      driverName: driver.name,
+      pixKey,
+      pixKeyType: driver.pix_key_type || 'RANDOM',
+      description: `Repasse Pix Rota #${routeId}`,
+    });
+
+    if (!payoutResult.success) {
+      return res.status(400).json({
+        error: payoutResult.message,
+        details: payoutResult.raw,
+      });
+    }
+
+    const updatedRoute = await routeService.registerRoutePayment(routeId, {
+      paid_by: actor,
+      payment_method: 'PIX_MERCADO_PAGO',
+      payment_reference: payoutResult.payoutId,
+      payment_note: `Repasse Pix automatizado via Mercado Pago (ID: ${payoutResult.payoutId})`,
+    });
+
+    res.json({
+      success: true,
+      route: updatedRoute,
+      payoutId: payoutResult.payoutId,
+      message: payoutResult.message,
+    });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/routes/${req.params.id}/pay-mercadopago error]`, err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1317,6 +1537,144 @@ app.post('/api/admin/routes/calculate-pricing', requireAdminAuth, async (req: Au
   }
 });
 
+// ==========================================
+// MOTOR DE FRETES & PRECIFICAÇÃO KANTINE
+// ==========================================
+
+// 1. Obter configurações, tabelas de preço e presets
+app.get('/api/admin/freight-engine/config', requireAdminAuth, async (_req, res) => {
+  try {
+    res.json({
+      neighborhoods: UBERLANDIA_70_NEIGHBORHOODS,
+      motoRadiusTable: MOTO_RADIUS_TARIFF_TABLE,
+      parameters: DEFAULT_FREIGHT_PARAMETERS,
+      pickupPresets: PICKUP_PRESETS,
+    });
+  } catch (err: any) {
+    console.error('[API GET /api/admin/freight-engine/config error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Calcular Rota pelo Motor de Fretes
+app.post('/api/admin/freight-engine/calculate', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { modality, origin, stops, parameters } = req.body;
+    if (!modality || !['CAR', 'MOTO'].includes(modality)) {
+      return res.status(400).json({ error: 'INVALID_MODALITY: Modalidade deve ser CAR ou MOTO' });
+    }
+    if (!origin || !origin.name || !origin.address) {
+      return res.status(400).json({ error: 'INVALID_ORIGIN: Origem é obrigatória' });
+    }
+    if (!Array.isArray(stops) || stops.length === 0) {
+      return res.status(400).json({ error: 'STOPS_REQUIRED: Ao menos uma parada é obrigatória' });
+    }
+
+    const result = calculateFreightPricing(
+      modality,
+      origin,
+      stops,
+      parameters || DEFAULT_FREIGHT_PARAMETERS
+    );
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('[API POST /api/admin/freight-engine/calculate error]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 3. Gerar Texto Formatado para WhatsApp (Seção 13 do Briefing)
+app.post('/api/admin/freight-engine/whatsapp-proposal', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { modality, originNameOrAddress, stops, driverFee, googleMapsUrl, observations } = req.body;
+    const message = generateWhatsAppProposalMessage({
+      modality: modality || 'MOTO',
+      originNameOrAddress: originNameOrAddress || 'Kantine Matriz',
+      stops: stops || [],
+      driverFee: Number(driverFee) || 0,
+      googleMapsUrl,
+      observations,
+    });
+    res.json({ message });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/freight-engine/whatsapp-proposal error]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 4. Sincronizar os 70 Bairros no Banco de Dados (idempotente)
+app.post('/api/admin/freight-engine/seed-70-neighborhoods', requireAdminAuth, async (_req, res) => {
+  try {
+    let insertedNeighborhoods = 0;
+    let insertedPrices = 0;
+
+    for (const record of UBERLANDIA_70_NEIGHBORHOODS) {
+      const neighborhood = await deliveryConfigService.findOrCreateNeighborhood(record.name);
+      if (neighborhood) {
+        insertedNeighborhoods++;
+        await deliveryConfigService.upsertFreightPrice({
+          neighborhood_id: neighborhood.id,
+          modality_code: 'CONVENCIONAL',
+          vehicle_category: 'CAR',
+          price: record.carFee,
+          active: true,
+        });
+        insertedPrices++;
+      }
+    }
+
+    res.json({
+      success: true,
+      total_neighborhoods: UBERLANDIA_70_NEIGHBORHOODS.length,
+      seeded_neighborhoods: insertedNeighborhoods,
+      seeded_prices: insertedPrices,
+    });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/freight-engine/seed-70-neighborhoods error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Exportar / Baixar Tabela de Fretes Completa em Excel (.xlsx) com 110 Bairros & Raio Moto
+app.get(
+  [
+    '/api/admin/freight-engine/export-excel',
+    '/api/freight-engine/download-excel',
+    '/api/freight-engine/download-excel/Tabela_de_Fretes.xlsx',
+    '/api/freight-engine/download-excel/Tabela_de_Fretes_Kantine_Gastronomia_Uberlandia.xlsx',
+  ],
+  async (req, res) => {
+    try {
+      const exportDir = path.resolve(__dirname, 'public', 'downloads');
+      fs.mkdirSync(exportDir, { recursive: true });
+      const filePathShort = path.join(exportDir, 'Tabela_de_Fretes.xlsx');
+      const filePathLong = path.join(exportDir, 'Tabela_de_Fretes_Kantine_Gastronomia_Uberlandia.xlsx');
+
+      // Se qualquer um dos arquivos não existir ou for solicitado via ?fresh=true, regenera
+      if (!fs.existsSync(filePathShort) || !fs.existsSync(filePathLong) || req.query.fresh === 'true') {
+        const wb = await generateFreightExcelWorkbook();
+        await wb.xlsx.writeFile(filePathShort);
+        await wb.xlsx.writeFile(filePathLong);
+      }
+
+      const requestedFile = req.path.endsWith('Tabela_de_Fretes_Kantine_Gastronomia_Uberlandia.xlsx')
+        ? filePathLong
+        : filePathShort;
+      const downloadFilename = req.path.endsWith('Tabela_de_Fretes_Kantine_Gastronomia_Uberlandia.xlsx')
+        ? 'Tabela_de_Fretes_Kantine_Gastronomia_Uberlandia.xlsx'
+        : 'Tabela_de_Fretes.xlsx';
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${downloadFilename}"`);
+      res.download(requestedFile, downloadFilename);
+    } catch (err: any) {
+      console.error('[API GET /api/freight-engine/download-excel error]', err.message);
+      res.status(500).json({ error: 'Falha ao gerar/baixar planilha Excel: ' + err.message });
+    }
+  }
+);
+
 // Driver Route Details Endpoint (M4.2 Parte P: Strict Privacy)
 app.get('/api/driver/routes/:id', async (req, res) => {
   try {
@@ -1365,23 +1723,311 @@ app.get('/api/driver/routes/:id/navigation', requireAdminAuth, async (req: AuthR
   }
 });
 
+// ==========================================
+// INTEGRAÇÃO TAKEAT (PDV & DELIVERY PRÓPRIO MULTI-LOJA)
+// ==========================================
+
+// Helper para processamento de webhook com validação opcional de token
+async function handleTakeatWebhook(req: any, res: any, explicitStoreKey?: string) {
+  try {
+    const rawPayload = req.body;
+    console.log(`[Takeat Webhook Received (${explicitStoreKey || 'AUTO'})]`, JSON.stringify(rawPayload).slice(0, 300));
+
+    // Validação opcional de Webhook Secret se configurado na loja
+    const storeKeyToValidate = (explicitStoreKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
+    const config = await takeatService.getConfig(storeKeyToValidate);
+    if (config.webhook_secret) {
+      const authHeader = req.headers['authorization'] || req.headers['x-takeat-signature'] || req.headers['x-webhook-token'];
+      if (authHeader && authHeader !== config.webhook_secret && !authHeader.includes(config.webhook_secret)) {
+        console.warn(`[Takeat Webhook ${storeKeyToValidate}] Token mismatch warning`);
+      }
+    }
+
+    const result = await takeatService.processIncomingWebhook(rawPayload, explicitStoreKey);
+    res.status(200).json({
+      success: true,
+      action: result.action,
+      storeKey: result.storeKey,
+      orderId: result.order.id,
+      displayId: result.order.display_id,
+      status: result.order.status,
+      calculatedFreight: result.order.calculated_freight_value,
+    });
+  } catch (err: any) {
+    console.error('[Takeat Webhook Error]', err.message);
+    res.status(500).json({ error: 'FAILED_TO_PROCESS_TAKEAT_WEBHOOK', details: err.message });
+  }
+}
+
+// 1. Webhook Específico para Loja Matriz
+app.post('/api/webhooks/takeat/matriz', async (req, res) => {
+  await handleTakeatWebhook(req, res, 'MATRIZ');
+});
+
+// 2. Webhook Específico para Loja Vinhedos
+app.post('/api/webhooks/takeat/vinhedos', async (req, res) => {
+  await handleTakeatWebhook(req, res, 'VINHEDOS');
+});
+
+// 3. Webhook Unificado com Auto-Detecção por Store ID ou Query Param (?store=matriz|vinhedos)
+app.post('/api/webhooks/takeat', async (req, res) => {
+  const storeParam = (req.query.store as string) || (req.query.loja as string) || undefined;
+  await handleTakeatWebhook(req, res, storeParam);
+});
+
+// 4. Obter Configurações de Todas as Lojas (Matriz e Vinhedos)
+app.get('/api/admin/takeat/configs', requireAdminAuth, async (_req, res) => {
+  try {
+    const all = await takeatService.getAllConfigs();
+    res.json({
+      MATRIZ: {
+        ...all.MATRIZ,
+        has_api_key: Boolean(all.MATRIZ.api_key && all.MATRIZ.api_key.trim().length > 0),
+        has_webhook_secret: Boolean(all.MATRIZ.webhook_secret && all.MATRIZ.webhook_secret.trim().length > 0),
+      },
+      VINHEDOS: {
+        ...all.VINHEDOS,
+        has_api_key: Boolean(all.VINHEDOS.api_key && all.VINHEDOS.api_key.trim().length > 0),
+        has_webhook_secret: Boolean(all.VINHEDOS.webhook_secret && all.VINHEDOS.webhook_secret.trim().length > 0),
+      },
+    });
+  } catch (err: any) {
+    console.error('[API GET /api/admin/takeat/configs error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Obter Configuração de Loja Específica
+app.get('/api/admin/takeat/config', requireAdminAuth, async (req, res) => {
+  try {
+    const storeKey = ((req.query.store as string)?.toUpperCase() === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
+    const config = await takeatService.getConfig(storeKey);
+    res.json({
+      ...config,
+      has_api_key: Boolean(config.api_key && config.api_key.trim().length > 0),
+      has_webhook_secret: Boolean(config.webhook_secret && config.webhook_secret.trim().length > 0),
+    });
+  } catch (err: any) {
+    console.error('[API GET /api/admin/takeat/config error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Salvar Configurações e Chaves do Takeat (por loja)
+app.post('/api/admin/takeat/config', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const {
+      store_key,
+      store_name,
+      api_key,
+      webhook_secret,
+      store_id,
+      default_pickup_preset,
+      auto_calculate_freight,
+      preferred_modality,
+      notification_sound_enabled,
+      is_active,
+    } = req.body;
+
+    const targetStore = (String(store_key).toUpperCase() === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
+
+    const saved = await takeatService.saveConfig(targetStore, {
+      store_name,
+      api_key,
+      webhook_secret,
+      store_id,
+      default_pickup_preset,
+      auto_calculate_freight,
+      preferred_modality,
+      notification_sound_enabled,
+      is_active,
+    });
+
+    res.json({
+      ...saved,
+      has_api_key: Boolean(saved.api_key && saved.api_key.trim().length > 0),
+      has_webhook_secret: Boolean(saved.webhook_secret && saved.webhook_secret.trim().length > 0),
+    });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/takeat/config error]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 7. Listar Pedidos do Takeat (com filtros por status e por loja)
+app.get('/api/admin/takeat/orders', requireAdminAuth, async (req, res) => {
+  try {
+    const status = (req.query.status as string) || undefined;
+    const store = (req.query.store as string) || undefined;
+    const orders = await takeatService.getOrders(status, store);
+    const pendingCounts = await takeatService.getPendingCount();
+    res.json({
+      orders,
+      pendingCount: pendingCounts.total,
+      pendingCounts,
+    });
+  } catch (err: any) {
+    console.error('[API GET /api/admin/takeat/orders error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. Contagem Rápida de Pedidos Pendentes (para badge pulsante no menu)
+app.get('/api/admin/takeat/pending-count', requireAdminAuth, async (_req, res) => {
+  try {
+    const counts = await takeatService.getPendingCount();
+    res.json({ count: counts.total, ...counts });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Simular Pedido de Teste do Takeat (suporta Matriz ou Vinhedos)
+app.post('/api/admin/takeat/simulate', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { storeKey, store_key, neighborhood, items, customerName, total } = req.body;
+    const targetStore = (String(storeKey || store_key || '').toUpperCase() === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
+    const order = await takeatService.simulateTestOrder({
+      storeKey: targetStore,
+      neighborhood,
+      items,
+      customerName,
+      total,
+    });
+    const pendingCounts = await takeatService.getPendingCount();
+    res.json({ success: true, order, pendingCount: pendingCounts.total, pendingCounts });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/takeat/simulate error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 10. Sincronizar Pedidos da Takeat Ativamente via Chave REST (Polling / Pull)
+app.post('/api/admin/takeat/sync', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const storeKey = ((req.body?.storeKey || req.body?.store_key || 'MATRIZ') as string).toUpperCase() === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ';
+    const result = await takeatService.syncOrdersFromRestApi(storeKey);
+    const pendingCounts = await takeatService.getPendingCount();
+    res.json({
+      ...result,
+      pendingCount: pendingCounts.total,
+      pendingCounts,
+    });
+  } catch (err: any) {
+    console.error('[API POST /api/admin/takeat/sync error]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 7. Converter Pedido Takeat em Rota do Kantine Delivery
+app.post('/api/admin/takeat/orders/:id/create-route', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const orderId = parseInt(req.params.id, 10);
+    if (isNaN(orderId)) return res.status(400).json({ error: 'INVALID_ORDER_ID' });
+
+    const { offerNow, modality, pickupPreset } = req.body;
+    const result = await takeatService.convertOrderToRoute(orderId, {
+      offerNow: Boolean(offerNow),
+      modality: modality || 'MOTO',
+      pickupPreset,
+    });
+
+    res.json({
+      success: true,
+      route: result.route,
+      order: result.order,
+    });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/takeat/orders/${req.params.id}/create-route error]`, err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 8. Dispensar Pedido Takeat
+app.post('/api/admin/takeat/orders/:id/dismiss', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const orderId = parseInt(req.params.id, 10);
+    if (isNaN(orderId)) return res.status(400).json({ error: 'INVALID_ORDER_ID' });
+
+    const updated = await takeatService.dismissOrder(orderId);
+    res.json({ success: true, order: updated });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/takeat/orders/${req.params.id}/dismiss error]`, err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 9. Excluir Pedido Takeat
+app.delete('/api/admin/takeat/orders/:id', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const orderId = parseInt(req.params.id, 10);
+    if (isNaN(orderId)) return res.status(400).json({ error: 'INVALID_ORDER_ID' });
+
+    await takeatService.deleteOrder(orderId);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error(`[API DELETE /api/admin/takeat/orders/${req.params.id} error]`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Explicit API 404 handler so unmatched API routes never fall through to Vite SPA HTML shell
+app.all('/api/*', (_req, res) => {
+  res.status(404).json({ error: 'API_ENDPOINT_NOT_FOUND', message: 'Rota de API não encontrada' });
+});
+
+// Dedicated favicon route to prevent 404/500/503 from browsers & proxies
+app.get('/favicon.ico', (_req, res) => {
+  const icoPath = path.resolve(__dirname, 'public', 'favicon.ico');
+  if (fs.existsSync(icoPath)) {
+    res.type('image/x-icon');
+    return res.sendFile(icoPath);
+  }
+  const svgPath = path.resolve(__dirname, 'public', 'logo_kantine.svg');
+  if (fs.existsSync(svgPath)) {
+    res.type('image/svg+xml');
+    return res.sendFile(svgPath);
+  }
+  res.status(204).end();
+});
+
 // Mount Vite in development or static dist in production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const distPath = path.resolve(__dirname, 'dist');
+    const indexPath = path.resolve(distPath, 'index.html');
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+    }
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(200).send(`<!doctype html><html><head><meta charset="UTF-8"><title>Kantine Delivery</title></head><body><div id="root">Carregando Kantine Delivery...</div></body></html>`);
+      }
     });
   }
 
+  // Global Express error handler preventing unhandled 500 crashes
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[Express Global Error]:', err?.stack || err?.message || err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err?.message || 'Erro interno no servidor' });
+    }
+  });
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Kantine Delivery M1] Server running on http://0.0.0.0:${PORT}`);
+  });
+
+  initDbConstraints().catch((err) => {
+    console.error('[initDbConstraints] Startup check warning:', err.message);
   });
 
   // Start Telegram Bot polling
@@ -1394,3 +2040,4 @@ startServer().catch((err) => {
   console.error('[Kantine Delivery M1] Startup error:', err);
   process.exit(1);
 });
+

@@ -110,6 +110,25 @@ export class RouteEditService {
       });
     }
 
+    // 3.1. Verificar alteração nos veículos aceitos (Seção 18)
+    if (editData.accepted_vehicle_types && Array.isArray(editData.accepted_vehicle_types)) {
+      const oldVehicles = [...(existingRoute.accepted_vehicle_types || [])].sort().join(',');
+      const newVehicles = [...editData.accepted_vehicle_types].sort().join(',');
+      if (oldVehicles !== newVehicles) {
+        changed_fields.push('accepted_vehicle_types');
+        const formatVehicles = (list: string[]) =>
+          list
+            .map((v) => (v === 'CAR' ? '🚗 Carro' : v === 'MOTO' ? '🏍️ Moto' : v === 'MOTO_WITH_BAG' ? '🎒 Moto c/ Bag' : v))
+            .join(', ');
+        diff_items.push({
+          field: 'accepted_vehicle_types',
+          label: 'Veículos Aceitáveis',
+          old_value: formatVehicles(existingRoute.accepted_vehicle_types || []),
+          new_value: formatVehicles(editData.accepted_vehicle_types),
+        });
+      }
+    }
+
     // 4. Analisar Paradas (Stops)
     if (editData.stops) {
       const existingStops = existingRoute.stops || [];
@@ -300,6 +319,20 @@ export class RouteEditService {
     // Não aplica silenciosamente! Registra proposta pendente e notifica motorista.
     // =========================================================================
     if (analysis.is_material && ['ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(existingRoute.status)) {
+      // Se havia alguma proposta anterior pendente que aguardava resposta, marcar como substituída/rejeitada
+      await db
+        .update(routeUpdates)
+        .set({
+          driver_approval_status: 'REJECTED',
+          driver_decision_at: sql`NOW()`,
+        })
+        .where(
+          and(
+            eq(routeUpdates.route_id, routeId),
+            eq(routeUpdates.driver_approval_status, 'PENDING')
+          )
+        );
+
       // Registrar snapshot anterior e proposta pendente
       const [updateRecord] = await db
         .insert(routeUpdates)
@@ -324,10 +357,13 @@ export class RouteEditService {
         .set({
           change_pending_driver_approval: true,
           pending_material_change: JSON.stringify({
+            status: 'PENDING',
             update_id: updateRecord.id,
             proposed_version: newVersion,
             diff_summary: analysis.diff_summary,
+            proposal: editData,
             actor,
+            created_at: new Date().toISOString(),
           }),
         })
         .where(
@@ -340,9 +376,10 @@ export class RouteEditService {
       // Notificar motorista vencedor no Telegram com botões de Aceitar/Recusar (Seção 14)
       if (existingRoute.accepted_driver_id) {
         const driver = await driverService.getDriverById(existingRoute.accepted_driver_id);
-        if (driver?.telegram_chat_id) {
+        const chatId = driver?.telegram_chat_id || driver?.telegram_user_id;
+        if (chatId) {
           await telegramBot.sendRouteMaterialChangeProposal(
-            driver.telegram_chat_id,
+            chatId,
             existingRoute,
             updateRecord.id,
             analysis.diff_summary
@@ -636,10 +673,10 @@ export class RouteEditService {
     }
 
     const driver = await driverService.getDriverById(driverId);
+    const proposal: EditRouteDTO = JSON.parse(updateRecord.pending_proposal || '{}');
 
     if (decision === 'ACCEPT') {
       // Aplicar a proposta que estava pendente
-      const proposal: EditRouteDTO = JSON.parse(updateRecord.pending_proposal || '{}');
       const newVersion = updateRecord.new_version;
 
       const updateFields: any = {
@@ -728,9 +765,10 @@ export class RouteEditService {
       });
 
       // Notificar motorista no Telegram
-      if (driver?.telegram_chat_id) {
+      const chatId = driver?.telegram_chat_id || driver?.telegram_user_id;
+      if (chatId) {
         await telegramBot.sendRouteMaterialDecisionConfirmation(
-          driver.telegram_chat_id,
+          chatId,
           refreshedRoute,
           true
         );
@@ -738,12 +776,20 @@ export class RouteEditService {
 
       return { status: 'ACCEPTED', route: refreshedRoute };
     } else {
-      // REJEITAR: Descartar proposta, limpar pendência, rota permanece inalterada
+      // REJEITAR: Manter proposta rejeitada gravada na rota para ajuste imediato pelo atendente
+      const rejectedPayload = JSON.stringify({
+        status: 'REJECTED',
+        update_id: updateId,
+        diff_summary: updateRecord.diff_summary,
+        proposal,
+        rejected_at: new Date().toISOString(),
+      });
+
       await db
         .update(routes)
         .set({
           change_pending_driver_approval: false,
-          pending_material_change: null,
+          pending_material_change: rejectedPayload,
         })
         .where(eq(routes.id, routeId));
 
@@ -759,18 +805,20 @@ export class RouteEditService {
         route_id: routeId,
         event_type: 'ROUTE_CHANGE_REJECTED',
         actor: `DRIVER #${driverId}`,
-        details: `Driver rejected material change proposal #${updateId}`,
+        details: `Driver rejected material change proposal #${updateId}. Proposed changes preserved for attendant adjustment and renegotiation.`,
       });
 
-      if (driver?.telegram_chat_id) {
+      const chatId = driver?.telegram_chat_id || driver?.telegram_user_id;
+      if (chatId) {
         await telegramBot.sendRouteMaterialDecisionConfirmation(
-          driver.telegram_chat_id,
+          chatId,
           route,
           false
         );
       }
 
-      return { status: 'REJECTED', route };
+      const refreshedRoute = (await routeService.getRouteById(routeId)) || route;
+      return { status: 'REJECTED', route: refreshedRoute };
     }
   }
 
@@ -845,6 +893,26 @@ export class RouteEditService {
       driver_acknowledged_at: r.driver_acknowledged_at,
       created_at: r.created_at,
     }));
+  }
+
+  /**
+   * Descarta a proposta material rejeitada e restaura a rota para o estado estável da versão atual.
+   */
+  public async discardRejectedProposal(routeId: number, actor: string): Promise<void> {
+    await db
+      .update(routes)
+      .set({
+        pending_material_change: null,
+        change_pending_driver_approval: false,
+      })
+      .where(eq(routes.id, routeId));
+
+    await db.insert(routeEvents).values({
+      route_id: routeId,
+      event_type: 'ROUTE_CHANGE_DISCARDED',
+      actor,
+      details: 'Attendant discarded rejected material change proposal. Route maintained in current version.',
+    });
   }
 }
 

@@ -1,7 +1,7 @@
 import { db, prodDb } from '../db/index.ts';
 import { drivers, driverEvents, driverInvitations, driverReferrals } from '../db/schema.ts';
 import { eq, desc, sql } from 'drizzle-orm';
-import { Driver, DriverStatus, VehicleType, DriverEventType, PixKeyType, DriverInvitation } from './types.ts';
+import { Driver, DriverStatus, VehicleType, DriverEventType, PixKeyType, DriverInvitation, parseDriverVehicleTypes } from './types.ts';
 import { canReceiveDeliveryOffers } from './eligibility.ts';
 import { telegramBot } from './telegramBot.ts';
 import {
@@ -163,27 +163,19 @@ export class DriverService {
     pix_key_value?: string;
     invite_token?: string;
   }): Promise<Driver> {
-    // Validate vehicle type
-    const validVehicles: VehicleType[] = [
-      'CAR',
-      'MOTO',
-      'MOTO_WITH_BAG',
-      'CAR_HATCH',
-      'CAR_SEDAN',
-      'CAR_SW',
-      'MOTO_WITHOUT_BAG',
-      'OTHER',
-    ];
-    if (!validVehicles.includes(data.vehicle_type as VehicleType)) {
+    // Validate vehicle type (supports single or multi-selection e.g. "CAR,MOTO")
+    const parsedVehicles = parseDriverVehicleTypes(data.vehicle_type);
+    if (parsedVehicles.length === 0) {
       throw new Error(`INVALID_VEHICLE_TYPE: ${data.vehicle_type}`);
     }
 
-    // Canonicalize to simplified types: CAR, MOTO, MOTO_WITH_BAG
-    let canonicalVehicle: VehicleType = data.vehicle_type as VehicleType;
-    if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(canonicalVehicle as string)) {
-      canonicalVehicle = 'CAR';
-    } else if (canonicalVehicle === 'MOTO_WITHOUT_BAG') {
-      canonicalVehicle = 'MOTO';
+    let canonicalVehicle: string = data.vehicle_type;
+    if (parsedVehicles.length > 1) {
+      canonicalVehicle = parsedVehicles.join(',');
+    } else if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(data.vehicle_type)) {
+      canonicalVehicle = data.vehicle_type;
+    } else {
+      canonicalVehicle = parsedVehicles[0];
     }
 
     if (!data.name || !data.phone || !data.telegram_user_id) {
@@ -626,27 +618,21 @@ export class DriverService {
       }
     }
 
-    // 4. Validate and set Vehicle Type
+    // 4. Validate and set Vehicle Type (supports single or multi-selection e.g. "CAR,MOTO")
     if (updates.vehicle_type !== undefined) {
-      const validVehicles: VehicleType[] = [
-        'CAR',
-        'MOTO',
-        'MOTO_WITH_BAG',
-        'CAR_HATCH',
-        'CAR_SEDAN',
-        'CAR_SW',
-        'MOTO_WITHOUT_BAG',
-        'OTHER',
-      ];
-      if (!validVehicles.includes(updates.vehicle_type as VehicleType)) {
+      const parsedVehicles = parseDriverVehicleTypes(updates.vehicle_type);
+      if (parsedVehicles.length === 0) {
         throw new Error(`INVALID_VEHICLE_TYPE: ${updates.vehicle_type}`);
       }
-      let canonicalVeh: VehicleType = updates.vehicle_type as VehicleType;
-      if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(canonicalVeh as string)) {
-        canonicalVeh = 'CAR';
-      } else if (canonicalVeh === 'MOTO_WITHOUT_BAG') {
-        canonicalVeh = 'MOTO';
+      let canonicalVeh: string = updates.vehicle_type;
+      if (parsedVehicles.length > 1) {
+        canonicalVeh = parsedVehicles.join(',');
+      } else if (['CAR_HATCH', 'CAR_SEDAN', 'CAR_SW', 'OTHER'].includes(updates.vehicle_type)) {
+        canonicalVeh = updates.vehicle_type;
+      } else {
+        canonicalVeh = parsedVehicles[0];
       }
+
       if (canonicalVeh !== driver.vehicle_type) {
         setPayload.vehicle_type = canonicalVeh;
         auditEventsToInsert.push({

@@ -13,7 +13,7 @@ import {
   routeEvents,
   drivers,
 } from '../db/schema.ts';
-import { eq, desc, asc, and, sql } from 'drizzle-orm';
+import { eq, desc, asc, and, or, isNotNull, sql } from 'drizzle-orm';
 import {
   Route,
   RouteStop,
@@ -39,6 +39,7 @@ import {
   generateRouteNavigationLinks,
   RouteNavigationLinks,
 } from './mapsNavigation.ts';
+import { computeAcceptedFinalDeadline } from '../shared/customerUtils.ts';
 
 export class RouteService {
   // ==========================================
@@ -140,6 +141,7 @@ export class RouteService {
       resolution_note: row.resolution_note || null,
       resolved_at: row.resolved_at || null,
       resolved_by: row.resolved_by || null,
+      compensation_amount: row.compensation_amount != null ? parseFloat(String(row.compensation_amount)) : null,
       // M4.2 Modality, Neighborhood, Pricing Category & Customer Freight
       modality_code: row.modality_code || 'CONVENCIONAL',
       neighborhood_id: row.neighborhood_id || null,
@@ -147,6 +149,10 @@ export class RouteService {
       customer_freight: row.customer_freight != null ? parseFloat(String(row.customer_freight)) : null,
       net_delivery_base: row.net_delivery_base != null ? parseFloat(String(row.net_delivery_base)) : null,
       management_amount: row.management_amount != null ? parseFloat(String(row.management_amount)) : null,
+      is_horizontal_condo: Boolean(
+        row.is_horizontal_condo ||
+        (typeof row.observations === 'string' && row.observations.includes('[Condomínio Horizontal]'))
+      ),
       created_at: row.created_at,
       completed_at: row.completed_at,
     };
@@ -155,7 +161,7 @@ export class RouteService {
   /**
    * Parse DB route row to domain model
    */
-  private parseRouteRow(row: any, stops?: RouteStop[]): Route {
+  private parseRouteRow(row: any, stops?: RouteStop[], driver?: Driver | null): Route {
     let acceptedVehicles: VehicleType[] = [];
     try {
       acceptedVehicles = typeof row.accepted_vehicle_types === 'string'
@@ -205,6 +211,7 @@ export class RouteService {
       created_at: row.created_at,
       offered_at: row.offered_at,
       stops,
+      accepted_driver: driver || undefined,
     };
   }
 
@@ -421,7 +428,13 @@ export class RouteService {
           destination_neighborhood: s.destination_neighborhood.trim(),
           cargo_description: s.cargo_description.trim(),
           delivery_mode: s.delivery_mode === 'NO_CONTACT' ? 'NO_CONTACT' : 'IN_PERSON',
-          observations: s.observations?.trim() || null,
+          observations: (() => {
+            let obs = s.observations?.trim() || '';
+            if (s.is_horizontal_condo && !obs.includes('[Condomínio Horizontal]')) {
+              obs = obs ? `[Condomínio Horizontal] ${obs}` : '[Condomínio Horizontal]';
+            }
+            return obs || null;
+          })(),
           desired_deadline: s.desired_deadline?.trim() || null,
           status: 'PENDING',
           pin_code: pin,
@@ -459,7 +472,12 @@ export class RouteService {
       .where(eq(routeStops.route_id, id))
       .orderBy(asc(routeStops.sequence));
 
-    return this.parseRouteRow(rows[0], stopsRows.map((s) => this.parseRouteStopRow(s)));
+    let driver: Driver | null = null;
+    if (rows[0].accepted_driver_id) {
+      driver = await driverService.getDriverById(rows[0].accepted_driver_id).catch(() => null);
+    }
+
+    return this.parseRouteRow(rows[0], stopsRows.map((s) => this.parseRouteStopRow(s)), driver);
   }
 
   public async getRoutes(status?: RouteStatus): Promise<Route[]> {
@@ -478,17 +496,34 @@ export class RouteService {
       stopsByRouteId.set(stop.route_id, list);
     }
 
-    return rows.map((r) => this.parseRouteRow(r, stopsByRouteId.get(r.id) || []));
+    // Fetch all drivers to map accepted driver details
+    const allDrivers = await driverService.getDrivers().catch(() => []);
+    const driversMap = new Map<number, Driver>();
+    for (const d of allDrivers) {
+      driversMap.set(d.id, d as Driver);
+    }
+
+    return rows.map((r) => {
+      const drv = r.accepted_driver_id ? driversMap.get(r.accepted_driver_id) || null : null;
+      return this.parseRouteRow(r, stopsByRouteId.get(r.id) || [], drv);
+    });
   }
 
   public async getRouteDetails(id: number): Promise<{
     route: Route;
+    driver: Driver | null;
     dispatches: RouteOfferDispatch[];
     events: RouteEvent[];
     stats: { sent: number; failed: number };
   }> {
     const route = await this.getRouteById(id);
     if (!route) throw new Error('ROUTE_NOT_FOUND');
+
+    let driver: Driver | null = null;
+    if (route.accepted_driver_id) {
+      driver = await driverService.getDriverById(route.accepted_driver_id).catch(() => null);
+      route.accepted_driver = driver || undefined;
+    }
 
     const dispatchesRows = await db
       .select()
@@ -506,10 +541,39 @@ export class RouteService {
 
     return {
       route,
+      driver,
       dispatches: dispatchesRows as RouteOfferDispatch[],
       events: eventsRows as RouteEvent[],
       stats: { sent, failed },
     };
+  }
+
+  /**
+   * Update Route Vehicle Types directly (for DRAFT and OFFERED routes)
+   */
+  public async updateRouteVehicleTypes(
+    routeId: number,
+    vehicleTypes: VehicleType[],
+    actor: string = 'ADMIN'
+  ): Promise<Route> {
+    const route = await this.getRouteById(routeId);
+    if (!route) throw new Error('ROUTE_NOT_FOUND');
+
+    await db
+      .update(routes)
+      .set({
+        accepted_vehicle_types: JSON.stringify(vehicleTypes),
+      })
+      .where(eq(routes.id, routeId));
+
+    await db.insert(routeEvents).values({
+      route_id: routeId,
+      event_type: 'ROUTE_UPDATED',
+      actor: actor || 'ADMIN',
+      details: `Veículos aceitáveis atualizados para: ${vehicleTypes.join(', ')}`,
+    });
+
+    return (await this.getRouteById(routeId))!;
   }
 
   /**
@@ -659,22 +723,31 @@ export class RouteService {
   }
 
   /**
-   * Cancel Route: DRAFT -> CANCELLED or OFFERED -> CANCELLED
-   * ACCEPTED routes cannot be cancelled.
+   * Cancel Route: Allows cancelling a route at ANY status (DRAFT, OFFERED, ACCEPTED, ARRIVED_PICKUP, PICKED_UP, IN_TRANSIT, COMPLETED).
+   * Routes cancelled move into CANCELLED status.
+   * When cancelled, pending stops or a cancellation incident are routed to Pendências (M4.1) so operations can track resolution, compensation, or store return.
    * If OFFERED, notifies all drivers who received SENT offer.
+   * If ACCEPTED/IN_TRANSIT/etc with an allocated driver, notifies the driver via Telegram.
    */
-  public async cancelRoute(id: number, actor?: string): Promise<Route> {
+  public async cancelRoute(
+    id: number,
+    actor?: string,
+    reason?: string,
+    options?: {
+      compensation_amount?: number;
+      resolution_type?: IncidentResolutionType;
+      resolution_note?: string;
+    }
+  ): Promise<Route> {
     const route = await this.getRouteById(id);
     if (!route) throw new Error('ROUTE_NOT_FOUND');
 
     if (route.status === 'CANCELLED') {
       throw new Error('ROUTE_ALREADY_CANCELLED');
     }
-    if (route.status === 'ACCEPTED') {
-      throw new Error('CANNOT_CANCEL_ACCEPTED_ROUTE');
-    }
 
     const previousStatus = route.status;
+    const cancelReason = reason?.trim() || `Cancelamento operacional pelo atendente (${previousStatus})`;
 
     const [updatedRow] = await db
       .update(routes)
@@ -687,7 +760,128 @@ export class RouteService {
       route_id: id,
       event_type: 'ROUTE_CANCELLED',
       actor: actor || 'ADMIN',
+      details: `Status anterior: ${previousStatus}. Motivo: ${cancelReason}${
+        options?.compensation_amount !== undefined ? ` (Repasse acordado: R$ ${options.compensation_amount.toFixed(2)})` : ''
+      }`,
     });
+
+    // Se um valor financeiro de repasse ou resolução foi informado
+    if (options?.compensation_amount !== undefined) {
+      if (options.compensation_amount > 0) {
+        await db
+          .update(routes)
+          .set({
+            total_fee: options.compensation_amount.toFixed(2),
+            final_driver_fee: options.compensation_amount.toFixed(2),
+            payment_status: 'PENDING',
+          })
+          .where(eq(routes.id, id));
+      } else {
+        await db
+          .update(routes)
+          .set({
+            total_fee: '0.00',
+            final_driver_fee: '0.00',
+            payment_status: 'PAID',
+            paid_at: new Date(),
+            paid_by: actor || 'ADMIN',
+            payment_note: 'Isento de repasse - Cancelamento sem custo financeiro',
+          })
+          .where(eq(routes.id, id));
+      }
+    }
+
+    // Se a corrida foi cancelada ANTES de ser aceita por qualquer motorista,
+    // NÃO deve ir para resolução / pendências (afinal, ninguém pegou a corrida, não há pacote retido nem tratativa com motorista).
+    const stops = await db
+      .select()
+      .from(routeStops)
+      .where(eq(routeStops.route_id, id));
+
+    const hadDriver = Boolean(route.accepted_driver_id);
+
+    if (!hadDriver) {
+      // Ninguém pegou a corrida: as paradas pendentes apenas são marcadas como CANCELLED (sem gerar incidente / pendência)
+      for (const stop of stops) {
+        if (stop.status === 'PENDING') {
+          await db
+            .update(routeStops)
+            .set({ status: 'CANCELLED' })
+            .where(eq(routeStops.id, stop.id));
+        }
+      }
+    } else {
+      // A corrida já havia sido aceita por um motorista: gera pendência para acompanhamento de retorno do pacote ou repasse
+      const now = new Date();
+      const resolutionStatus = options?.resolution_type ? 'RESOLVED' : 'OPEN';
+      const resolutionType = options?.resolution_type || (options?.compensation_amount !== undefined ? 'CANCELLATION' : null);
+      const resolutionNote = options?.resolution_note || (resolutionType ? cancelReason : null);
+      const compensationAmountStr = options?.compensation_amount !== undefined ? options.compensation_amount.toFixed(2) : null;
+
+      if (stops.length === 0) {
+        await db.insert(routeStops).values({
+          route_id: id,
+          sequence: 1,
+          cargo_description: 'Corrida Cancelada',
+          destination_address: route.pickup_address || 'Endereço da rota',
+          destination_neighborhood: 'Central',
+          delivery_mode: 'IN_PERSON',
+          observations: `Corrida #${id} cancelada no status ${previousStatus}. Motivo: ${cancelReason}`,
+          status: 'INCIDENT',
+          incident_type: 'CORRIDA_CANCELADA',
+          incident_note: `Corrida #${id} cancelada quando estava em status ${previousStatus}. Motivo: ${cancelReason}`,
+          incident_at: now,
+          incident_resolution_status: resolutionStatus,
+          resolution_type: resolutionType,
+          resolution_note: resolutionNote,
+          resolved_at: options?.resolution_type ? now : null,
+          resolved_by: options?.resolution_type ? (actor || 'ADMIN') : null,
+          compensation_amount: compensationAmountStr,
+        });
+      } else {
+        let hasIncidentStops = false;
+
+        for (const stop of stops) {
+          if (stop.status === 'PENDING') {
+            hasIncidentStops = true;
+            await db
+              .update(routeStops)
+              .set({
+                status: 'INCIDENT',
+                incident_type: 'CORRIDA_CANCELADA',
+                incident_note: `Corrida #${id} cancelada quando estava em status ${previousStatus}. Motivo: ${cancelReason}`,
+                incident_at: now,
+                incident_resolution_status: resolutionStatus,
+                resolution_type: resolutionType,
+                resolution_note: resolutionNote,
+                resolved_at: options?.resolution_type ? now : null,
+                resolved_by: options?.resolution_type ? (actor || 'ADMIN') : null,
+                compensation_amount: compensationAmountStr,
+              })
+              .where(eq(routeStops.id, stop.id));
+          }
+        }
+
+        if (!hasIncidentStops) {
+          const targetStop = stops[stops.length - 1];
+          await db
+            .update(routeStops)
+            .set({
+              status: 'INCIDENT',
+              incident_type: 'CORRIDA_CANCELADA',
+              incident_note: `Corrida #${id} cancelada retroativamente a partir do status ${previousStatus}. Tratativa necessária: ${cancelReason}`,
+              incident_at: now,
+              incident_resolution_status: resolutionStatus,
+              resolution_type: resolutionType,
+              resolution_note: resolutionNote,
+              resolved_at: options?.resolution_type ? now : null,
+              resolved_by: options?.resolution_type ? (actor || 'ADMIN') : null,
+              compensation_amount: compensationAmountStr,
+            })
+            .where(eq(routeStops.id, targetStop.id));
+        }
+      }
+    }
 
     // Notify drivers if it was OFFERED
     if (previousStatus === 'OFFERED') {
@@ -702,6 +896,27 @@ export class RouteService {
             console.error(`[RouteService] Cancellation notify failed for chat ${disp.telegram_chat_id}:`, e.message);
           });
         }
+      }
+    }
+
+    // Notificar motorista vencedor se a corrida já estava aceita ou em andamento
+    if (route.accepted_driver_id && ['ACCEPTED', 'ARRIVED_PICKUP', 'PICKED_UP', 'IN_TRANSIT'].includes(previousStatus)) {
+      try {
+        const [driver] = await db
+          .select()
+          .from(drivers)
+          .where(eq(drivers.id, route.accepted_driver_id));
+        if (driver && driver.telegram_chat_id) {
+          const cancelMsg =
+            `⚠️ *AVISO OPERACIONAL: CORRIDA #${id} CANCELADA*\n\n` +
+            `A corrida #${id} (${route.pickup_name}) foi cancelada pelo suporte/administração.\n` +
+            `Caso já esteja no local ou tenha coletado produtos, entre em contato imediatamente com a central ou aguarde instruções de devolução.`;
+          await telegramBot.sendMessage(driver.telegram_chat_id, cancelMsg).catch((e) => {
+            console.error(`[RouteService] Error sending cancellation notice to driver ${driver.id}:`, e.message);
+          });
+        }
+      } catch (e: any) {
+        console.error('[RouteService] Driver cancellation notification error:', e.message);
       }
     }
 
@@ -848,12 +1063,16 @@ export class RouteService {
     // 10. CRITICAL: ATOMIC ACCEPTANCE IN POSTGRESQL
     // PostgreSQL enforces exclusive row lock on the single target route row.
     // Exactly ONE concurrent transaction will successfully update status OFFERED -> ACCEPTED.
+    const now = new Date();
+    const calculatedDeadline = computeAcceptedFinalDeadline(route.final_deadline, now);
+
     const updateResults = await db
       .update(routes)
       .set({
         status: 'ACCEPTED',
         accepted_driver_id: driver.id,
-        accepted_at: sql`NOW()`,
+        accepted_at: now,
+        final_deadline: calculatedDeadline,
       })
       .where(
         and(
@@ -1192,10 +1411,14 @@ export class RouteService {
   /**
    * Check if all stops in route are terminal (DELIVERED or INCIDENT) and auto-complete route
    * (M4 Seção 23 & 24)
+   * REGRA: Se houver qualquer incidente reportado nesta corrida, a rota NÃO deve ser finalizada
+   * automaticamente nem prometer pagamento imediato. Devemos tratar e resolver primeiro antes de finalizar e pagar.
    */
   private async checkAndCompleteRouteIfTerminal(routeId: number): Promise<{
     routeCompleted: boolean;
     remainingCount: number;
+    hasIncident: boolean;
+    hasUnresolvedIncident: boolean;
     completedAt?: Date;
   }> {
     const allStops = await db
@@ -1205,9 +1428,23 @@ export class RouteService {
 
     const pendingStops = allStops.filter((s) => s.status === 'PENDING');
     const remainingCount = pendingStops.length;
+    const hasIncident = allStops.some((s) => s.status === 'INCIDENT');
+    const hasUnresolvedIncident = allStops.some(
+      (s) => s.status === 'INCIDENT' && (s.incident_resolution_status || 'OPEN') !== 'RESOLVED'
+    );
 
     if (remainingCount === 0 && allStops.length > 0) {
-      // All stops are in terminal state (DELIVERED or INCIDENT)
+      // Se teve problema reportado na corrida, NÃO finalizar a rota automaticamente nem prometer pagamento
+      if (hasIncident || hasUnresolvedIncident) {
+        return {
+          routeCompleted: false,
+          remainingCount: 0,
+          hasIncident: true,
+          hasUnresolvedIncident,
+        };
+      }
+
+      // Todas as paradas foram entregues normalmente sem incidentes
       const now = new Date();
       await db
         .update(routes)
@@ -1221,13 +1458,51 @@ export class RouteService {
         route_id: routeId,
         event_type: 'ROUTE_COMPLETED',
         actor: 'SYSTEM',
-        details: `Route completed automatically. All ${allStops.length} stops reached terminal status.`,
+        details: `Route completed automatically. All ${allStops.length} stops delivered successfully.`,
       });
 
-      return { routeCompleted: true, remainingCount: 0, completedAt: now };
+      return {
+        routeCompleted: true,
+        remainingCount: 0,
+        hasIncident: false,
+        hasUnresolvedIncident: false,
+        completedAt: now,
+      };
     }
 
-    return { routeCompleted: false, remainingCount };
+    return {
+      routeCompleted: false,
+      remainingCount,
+      hasIncident,
+      hasUnresolvedIncident,
+    };
+  }
+
+  /**
+   * Finalizar manualmente rota pelo atendente/admin após tratamento de incidentes e liberar para pagamento PIX
+   */
+  public async finalizeAndCompleteRoute(routeId: number, actor: string = 'ADMIN'): Promise<Route> {
+    const route = await this.getRouteById(routeId);
+    if (!route) throw new Error('ROUTE_NOT_FOUND');
+
+    const now = new Date();
+    await db
+      .update(routes)
+      .set({
+        status: 'COMPLETED',
+        completed_at: route.completed_at || now,
+      })
+      .where(eq(routes.id, routeId));
+
+    await db.insert(routeEvents).values({
+      route_id: routeId,
+      event_type: 'ROUTE_COMPLETED',
+      actor,
+      details: `Route finalized manually by ${actor} after treating incidents/pendencies.`,
+    });
+
+    const updated = (await this.getRouteById(routeId))!;
+    return updated;
   }
 
   /**
@@ -1243,6 +1518,8 @@ export class RouteService {
     stop?: RouteStop;
     routeCompleted?: boolean;
     remainingCount?: number;
+    hasIncident?: boolean;
+    hasUnresolvedIncident?: boolean;
     nextStop?: RouteStop | null;
     error?: string;
     message: string;
@@ -1288,7 +1565,7 @@ export class RouteService {
       return {
         success: false,
         error: 'INVALID_PIN',
-        message: '❌ PIN incorreto.\nConfira com o cliente e tente novamente.',
+        message: `❌ Corrida #${route.id}: PIN incorreto.\nConfira com o cliente e tente novamente.`,
       };
     }
 
@@ -1320,8 +1597,10 @@ export class RouteService {
       stop: updatedStop,
       routeCompleted: completion.routeCompleted,
       remainingCount: completion.remainingCount,
+      hasIncident: completion.hasIncident,
+      hasUnresolvedIncident: completion.hasUnresolvedIncident,
       nextStop,
-      message: 'Entrega confirmada com sucesso via PIN.',
+      message: `Corrida #${route.id}: Entrega confirmada com sucesso via PIN.`,
     };
   }
 
@@ -1338,6 +1617,8 @@ export class RouteService {
     stop?: RouteStop;
     routeCompleted?: boolean;
     remainingCount?: number;
+    hasIncident?: boolean;
+    hasUnresolvedIncident?: boolean;
     nextStop?: RouteStop | null;
     message: string;
   }> {
@@ -1364,7 +1645,7 @@ export class RouteService {
         stop,
         routeCompleted: (route.status as string) === 'COMPLETED',
         remainingCount,
-        message: 'Esta entrega já foi confirmada anteriormente.',
+        message: `Corrida #${route.id}: Esta entrega já foi confirmada anteriormente.`,
       };
     }
 
@@ -1419,8 +1700,10 @@ export class RouteService {
       stop: updatedStop,
       routeCompleted: completion.routeCompleted,
       remainingCount: completion.remainingCount,
+      hasIncident: completion.hasIncident,
+      hasUnresolvedIncident: completion.hasUnresolvedIncident,
       nextStop,
-      message: 'Entrega sem contato confirmada com sucesso via foto.',
+      message: `Corrida #${route.id}: Entrega confirmada com sucesso via foto.`,
     };
   }
 
@@ -1437,6 +1720,8 @@ export class RouteService {
     stop?: RouteStop;
     routeCompleted?: boolean;
     remainingCount?: number;
+    hasIncident?: boolean;
+    hasUnresolvedIncident?: boolean;
     nextStop?: RouteStop | null;
     message: string;
   }> {
@@ -1507,6 +1792,8 @@ export class RouteService {
       stop: updatedStop,
       routeCompleted: completion.routeCompleted,
       remainingCount: completion.remainingCount,
+      hasIncident: true,
+      hasUnresolvedIncident: true,
       nextStop,
       message: 'Incidente registrado com sucesso.',
     };
@@ -1528,6 +1815,8 @@ export class RouteService {
       resolution_type: IncidentResolutionType;
       resolution_note?: string;
       resolved_by: string;
+      compensation_amount?: number;
+      adjust_route_fee?: boolean;
     }
   ): Promise<RouteStop> {
     const validResolutionTypes: IncidentResolutionType[] = [
@@ -1536,6 +1825,7 @@ export class RouteService {
       'DELIVERED_TO_ALTERNATIVE_LOCATION',
       'CUSTOMER_PICKUP',
       'DISCARDED',
+      'CANCELLATION',
       'OTHER',
     ];
 
@@ -1559,16 +1849,42 @@ export class RouteService {
         resolution_note: data.resolution_note?.trim() || null,
         resolved_at: now,
         resolved_by: data.resolved_by,
+        compensation_amount: data.compensation_amount !== undefined ? data.compensation_amount.toFixed(2) : null,
       })
       .where(eq(routeStops.id, stopId));
+
+    if (data.compensation_amount !== undefined && data.adjust_route_fee !== false) {
+      if (data.compensation_amount > 0) {
+        await db
+          .update(routes)
+          .set({
+            total_fee: data.compensation_amount.toFixed(2),
+            final_driver_fee: data.compensation_amount.toFixed(2),
+            payment_status: 'PENDING',
+          })
+          .where(eq(routes.id, stop.route_id));
+      } else {
+        await db
+          .update(routes)
+          .set({
+            total_fee: '0.00',
+            final_driver_fee: '0.00',
+            payment_status: 'PAID',
+            paid_at: now,
+            paid_by: data.resolved_by,
+            payment_note: 'Isento de repasse - Resolução de pendência sem custo financeiro',
+          })
+          .where(eq(routes.id, stop.route_id));
+      }
+    }
 
     await db.insert(routeEvents).values({
       route_id: stop.route_id,
       event_type: 'STOP_INCIDENT_RESOLVED',
       actor: data.resolved_by,
       details: `Stop #${stop.sequence} incident resolved as ${data.resolution_type}${
-        data.resolution_note ? ' - ' + data.resolution_note : ''
-      }`,
+        data.compensation_amount !== undefined ? ` (Repasse acordado: R$ ${data.compensation_amount.toFixed(2)})` : ''
+      }${data.resolution_note ? ' - ' + data.resolution_note : ''}`,
     });
 
     const updated = await this.getStopById(stopId);
@@ -1624,15 +1940,24 @@ export class RouteService {
       }
     }
 
-    let items = incidentStops.map((s) => {
-      const route = routeMap.get(s.route_id)!;
-      const driver = route?.accepted_driver_id ? driverMap.get(route.accepted_driver_id) || null : null;
-      return {
-        stop: s as RouteStop,
-        route,
-        driver,
-      };
-    });
+    let items = incidentStops
+      .map((s) => {
+        const route = routeMap.get(s.route_id)!;
+        const driver = route?.accepted_driver_id ? driverMap.get(route.accepted_driver_id) || null : null;
+        return {
+          stop: s as RouteStop,
+          route,
+          driver,
+        };
+      })
+      .filter((item) => {
+        // Regra explícita: Corridas canceladas antes de serem aceitas por qualquer motorista
+        // não devem ir pra resolução (se ninguém pegou a corrida, não há pendência operacional/problema)
+        if (item.route?.status === 'CANCELLED' && !item.route?.accepted_driver_id) {
+          return false;
+        }
+        return true;
+      });
 
     if (filters?.resolution_status && filters.resolution_status !== 'ALL') {
       items = items.filter((item) => (item.stop.incident_resolution_status || 'OPEN') === filters.resolution_status);
@@ -1675,9 +2000,9 @@ export class RouteService {
     const route = await this.getRouteById(routeId);
     if (!route) throw new Error('ROUTE_NOT_FOUND');
 
-    if (route.status !== 'COMPLETED') {
+    if (route.status !== 'COMPLETED' && route.status !== 'CANCELLED') {
       throw new Error(
-        `CANNOT_PAY_NON_COMPLETED_ROUTE: Apenas rotas com status COMPLETED podem ser pagas (status atual: ${route.status})`
+        `CANNOT_PAY_NON_TERMINAL_ROUTE: Apenas rotas concluídas ou canceladas podem receber repasse/acerto financeiro (status atual: ${route.status})`
       );
     }
 
@@ -1715,9 +2040,17 @@ export class RouteService {
           .from(drivers)
           .where(eq(drivers.id, route.accepted_driver_id));
         if (driver && driver.telegram_chat_id) {
+          const totalNum = parseFloat(String(route.total_fee || '0').replace(',', '.')) || 0;
+          const storeRate =
+            route.management_rate_snapshot != null && !isNaN(parseFloat(String(route.management_rate_snapshot)))
+              ? parseFloat(String(route.management_rate_snapshot))
+              : 0.10;
+          const driverFeeNum = Math.round(totalNum * (1 - storeRate) * 100) / 100;
+          const driverFeeStr = driverFeeNum.toFixed(2).replace('.', ',');
+
           const msg =
             `💰 *Repasse Realizado com Sucesso!*\n\n` +
-            `O pagamento referente à *Rota #${route.id}* no valor de *R$ ${route.total_fee}* foi registrado via Pix.\n\n` +
+            `O pagamento referente à *Rota #${route.id}* no valor de *R$ ${driverFeeStr}* foi registrado via Pix.\n\n` +
             (data.payment_reference ? `*Comprovante/Ref:* \`${data.payment_reference}\`\n` : '') +
             (data.payment_note ? `*Observação:* ${data.payment_note}\n` : '') +
             `\nAgradecemos pela sua dedicação nas entregas! 🚀`;
@@ -1759,15 +2092,20 @@ export class RouteService {
       driver: Driver | null;
     }[];
   }> {
-    // Buscar rotas concluídas
-    const completedRows = await db
+    // Buscar rotas concluídas e rotas canceladas que tiveram motorista alocado (podendo haver repasse ou compensação financeira)
+    const payableRows = await db
       .select()
       .from(routes)
-      .where(eq(routes.status, 'COMPLETED'))
+      .where(
+        or(
+          eq(routes.status, 'COMPLETED'),
+          and(eq(routes.status, 'CANCELLED'), isNotNull(routes.accepted_driver_id))
+        )
+      )
       .orderBy(desc(routes.completed_at), desc(routes.id));
 
     // Carregar paradas para calcular totais ou exibir informações completas
-    const allRoutes = completedRows.map((r) => this.parseRouteRow(r));
+    const allRoutes = payableRows.map((r) => this.parseRouteRow(r));
 
     // Carregar motoristas
     const driverIds = Array.from(
@@ -1815,7 +2153,13 @@ export class RouteService {
     >();
 
     for (const r of allRoutes) {
-      const feeNum = parseCurrency(r.total_fee);
+      const totalNum = parseCurrency(r.total_fee);
+      const rate =
+        r.management_rate_snapshot != null && !isNaN(parseFloat(String(r.management_rate_snapshot)))
+          ? parseFloat(String(r.management_rate_snapshot))
+          : 0.10;
+      // Para rotas canceladas, a indenização/taxa acordada é repassada integralmente ao motorista
+      const feeNum = r.status === 'CANCELLED' ? totalNum : Math.round(totalNum * (1 - rate) * 100) / 100;
       const isPaid = r.payment_status === 'PAID';
 
       if (isPaid) {
