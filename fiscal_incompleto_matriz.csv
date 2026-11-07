@@ -1,39 +1,21 @@
-﻿Categoria;ID;Produto;Preço;Ativo;NCM;CFOP;Campos faltando
-CAFETERIA & BEBIDAS QUENTES;2810366;Chá de Hortelã;10.00;Não;21011200;5405;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804776;Cappucino Tradicional 100g;28.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3171634;Croissant Tradicional Congelado;9.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2724843;Caixa com 2 Bombons;15.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2288259;Caixa com 4 bombons;26.00;Não;;5101;NCM
-EMBALAGENS;2168166;Sacola Rosa para Presente;5.00;Não;48192000;5102;CSOSN
-EMBALAGENS;1963448;Caixa com Alça de Couro G;49.00;Não;48192000;5102;CSOSN, CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-EMBALAGENS;863713;Vela de Aniversário;10.00;Não;48192000;5102;CSOSN, IBS/CBS sit., IBS/CBS class.
-EMBALAGENS;1963444;Caixa com Alça de Couro M;45.00;Não;48192000;5102;CSOSN, CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-EMBALAGENS;1963451;Caixa para Presentear P;8.00;Não;48192000;5102;CSOSN, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-EMBALAGENS;796881;Caixa Retangular para 21 Doces Finos;39.00;Não;48192000;5102;CSOSN, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;3161969;Tiramissu no Pote;26.00;Não;19059090;5102;Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2004522;Calda de Frutas Vermelhas;126.67;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2004559;Calda de Chocolate;160.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2004510;Sorvete Sabores;90.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;2533649;Vale-presente para consumo de alimentos e bebidas.;55.00;Sim;49090000;5102;CSOSN
-BEBIDAS ALCOÓLICAS;1887364;Rossini de Morango;30.00;Não;;5101;NCM, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686075;Mojito;35.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686188;Vinho Rose Malbec GIARETTA;89.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686162;Espumante Rose KANTINE;89.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686137;Frizante Rose GIARETTA;28.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2242895;Vinho em Lata Rosé Seco Fino Giaretta;29.00;Não;;5405;NCM
-BEBIDAS ALCOÓLICAS;2242661;Espumante Moscatel;29.00;Não;;5405;NCM
-BEBIDAS ALCOÓLICAS;1963978;Heineken;12.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686154;Vinho Branco Seco GIARETTA;89.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;1061723;Vinho Espumante BRUT Branco;29.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686181;Espumante Demi-Sec KANTINE;89.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2719300;Stella Artois;12.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2821606;Espumente Brut Branco GIARETTA;89.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;1633185;Mimosa Cítrica;30.00;Não;;5101;NCM, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2242669;Vinho em Lata Sparkling Branco;29.00;Não;;5405;NCM
-BEBIDAS ALCOÓLICAS;2242666;Vinho em Lata Sparkling Rose;29.00;Não;;5405;NCM
-BEBIDAS ALCOÓLICAS;1633189;Aperol Spritz;38.00;Não;;5101;NCM, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2242898;Vinho em Lata Tinto Seco Fino Cabernet/Merlot Giaretta;29.00;Sim;;5405;NCM
-BEBIDAS ALCOÓLICAS;1633180;Clericot;38.00;Não;;5102;NCM, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2686127;Taça Carmenere & Sauvignon - Santa Vita Cópia;28.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1171834;Chocotone recheado (outros recheios);118.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-Devolução;1983162;Caixa - Panetone Maleta 500G - 142x142x165;2.46;Não;48191000;5104;CSOSN, Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
+﻿Categoria;ID;Produto;Ativo;NCM;CFOP;Campos faltando
+BEBIDAS ALCOÓLICAS;1633189;Aperol Spritz;Não;;5101;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
+BEBIDAS ALCOÓLICAS;1633180;Clericot;Não;;5102;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
+BEBIDAS ALCOÓLICAS;1633185;Mimosa Cítrica;Não;;5101;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
+BEBIDAS ALCOÓLICAS;2686075;Mojito;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
+BEBIDAS ALCOÓLICAS;1887364;Rossini de Morango;Não;;5101;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
+BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804776;Cappucino Tradicional 100g;Sim;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
+CAFETERIA & BEBIDAS QUENTES;2810366;Chá de Hortelã;Não;21011200;5405;cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo
+Devolução;1983162;Caixa - Panetone Maleta 500G - 142x142x165;Não;48191000;5104;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_modalidade_base_calculo
+EMBALAGENS;796881;Caixa Retangular para 21 Doces Finos;Não;48192000;5102;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria
+EMBALAGENS;1963448;Caixa com Alça de Couro G;Não;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
+EMBALAGENS;1963444;Caixa com Alça de Couro M;Não;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
+EMBALAGENS;1963451;Caixa para Presentear P;Não;48192000;5102;cofins_aliquota, csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
+EMBALAGENS;2168166;Sacola Rosa para Presente;Não;48192000;5102;csosn
+EMBALAGENS;863713;Vela de Aniversário;Não;48192000;5102;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria
+PRODUTOS FORA DO CARDÁPIO;1171834;Chocotone recheado (outros recheios);Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
+PÂTISSERIE FRANCESA & SOBREMESAS;3161969;Tiramissu no Pote;Não;19059090;5102;cofins_aliquota, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
+REVENDA;2004559;Calda de Chocolate;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
+REVENDA;2004522;Calda de Frutas Vermelhas;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
+REVENDA;2004510;Sorvete Sabores;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
+USO EXCLUSIVO;2533649;Vale-presente para consumo de alimentos e bebidas.;Sim;49090000;5102;csosn
