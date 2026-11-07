@@ -1,9 +1,4 @@
 ﻿Categoria;ID;Produto;Ativo;NCM;CFOP;Campos faltando
-BEBIDAS ALCOÓLICAS;1633189;Aperol Spritz;Não;;5101;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
-BEBIDAS ALCOÓLICAS;1633180;Clericot;Não;;5102;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
-BEBIDAS ALCOÓLICAS;1633185;Mimosa Cítrica;Não;;5101;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
-BEBIDAS ALCOÓLICAS;2686075;Mojito;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
-BEBIDAS ALCOÓLICAS;1887364;Rossini de Morango;Não;;5101;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, ncm
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804776;Cappucino Tradicional 100g;Sim;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
 CAFETERIA & BEBIDAS QUENTES;2810366;Chá de Hortelã;Não;21011200;5405;cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo
 Devolução;1983162;Caixa - Panetone Maleta 500G - 142x142x165;Não;48191000;5104;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_modalidade_base_calculo
