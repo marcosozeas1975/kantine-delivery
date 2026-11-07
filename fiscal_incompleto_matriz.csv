@@ -1,7 +1,5 @@
 ﻿Categoria;ID;Produto;Ativo;NCM;CFOP;Campos faltando
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804776;Cappucino Tradicional 100g;Sim;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
 Devolução;1983162;Caixa - Panetone Maleta 500G - 142x142x165;Não;48191000;5104;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_modalidade_base_calculo
-PRODUTOS FORA DO CARDÁPIO;1171834;Chocotone recheado (outros recheios);Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
 REVENDA;2004559;Calda de Chocolate;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
 REVENDA;2004522;Calda de Frutas Vermelhas;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
 REVENDA;2004510;Sorvete Sabores;Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
