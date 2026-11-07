@@ -1,162 +1,31 @@
 ﻿Categoria;ID;Produto;Preço;Ativo;NCM;CFOP;Campos faltando
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804774;Cappucino Zero 70g;32.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2562400;Duo Kantine;28.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2858790;Geleia de Frutas Vermelhas 150g;24.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2858793;Geleia de Frutas Amarelas 150g;24.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2858797;Geleia de Cebola Roxa 150g;24.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);1822176;Café Especial Caminho Verde;45.00;Sim;19019090;5405;Alíq. PIS, Alíq. COFINS
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);1210314;Chocotone de recheado com Nutella;98.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804777;Cappucino Tradicional 100g;28.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3142236;Sorvete de Frutas Vermelhas no Pote;26.00;Sim;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3171635;Croissant Tradicional Congelado;9.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3238079;Torta Três Chocolates 1kg;180.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3210018;Croissant Tradicional Congelado;10.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3142190;Crème caramel LEVE PARA CASA;28.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2900844;Vela Decorativa Croissant Kantine;45.00;Sim;21069090;5405;Alíq. PIS, Alíq. COFINS
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804802;Chocolate Quente 70g;32.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);1352730;Coador Mono;70.00;Não;21011200;5405;Alíq. PIS, Alíq. COFINS
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3142232;Sorvete de Doce de Leite no Pote;23.00;Sim;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3142239;Sorvete de Leite Condensado no Pote;23.00;Sim;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3243725;Sorvete Léo Ávila;22.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);3112131;Shokupan;15.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);1928592;Café Especial Kantine - Chocolate Caramelo;45.00;Sim;19019090;5405;Alíq. PIS, Alíq. COFINS
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2517376;Café Especial Brigadeiro COFCOF;30.00;Não;19019090;5405;Alíq. PIS, Alíq. COFINS
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2517399;Café Especial Caramelo COFCOF;30.00;Não;19019090;5405;Alíq. PIS, Alíq. COFINS
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2517380;Café Especial Chocolate ao Leite COFCOF;30.00;Não;19019090;5405;Alíq. PIS, Alíq. COFINS
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2496142;Chocotone;58.00;Não;19011090;5102;IBS/CBS sit., IBS/CBS class.
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2272304;Sacola para presentear kantine;5.00;Sim;21069090;5405;Alíq. PIS, Alíq. COFINS
-BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2352016;Café Especial Kantine - Fermentado Calda Abacaxi;45.00;Não;19019090;5405;Alíq. PIS, Alíq. COFINS
-Dia dos Professores;3183461;Macaron Individual;12.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-Dia dos Professores;3183450;Le Petit;48.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-Dia dos Professores;3183457;Cartão com Sablé;18.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-Dia dos Professores;3183464;Mini Pão de Mel;12.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-Dia dos Professores;3191961;Voucher;75.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2533745;Cesta Experiência Kantine: Brunch Kantine;198.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2533737;Cesta Bonjour;108.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;883137;Caixa Para Presentear - Clássica;98.00;Não;21069090;5101;IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2533809;Mini Bolo Coração;68.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;3021425;Meias Kantine;68.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2533671;Café a La Française;168.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2957903;Caixa Kantine com Bombons Sortidos;45.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2533740;cesta Le Petit;58.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;3021428;Pelúcias;68.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PARA PRESENTEAR;1920089;Escrever Recado;0.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;1939498;Caixa Para Presentear - Professor;39.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;2533725;Pote de Sablé e Café Especial;72.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PARA PRESENTEAR;883138;Caixa para Presentear - Experiência;126.00;Sim;21069090;5101;IBS/CBS sit., IBS/CBS class.
 PÂTISSERIE FRANCESA & SOBREMESAS;3161970;Tiramissu no Pote;26.00;Sim;19059090;5102;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;1415181;Bolo de trufa de chocolate meio amargo (fatia fina);22.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;3171493;Bolo de Pote Leo Ávila (Abacaxi Com Chocolate Branco) Cópia;20.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;1111854;Fatia Chocolatudo;24.00;Não;19059090;5101;Modalidade BC ICMS
-PÂTISSERIE FRANCESA & SOBREMESAS;2819253;Bolo de Caramelo Salgado;24.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;2645771;Torta Rogel (Argentina);23.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS
-PÂTISSERIE FRANCESA & SOBREMESAS;3195298;Tartelete de Mirtilo;28.00;Não;19059090;5101;Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;2064168;Bolo de Pote de Ninho;25.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;3256588;Sorvete Vancherin;27.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;883275;Entremet Chocolatudo (Bolo);27.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-PÂTISSERIE FRANCESA & SOBREMESAS;2251045;Rabanada de Kantitone;22.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-LEVE, FUNCIONAL E PROTEICO;2613094;Muffin de Macadâmia;12.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-LEVE, FUNCIONAL E PROTEICO;1374012;Muffin de Banana Zero;12.00;Não;19059090;5405;Alíq. PIS, Alíq. COFINS
 USO EXCLUSIVO;2533650;Vale-presente para consumo de alimentos e bebidas.;55.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;2873915;Adicional de chocolate;10.00;Não;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1757946;Cobertura para Bolos;30.00;Não;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;2127012;Cobertura Chocotone;10.00;Sim;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609127;Adicional Croissant Pastrami;10.00;Não;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;2036037;Personalização Macaron;0.50;Não;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609143;Adicional Croissant Presunto e Queijo;10.00;Sim;18062000;5101;IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;2297630;Baguete Tradicional;13.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609130;Adicional Croissant de Frango;10.00;Sim;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609147;Adicional Croissant Queijo Quente;5.00;Sim;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609137;Adicional Croissant Kantine;10.00;Não;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609153;Adicional Croissant Brie com Pesto;5.00;Sim;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609140;Adicional Croissant Arriel;10.00;Não;18062000;5101;IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609133;Adicional Croissant de Nutella com Morango;10.00;Não;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1682128;Consumação produto de outro estabelecimento;5.00;Sim;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1609150;Adicional Croissant Brie com Mel;10.00;Sim;18062000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-USO EXCLUSIVO;1070758;Cartão Presente 50;50.00;Sim;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686182;Espumante Demi-Sec KANTINE;89.00;Sim;22041090;5405;Alíq. PIS, Alíq. COFINS
 BEBIDAS ALCOÓLICAS;2686076;Mojito;35.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686189;Vinho Rose Malbec GIARETTA;89.00;Não;22041090;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS ALCOÓLICAS;2686138;Frizante Rose GIARETTA;89.00;Sim;22041090;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS ALCOÓLICAS;2686155;Vinho Branco Seco GIARETTA;89.00;Sim;22041090;5405;Alíq. PIS, Alíq. COFINS
 BEBIDAS ALCOÓLICAS;2686128;Taça Carmenere & Sauvignon - Santa Vita Cópia;28.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2686163;Espumante Rose KANTINE;89.00;Sim;22041090;5405;Alíq. PIS, Alíq. COFINS
 BEBIDAS ALCOÓLICAS;2242670;Vinho em Lata Sparkling Branco;29.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 BEBIDAS ALCOÓLICAS;2821607;Espumente Brut Branco GIARETTA;89.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;1963979;Heineken;15.00;Não;22030000;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS ALCOÓLICAS;2719301;Stella Artois;15.00;Não;22030000;5405;Alíq. PIS, Alíq. COFINS
 BEBIDAS ALCOÓLICAS;2242896;Vinho em Lata Rosé Seco Fino Giaretta;29.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS ALCOÓLICAS;2242662;Espumante Moscatel;29.00;Não;22041090;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS ALCOÓLICAS;2242667;Vinho em Lata Sparkling Rose;29.00;Não;22041090;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS ALCOÓLICAS;2242899;Vinho em Lata Tinto Seco Fino Cabernet/Merlot Giaretta;29.00;Sim;22041090;5405;Alíq. PIS, Alíq. COFINS
 BEBIDAS ALCOÓLICAS;1061724;Vinho e espumante;89.00;Não;19019090;5405;Alíq. PIS, Alíq. COFINS, IBS/CBS sit., IBS/CBS class.
-LE PETITS (Miniaturas);1095928;Mini Palmier;10.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;1335768;Macaron de Limão;8.00;Não;19019090;5101;Modalidade BC ICMS
-CHOCOLATES E MACARONS;3227709;Bombom de Chocolate Meio Amargo Zero;6.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;3214148;Nuts de Castanha e Cranberry;6.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;2827175;Macaron de Laranja;8.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;2706071;Macaron de Chocomenta;8.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;3283735;Bombom Meio Amargo com Nutella e Castanha de Caju;12.00;Sim;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;3142319;Mini Pão de Mel;9.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;2706074;Macaron de Maracujá;8.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;1103403;Bombom de Morango;20.00;Não;18069000;5101;Modalidade BC ICMS
-CHOCOLATES E MACARONS;2821676;Bombom de Kinder Bueno;6.00;Não;19019090;5101;Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CHOCOLATES E MACARONS;1337430;Bombom de Chocolate Amargo com Caramelo Salgado e Amendoim;15.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-DESTAQUES DA CHEF (Os Imperdíveis e Lançamentos);3140063;Crème Caramel;25.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-DESTAQUES DA CHEF (Os Imperdíveis e Lançamentos);2978401;Felicidade zero açúcar (chocolate meio amargo);42.00;Sim;19019090;5101;Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 DESTAQUES DA CHEF (Os Imperdíveis e Lançamentos);3138754;Formule du Midi;49.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;2759274;Refrigerantes;0.00;Sim;22021000;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS REFRESCANTES & SHAKES;2530109;Matcha Latte de Maracujá;29.00;Sim;21011200;5101;Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;2243334;Suco de Uva Integral Gaseificado;16.00;Não;22021000;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS REFRESCANTES & SHAKES;883089;Iced Latte de Leite Condensado;24.00;Sim;19019090;5101;IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;1816623;Guaraná Mineiro 200ML;6.00;Não;22021000;5405;IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;1808095;Guaraná Mineiro Zero (350ml);8.00;Não;22021000;5405;IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;1808102;Guaraná Mineiro (350ml);8.00;Não;22021000;5405;IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;883092;Água Mineral Com Gás;5.50;Sim;22021000;5405;Alíq. PIS, Alíq. COFINS
 BEBIDAS REFRESCANTES & SHAKES;883094;Coca-Cola (310ml);8.00;Não;22021000;5405;Alíq. PIS, Alíq. COFINS, IBS/CBS sit., IBS/CBS class.
-BEBIDAS REFRESCANTES & SHAKES;1895250;Água Tônica sem Açúcar;7.50;Não;22021000;5405;Alíq. PIS, Alíq. COFINS
-BEBIDAS REFRESCANTES & SHAKES;1895259;Água Tônica;7.50;Não;22021000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;2782268;Adicional de limão;3.00;Sim;04051000;5101;Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-ADICIONAIS;2709126;Carne Seca;12.00;Não;04051000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-ADICIONAIS;2368597;Grão Descafeinado;3.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;2769711;Requeijão Cremoso;5.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883129;Leite Integral;5.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883119;Azeite;5.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883117;Nutella;8.00;Sim;18069000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883120;Manteiga;4.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883125;Morango;7.00;Sim;21069090;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883122;Tomate Cereja;5.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883128;Pesto;5.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;2527027;Kiwi;6.00;Sim;21069090;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;2527019;Adicional de Sorvete;4.00;Sim;21069090;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883126;Bacon;8.00;Sim;04051000;5405;Alíq. PIS, Alíq. COFINS
-ADICIONAIS;883121;Mel;5.00;Sim;21069090;5405;Alíq. PIS, Alíq. COFINS
-NATAL;2306923;Kantitone Italiano com Frutas;98.00;Não;19011090;5102;IBS/CBS sit., IBS/CBS class.
-NATAL;1555092;Cesta Brunch;158.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;2120708;Kantitone Italiano de Laranja com Gotas de Chocolate;129.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;2109505;Kantitone Italiano com Gotas de Chocolate;98.00;Não;19011090;5102;IBS/CBS sit., IBS/CBS class.
 NATAL;2133371;Mini Kantitone Nhá Benta de Ninho;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;2050143;Kantitone Nhá Benta de Ninho com Chocolate;129.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;2050010;Kantitone Nhá Benta de Ninho;129.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;2037414;Kantitone Nutella Crunch;129.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;883183;Kantitone Dois Amores;129.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-NATAL;883188;Kantitone com Creme de Pistache com Chocolate;129.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
 NATAL;1176721;Kantitone com Caramelo Salgado;129.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;1192196;Panetone de frutas italianas;98.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;883190;Kantitone Creme de Pistache;129.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-NATAL;2134949;Kantitone 3 Chocolates Tradicional;58.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;2138485;Leve 6 pague 5 Mini Kantitone Tradicional;19.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;2053391;Mini Kantitone com Caramelo Salgado;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;2098160;Kantitone de Laranja com Gotas de Chocolate;129.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;2111333;Mini Kantitone Dois Amores;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;2049900;Mini Kantitone Nutella Crunch;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;1171645;Mini Kantitone Tradicional;19.00;Não;;5101;NCM
-NATAL;1183717;Kantitone de Cupuaçu;80.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;2053381;Mini Kantitone Nhá Benta de Ninho com Chocolate;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;1171732;Mini Kantitone de Creme de Pistache com Chocolate;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 NATAL;1171718;Mini Kantitone Dois Amores;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-NATAL;883171;Kantitone com Ganache;129.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-NATAL;1222268;Kantitone de Frutas Tradicional;48.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
 NATAL;1319590;Caixa com Bombons Sortidos;45.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 EMBALAGENS;1963445;Caixa com Alça de Couro M;45.00;Sim;48192000;5102;CSOSN, CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 EMBALAGENS;2168167;Sacola Rosa para Presente;5.00;Sim;48192000;5102;CSOSN, CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
@@ -166,218 +35,25 @@ EMBALAGENS;2497740;Coffe Break;1200.00;Não;48192000;5102;CSOSN, CST, Alíq. PIS
 EMBALAGENS;883289;Caixa Retangular para 21 Doces Finos;39.00;Não;48192000;5102;CSOSN, IBS/CBS sit., IBS/CBS class.
 EMBALAGENS;1963452;Caixa para Presentear P;8.00;Não;48192000;5102;CSOSN, CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 EMBALAGENS;1318782;Caixa para Presentear G;12.00;Não;48192000;5102;CSOSN, CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;883170;Revenda Mini Croissant Tradicional;5.00;Sim;19059090;5405;IBS/CBS sit., IBS/CBS class.
 REVENDA;1462572;Revenda Croissant Tradicional Médio;6.00;Sim;19059090;5405;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;929990;Lata de chá (Festa das flores);130.00;Sim;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1304401;Mini Citron;14.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2066857;Mini Cookie;14.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2066854;Mini Avelã;14.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2634983;Choux sem recheio;12.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 REVENDA;1526716;Quiche de Frango Cremoso - 20cm;78.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 REVENDA;2004511;Sorvete Sabores;90.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 REVENDA;2004560;Calda de Chocolate;160.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2125381;Creme de Pistache;28.00;Sim;19019020;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2011393;Bagel;12.00;Sim;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1987067;Mini Queijo Quente;11.00;Sim;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2066851;Mini Quiche de Carne Seca;3.80;Sim;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778940;Mini Quiche de Alho Poró;3.80;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778943;Mini Quiche de Queijo;3.80;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778911;Macaron de Caramelo Salgado;6.00;Sim;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1988627;Mini Bagel;10.00;Sim;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778905;Mini Choux de Pistache;8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2066847;Mini Croissant Presunto e Queijo;8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778908;Mini Choux de Morango;8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 REVENDA;2004523;Calda de Frutas Vermelhas;126.67;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;883168;Revenda Croissant Tradicional;8.00;Sim;19059090;5405;IBS/CBS sit., IBS/CBS class.
 REVENDA;1946741;Mini Palmier KG;90.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2323910;Entremet em Valor de Atacado;19.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1889388;Quiche Revenda;4.50;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;883167;Mini Choux Recheada;9.00;Sim;19011090;5101;IBS/CBS sit., IBS/CBS class.
-REVENDA;1889385;Creme de Pistache 1kg;4.50;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1285451;Mini Choux Pistache;15.00;Sim;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778937;Mini Quiche de Frango Cremoso;3.80;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778920;Mini Brioche Redondinho ou Baguete de Fermentação Longa;6.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778917;Mini Bacon Roll;8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778914;Brigadeiro Belga;4.50;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;2522919;Sorvete FV 2 Litros;27.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;883169;Macaron com Recheio;5.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-REVENDA;1889382;Choux Revenda;8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-REVENDA;1778931;Mini Arriel (Parma);8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 REVENDA;1290306;Quiche de tomate com queijo - 20 cm;78.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CLASSICOS FRANCESES E BRUNCH;2250639;Omelete 3 Fromages (brie, requeijão e muçarela);29.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CLASSICOS FRANCESES E BRUNCH;1887295;LOX Bagel (Salmão);38.00;Não;18069000;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
 CAFETERIA & BEBIDAS QUENTES;2810367;Chá Kantine;29.00;Sim;21011200;5405;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-CAFETERIA & BEBIDAS QUENTES;1453139;Espresso Descafeinado;13.00;Não;21011200;5101;IBS/CBS sit., IBS/CBS class.
-CAFETERIA & BEBIDAS QUENTES;1585039;Drip Coffee;15.00;Não;21011200;5405;Alíq. PIS, Alíq. COFINS
-LES FORMULES (COMBOS INTELIGENTES);2297500;Brunch Duo (para 2 pessoas) Cópia;89.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1304688;Mousse Tradicional de Chocolate Amargo Belga (54,5% Cacau Callebaut) no Aquário;238.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;2533802;Nhá Benta de Ninho com Cookie;220.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883210;Bolo Vegano (Mini);130.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
 BOLOS E SOBREMESAS;2416042;Sobremesas diversas - GRANJA DAY 2026;1750.00;Sim;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883254;Bolo Marta Rocha Naked (Mini);125.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1663383;Bolo Champanhe Belga com Frutas Vermelhas;340.00;Sim;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883215;Bolo Marta Rocha Naked (M);230.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883255;Bolo Marta Rocha Naked (G);290.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883257;Bolo Marta Rocha Naked (GG);350.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883219;Bolo Marta Rocha Tradicional (Mini);140.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883235;Bolo Marta Rocha Tradicional (P);190.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883218;Bolo Marta Rocha Tradicional (M);250.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883217;Bolo Marta Rocha Tradicional (G);320.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883253;Bolo Marta Rocha Tradicional (GG);390.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883220;Bolo Pistache Com Frutas Vermelhas (Mini);140.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883221;Bolo Pistache Com Frutas Vermelhas (P);190.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883223;Bolo Pistache Com Frutas Vermelhas (M);250.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883243;Bolo Pistache Com Frutas Vermelhas (G);320.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883252;Bolo Pistache Com Frutas Vermelhas (GG);390.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883225;Bolo Três Amores (Mini);140.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883222;Bolo Três Amores (M);250.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883244;Bolo Três Amores (G);320.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883205;Bolo Choconinho (Mini);125.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883206;Bolo Ninho com Morango P;170.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883241;Bolo Choconinho (M);230.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883207;Bolo Choconinho (G);290.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883208;Bolo Choconinho (GG);350.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883209;Torta Três Chocolates Inteira;348.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883073;Merengue No Aquário;250.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;2924359;Aquário de Brownie Zero;250.00;Sim;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;3143961;Mousse Tradicional de Chocolate Amargo Zero No Aquario;298.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883224;Bolo Três Amores (GG);390.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883259;Bolo Três Amores (P);190.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;2533799;Tarta de Queso Basca;250.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;2533796;Pavlova de Frutas Vermelhas;220.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883216;Bolo Marta Rocha Naked (P);170.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883212;Bolo Chocolatudo (P);170.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883260;Bolo Pistache com Chocolate (M);250.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883258;Bolo Pistache com Chocolate (GG);390.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883250;Bolo Pistache com Chocolate (G);320.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883214;Bolo Leo Ávila (Mini);125.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883234;Bolo Leo Ávila (P);170.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883236;Bolo Leo Ávila (M);230.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883204;Bolo Leo Ávila (G);290.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883233;Bolo Leo Ávila (GG);350.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883230;Bolo Kantine com Frutas Vermelhas (G);290.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883203;Bolo Layers Caramelo Salgado (Mini);140.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883242;Bolo Layers Caramelo Salgado (G);320.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883228;Bolo Floresta Negra (M);230.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883246;Bolo Floresta Negra (G);290.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883247;Bolo Layers Caramelo Salgado (P);190.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883231;Bolo Layers Caramelo Salgado (M);250.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883229;Bolo Floresta Negra (GG);350.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883213;Bolo Kantine com Frutas Vermelhas (M);250.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883251;Bolo Kantine com Frutas Vermelhas (GG);350.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883248;Bolo Kantine com Frutas Vermelhas (P);170.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883249;Bolo Kantine com Frutas Vermelhas (Mini);125.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883238;Bolo Floresta Negra (P);170.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883202;Bolo Floresta Negra (Mini);125.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1210784;Bolo Prestígio M;240.00;Sim;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1654564;Bolo Champanhe com Frutas Vermelhas;340.00;Sim;19059090;5102;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1604184;Bolo Doce de Leite GG;340.00;Sim;19059090;5102;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883240;Bolo Pistache com Chocolate (P);190.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883227;Bolo Pistache com Chocolate (Mini);140.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1293950;Bolo Prestígio GG;340.00;Sim;19059090;5102;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883256;Bolo Layers Caramelo Salgado (GG);390.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1407517;Bolo Leite Ninho GG;340.00;Sim;19059090;5102;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1185525;Merengue de Pistache;248.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883232;Torta de Pistache Inteira;290.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883226;Bolo Doce de Leite Argentino (P);0.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1183820;Merengue Pistache;248.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1221837;Pavê Três Amores;250.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1183687;Pavlova;228.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1183851;Pavê Kantine;248.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;2343608;Bolo por quilo;95.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883237;Bolo Chocolatudo (G);290.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883211;Bolo Chocolatudo (M);230.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;1803518;Bolo Kantine;125.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883239;Bolo Chocolatudo (Mini);125.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;883245;Bolo Chocolatudo (GG);350.00;Sim;19059090;5101;IBS/CBS sit., IBS/CBS class.
-BOLOS E SOBREMESAS;2494237;Bolo Prestígio P;170.00;Não;19059090;5102;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1836141;Choux de Chocolate;20.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;900808;Kantine Experience (individual);56.00;Não;21069090;5101;IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1111926;Empanada Vegana;16.00;Não;16010000;5405;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1335728;Choux de Coco com Frutas Amarelas;20.00;Não;19011090;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2702918;Bolo de Tiramissu;190.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2396455;Croissant Tostado com Presunto e Requeijão;25.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883050;Mil Folhas;22.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2306597;Mini Panetone de Frutas Cópia;18.00;Não;19011090;5102;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1547805;Rouge;25.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883357;Choux de Cappuccino;20.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1888136;Suco de Laranja com Espresso;22.00;Não;20098913;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1111860;Bolo de Pote Chocolate Vegano;24.00;Não;19059090;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1453150;Espresso Duplo Descafeinado;18.00;Não;21011200;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2262993;Método Sifão;32.00;Não;21011200;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883017;Cappuccino Italiano Saborizado;19.00;Não;21011200;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883082;Mocha de Leite Condensado e Nutella;25.00;Sim;21011200;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883135;Quiche de Bacon com Alho Poró;24.00;Não;19052090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2362134;Ovinhos no Tecido;28.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2478409;Entremet Maçã Verde;27.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1682611;Pain Aux Raisins (Folheado de Uva Passa);16.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883262;Entremet Brigadeiro Intenso (Bolo);26.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1366967;Entremet Prestígio (Bolo);26.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1464442;Bolo Gelado de Coco e Abacaxi;18.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1806082;Bolo Gelado de Coco com Pêssego;16.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883065;Banana Pudding;23.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;967179;Pain au chocolat;15.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883200;Bolo de Pote Chocolatudo;20.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2507080;Fatia de Doce de Leite com Ameixa;24.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883182;Pão de Mel Licoroso;10.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2496173;Choux de Nutella;25.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1774465;Cheesecake Pistache com Frutas Vermelhas;26.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1743778;Entremet Chicletinho;25.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2078272;Torta Caramelizada de Doce de Leite;26.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883261;Fatia Caramelo Salgado com Chocolate Meio Amargo;20.00;Não;19059090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883081;Chá Festa das Flores;28.00;Não;21011200;5405;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1134146;Chocolate Gelado;24.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2250665;Salada de Brie Quente;0.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2098399;Paes, croissants e choux;0.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2250636;Brioche com Ovo e Bacon;0.00;Não;21069090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1653152;Madeleine de Laranja com Chocolate;8.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1171735;Mini Chocotone de Trufa de Cereja;36.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1887293;Bagel com Alho Negro;32.00;Não;18069000;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883355;Choux Tradicional;20.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1183673;Maleta Kantine;59.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1887259;Croissant Beneditino com Farofa de Parma;36.00;Não;18069000;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2234588;Bombom de Morango GG;18.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;980015;Burrata com tomate assado e molho pesto;56.00;Não;;;NCM, CFOP, CSOSN, Origem, PIS, COFINS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1171698;Mini Chocotone Peanut Caramel;36.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1580827;Choux de Uva;20.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1331779;Croissant Arriel com Muçarela Tradicional;28.00;Não;21069090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1418286;Choux de Ninho;20.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1887269;Ovos Mexidos com Bacon, Brioche, Cogumelos e Tomate;29.00;Não;18069000;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1176367;Chocotone Martinha;118.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883075;Tiramissu;248.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1111863;Tartelete Vegana de Chocolate Duplo;20.00;Não;21069090;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1739941;Waffer de Paçoca;16.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1182460;Sablé de natal pote;29.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1417467;Choux Maracúja;20.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1551202;Entremet Champanhe com Frutas Vermelhas;26.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1292978;Crème Brûlée de Doce de Leite;24.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1996875;Espresso com Bombom de Sortido;12.00;Não;18069000;5101;IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1184606;Aquela lembrancinha;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1112005;Bombom Diet;6.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1316668;Cappuccino Italiano com Pistache;20.00;Não;21011200;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2093775;Snowman;26.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1553183;Felicitache;40.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2349454;Tiramissu;120.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2078253;Entremet Santa Hat;25.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883099;Flat White;14.00;Não;21011200;5101;IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1183681;Experiência Kantine;38.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1887305;Bagel BLT (Bacon);29.00;Não;18069000;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1197644;Choconuts;10.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1171835;Chocotone recheado (outros recheios);118.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;883072;Ovos Beneditinos com Parma;34.00;Não;;5101;NCM, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1061777;Crème brûlée;22.00;Não;19019090;5101;Modalidade BC ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1638502;Cafeteira Pressca Portátil;118.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1089211;Pão do dia;8.00;Não;19059090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1797834;Choux de Baunilha Tradicional;20.00;Não;19011090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1176374;Chocotone de Trufa de Cereja;118.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1464467;Taça de Sorvete de Maracujá;25.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883113;Croissant de Nutella;26.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1585066;Drip Coffee Chocolate e Caramelo;12.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;2487158;Cold Brew;22.00;Não;18069000;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1288291;Croissant Tostado com Presunto e Requeijão;26.00;Não;21069090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1954492;Croissant de Ninho com Nutella;27.00;Não;19011090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1343622;Macaron de Banoffee;7.00;Não;19019090;5101;IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883034;Croissant de Queijo Quente;24.00;Não;21069090;5101;IBS/CBS sit., IBS/CBS class.
 PRODUTOS FORA DO CARDÁPIO;1171722;Mini Chocotone Peanut Caramel;36.00;Não;;;NCM, CFOP, CSOSN, CST, Origem, PIS, COFINS, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;1546455;Waffer de Nutella com Chocolate Branco;18.00;Não;19019090;5101;CST, Alíq. PIS, Alíq. COFINS, Modalidade BC ICMS, Alíq. ICMS, IBS/CBS sit., IBS/CBS class.
-PRODUTOS FORA DO CARDÁPIO;883080;Latte;20.00;Sim;21011200;5101;IBS/CBS sit., IBS/CBS class.
