@@ -1,4 +1,3 @@
 ﻿Categoria;ID;Produto;Ativo;NCM;CFOP;Campos faltando
 EMBALAGENS;2497740;Coffe Break;Não;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
 PRODUTOS FORA DO CARDÁPIO;980015;Burrata com tomate assado e molho pesto;Não;;;cfop, cofins, csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_origem, ncm, pis
-REVENDA;2004511;Sorvete Sabores;Sim;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
