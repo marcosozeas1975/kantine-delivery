@@ -2,13 +2,7 @@
 BEBIDAS REFRESCANTES & SHAKES;883094;Coca-Cola (310ml);Não;22021000;5405;ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria
 BOULANGERIE & EMPÓRIO (LEVE PARA CASA);2804777;Cappucino Tradicional 100g;Sim;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
 CAFETERIA & BEBIDAS QUENTES;2810367;Chá Kantine;Sim;21011200;5405;cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo
-EMBALAGENS;883289;Caixa Retangular para 21 Doces Finos;Não;48192000;5102;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria
-EMBALAGENS;1963449;Caixa com Alça de Couro G;Sim;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
-EMBALAGENS;1963445;Caixa com Alça de Couro M;Sim;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
-EMBALAGENS;1318782;Caixa para Presentear G;Não;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
-EMBALAGENS;1963452;Caixa para Presentear P;Não;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
 EMBALAGENS;2497740;Coffe Break;Não;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
-EMBALAGENS;2168167;Sacola Rosa para Presente;Sim;48192000;5102;cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, pis_aliquota
 EMBALAGENS;883286;Vela de Aniversário;Sim;48192000;5102;csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria
 PRODUTOS FORA DO CARDÁPIO;980015;Burrata com tomate assado e molho pesto;Não;;;cfop, cofins, csosn, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_origem, ncm, pis
 PRODUTOS FORA DO CARDÁPIO;1171835;Chocotone recheado (outros recheios);Não;;;cfop, cofins, cofins_aliquota, csosn, cst, ibs_cbs_classificacao_tributaria, ibs_cbs_situacao_tributaria, icms_aliquota, icms_modalidade_base_calculo, icms_origem, ncm, pis, pis_aliquota
