@@ -77,7 +77,7 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 **Kantine Gastronomia (Matriz)**
 - Total sem Natal 2026, nº de comandas, ticket médio. Também mostre o total bruto da loja e quanto foi Natal 2026.
 - Pedido fora da curva (se houver) e o dia "normal" sem ele.
-- Canais, pagamentos, picos de horário, top 5 produtos por faturamento.
+- Canais, pagamentos, picos de horário, top 5 produtos por faturamento. Nos canais, mostre **delivery próprio e iFood em linhas separadas** (comandas, faturamento e ticket de cada um). Avise quantas comandas do delivery próprio foram retirada na loja (`with_withdrawal`) e o total de taxas de entrega, que não entra no faturamento. Encomenda fora da curva fica fora dessa conta.
 - Como os números foram calculados (exclusões e inclusões).
 
 **Kantine Vinhedos**
