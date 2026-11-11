@@ -99,7 +99,7 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 ## 6. Publicação (página com link fixo)
 
 1. Antes de escrever o HTML, carregue a skill `artifact-design` (e `dataviz` se houver gráfico, como faturamento por hora).
-2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
+2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. **Cores fixas por operação** (use em cartões, marcadores e gráficos): **azul** para Kantine Gastronomia (Matriz) `#2a5d9c` (tema escuro `#82aee6`), **vinho** para Kantine Vinhedos `#7b3046` (escuro `#e08ba2`), **verde** para Kantine Center Shopping `#2f7a4a` (escuro `#7cc79a`). Mantenha o layout da versão atual do link fixo. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
 3. **Link fixo**: https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8 (criado em 11/11/2026). Faça `action: "read"` nesse URL e publique com o mesmo `url`. Se ele não existir mais, use `Artifact` com `action: "list"` e procure um artifact com o título **"Reporte Kantine"**.
    - Se existir: `action: "read"` nele e depois publique com o mesmo `url`, para atualizar no mesmo link.
    - Se não existir: publique um novo (`icon: "chart"`). Esse passa a ser o link fixo.
