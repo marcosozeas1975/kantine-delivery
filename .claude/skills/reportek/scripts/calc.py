@@ -1,4 +1,5 @@
 """ReporteK: agrega as vendas do dia por operação.
+Funciona para um dia ou um periodo (todas as paginas do intervalo).
 Uso: python3 calc.py PRODUTOS_MATRIZ.json --m SESSOES_MATRIZ_p1.json [p2 ...] --v SESSOES_VINHEDOS_p1.json [...]
 Os arquivos são as respostas salvas das ferramentas get_products e get_table_sessions (Takeat)."""
 import json,re,sys,collections as C,datetime as dt
@@ -9,10 +10,11 @@ NAT={p['id'] for c in cats if c['name'].strip()=='NATAL 2026' for p in c.get('pr
 S={'M':[s for f in mf for s in json.load(open(f))['data']],'V':[s for f in vf for s in json.load(open(f))['data']]}
 print('produtos NATAL 2026:',len(NAT),'| comandas Matriz:',len(S['M']),'| Vinhedos:',len(S['V']))
 def isnat_name(n): s=n.strip(); return s.upper()==s and re.search(r'NATAL\s*$',s) is not None
+CS_INI=dt.date(2026,11,6); CS_FIM=dt.date(2027,1,5)  # periodo do quiosque Center Shopping
 def loc(t): return dt.datetime.fromisoformat(t.replace('Z','+00:00'))-dt.timedelta(hours=3)
 conf=[]
 def proc(sess,split):
-  ops=C.defaultdict(lambda:{'rev':0,'cmd':0,'items':C.Counter(),'rev_i':C.Counter(),'chan':C.Counter(),'pay':C.Counter(),'hour':C.Counter(),'ppl':0,'last':None,'big':[],'canc':[],'disc':[],'nitems':0,'sess':[]})
+  ops=C.defaultdict(lambda:{'rev':0,'cmd':0,'items':C.Counter(),'rev_i':C.Counter(),'chan':C.Counter(),'pay':C.Counter(),'hour':C.Counter(),'day':C.Counter(),'daycmd':C.Counter(),'ppl':0,'last':None,'big':[],'canc':[],'disc':[],'nitems':0,'sess':[]})
   excl=[];incl_open=[]
   for s in sess:
     if s['status'] in ('canceled','transfer') or s['delivery_canceled_at']:
@@ -39,11 +41,13 @@ def proc(sess,split):
       n=l[0] in NAT; nn=isnat_name(l[1])
       if split and (n!=nn): conf.append((l[1],'cat' if n else 'nome'))
       if not split and nn: conf.append((l[1],'Vinhedos'))
-      op=('CS' if (n or nn) else 'M') if split else 'V'
+      d=loc(s['start_time']).date()
+      inwin=CS_INI<=d<=CS_FIM
+      op=('CS' if (n or nn) and inwin else 'M') if split else 'V'
       by[op].append(l)
     for op,ls in by.items():
       O=ops[op]; r=sum(l[3] for l in ls)*f
-      O['rev']+=r;O['cmd']+=1;O['chan'][ch]+=r;O['hour'][loc(s['start_time']).hour]+=r
+      O['rev']+=r;O['cmd']+=1;O['chan'][ch]+=r;O['hour'][loc(s['start_time']).hour]+=r;dk=loc(s['start_time']).date().isoformat();O['day'][dk]+=r;O['daycmd'][dk]+=1
       O['sess'].append((s['session_number'],r,s))
       if op!='CS': O['ppl']+=float(s['people_at_table'] or 0)
       for l in ls: O['items'][l[1]]+=l[2];O['rev_i'][l[1]]+=l[3]*f;O['nitems']+=l[2]
@@ -62,6 +66,9 @@ for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
   print(" chan_cnt",C.Counter(x[2].get("table",{}).get("table_type") if x[2].get("table") else None for x in O["sess"]))
   print(' pay',{k:round(v,2) for k,v in O['pay'].most_common()})
   print(' hour',{k:round(v) for k,v in sorted(O['hour'].items())})
+  if len(O['day'])>1:
+    print(' dias',{k:(round(v,2),O['daycmd'][k]) for k,v in sorted(O['day'].items())})
+    print(' media/dia',round(O['rev']/len(O['day']),2),'| dias com venda',len(O['day']))
   print(' top',[(k,O['items'][k],round(v,2)) for k,v in O['rev_i'].most_common(40)])
   print(' disc',O['disc'])
   big=sorted(O['sess'],key=lambda x:-x[1])[:3]; print(' big',[(b[0],round(b[1],2),b[2]['bills'][0]['buyer'] and b[2]['bills'][0]['buyer']['name']) for b in big])

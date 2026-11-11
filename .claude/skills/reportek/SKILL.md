@@ -1,6 +1,6 @@
 ---
 name: reportek
-description: ReporteK — relatório diário de vendas das três operações Kantine (Kantine Gastronomia/Matriz, Kantine Vinhedos e Kantine Center Shopping, que é o quiosque temporário de Natal 2026). Use quando o usuário digitar /ReporteK ou /reportek, ou pedir "o reporte do dia", "relatório das três lojas", "como foram as vendas hoje" nas lojas Kantine. Aceita uma data opcional (ex.: /ReporteK 10/11); sem data, usa o dia de hoje.
+description: ReporteK — relatório diário de vendas das três operações Kantine (Kantine Gastronomia/Matriz, Kantine Vinhedos e Kantine Center Shopping, que é o quiosque temporário de Natal 2026). Use quando o usuário digitar /ReporteK ou /reportek, ou pedir "o reporte do dia", "relatório das três lojas", "como foram as vendas hoje" nas lojas Kantine. Aceita uma data opcional (ex.: /ReporteK 10/11; sem data, usa hoje) ou um período (ex.: /ReporteK semana, /ReporteK novembro, /ReporteK 01/11 a 10/11), que gera o relatório consolidado do período em outro link.
 ---
 
 # ReporteK — Relatório diário das operações Kantine
@@ -12,6 +12,11 @@ Fonte de dados: conector **Takeat Multilojas** (ferramentas `mcp__Takeat_Multilo
 ## 1. Parâmetros
 
 - **Data**: argumento opcional (`DD/MM`, `DD/MM/AAAA` ou `AAAA-MM-DD`). Sem argumento → hoje, no fuso `America/Sao_Paulo`.
+- **Período**: se o argumento for um intervalo, siga também a seção 8 (Modo período). Formas aceitas:
+  - `DD/MM a DD/MM` (ou `DD/MM/AAAA a DD/MM/AAAA`): do primeiro ao último dia, inclusive.
+  - `semana`: os últimos 7 dias completos (ontem e os 6 dias anteriores). `semana atual`: de segunda até hoje.
+  - `mês` ou o nome do mês (ex.: `novembro`): do dia 1 ao último dia do mês. Se for o mês atual, vai até hoje e o relatório é parcial.
+  - Se o argumento for ambíguo, pergunte antes de buscar os dados.
 - **Janela do dia**: de `00:00:00` a `23:59:59` horário local. Na consulta use `start_date = end_date = AAAA-MM-DD` (a API interpreta no fuso local da loja). Os horários na resposta vêm em UTC (`...Z`): **subtraia 3h** antes de exibir ou agrupar por hora.
 - Se o dia ainda está em andamento, deixe claro no título que é parcial ("até HH:MM") e informe o horário da última venda.
 
@@ -119,3 +124,21 @@ Depois de publicar, responda curto, para leitura no celular:
 - Uma linha por operação: `*Operação*: R$ X em N comandas · ticket R$ Y`.
 - Total do grupo e 1–3 alertas (pedido grande, cancelamentos, problemas de conferência).
 - O link da página.
+
+## 8. Modo período (semana, mês ou intervalo)
+
+Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, com estas diferenças:
+
+- **Coleta**: `get_table_sessions` com `start_date` = primeiro dia e `end_date` = último dia. Siga **todas** as páginas: um mês da Matriz pode passar de 40 páginas. Avise o usuário no começo que um mês leva alguns minutos. `get_ratings` aceita no máximo 92 dias por consulta, com `end_date` = último dia + 1 e filtro pelo horário local.
+- **Center Shopping**: só entra nos dias entre 06/11/2026 e 05/01/2027. O script já aplica essa janela. Se o período começa antes ou termina depois, diga na página em que dias o quiosque operou e calcule a média por dia só sobre esses dias.
+- **Conteúdo** (no lugar do gráfico por hora):
+  - Cartões do consolidado com total do período, comandas, ticket médio e **média por dia** de cada operação.
+  - **Evolução dia a dia**: gráfico de barras ou linhas com o faturamento diário das três operações, nas cores fixas. Use a saída `dias` do script.
+  - **Melhor e pior dia** de cada operação, com o dia da semana.
+  - Em período de 14 dias ou mais, a **média por dia da semana** (seg a dom) de cada operação.
+  - Rankings, canais, pagamentos, cancelamentos, descontos e avaliações somados no período. Nas avaliações, liste todas as notas abaixo de 5 e todos os comentários do período.
+  - Pedidos fora da curva: comandas que representem 10% ou mais do faturamento de um dia, listadas com a data.
+- **Publicação**: link fixo separado, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
+  - Procure com `Artifact` `action: "list"` um artifact com esse título. Se existir, faça `action: "read"` e publique com o mesmo `url`. Se não existir, publique um novo (`icon: "chart"`) e registre o URL aqui na skill.
+  - **Nunca** publique um período no link do relatório diário.
+
