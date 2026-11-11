@@ -47,13 +47,22 @@ get_table_sessions(restaurant_id=<id>, start_date=<dia>, end_date=<dia>, limit=1
 
 **Siga `pagination.next.cursor` até `has_more=false`**, mantendo os mesmos filtros. Nunca trate a primeira página como o total. Se não conseguir trazer tudo, diga isso no relatório.
 
+As respostas são grandes (centenas de KB) e a ferramenta salva cada uma num arquivo em `tool-results/`. Não leia o JSON no contexto. Rode o script de agregação, que já aplica todas as regras da seção 4:
+
+```
+python3 .claude/skills/reportek/scripts/calc.py <arquivo get_products da Matriz> \
+  --m <páginas get_table_sessions da Matriz...> --v <páginas da Vinhedos...>
+```
+
+Ele imprime, por operação (`M` = Gastronomia, `CS` = Center Shopping, `V` = Vinhedos): faturamento, comandas, ticket, itens, pessoas, última comanda (já em horário local, ignore o `+00:00`), canais, pagamentos, faturamento por hora, ranking de produtos, descontos, maiores comandas, cancelamentos, exclusões, abertos incluídos e a conferência categoria × nome. Para detalhes de uma comanda específica (ex.: encomenda grande), consulte o arquivo com um trecho curto de Python.
+
 ## 4. Regras de cálculo (iguais às análises de referência)
 
 - **Faturamento** = valor dos produtos (`orders[].total_price`, ou `total_price` da sessão/basket), **sem taxa de entrega** (`delivery_tax_price`) e **já com descontos** aplicados.
 - **Excluir**: itens com `canceled_at` preenchido, baskets cancelados, deliveries cancelados (`delivery_canceled_at`) e mesas transferidas (sessões com status `transferred` ou equivalente, sem pagamento próprio).
 - **Incluir** comandas ainda em aberto que já tenham pagamento total ou parcial (ex.: iFood pago que ainda aparece aberto). Mencione-as em "como os números foram calculados".
 - **Ticket médio** = faturamento ÷ número de comandas.
-- **Canal**: mesa (`table.table_type = table`), balcão/PDV, delivery próprio (`is_delivery`), iFood (canal ou pagamento iFood). Use os campos `table.table_type`, `is_delivery`, `order_baskets[].channel` e `intended_payments.ifood_paid`.
+- **Canal**: iFood quando há pagamento "Pagamento Online iFood" ou "Cupom iFood"; senão, pelo `table.table_type`: `table` = mesa, `balcony` = balcão, `delivery` = delivery próprio. Observação: com o Natal 2026 separado, quase todo o balcão do CNPJ da Matriz é o quiosque. Use os campos `table.table_type`, `is_delivery`, `order_baskets[].channel` e `intended_payments.ifood_paid`.
 - **Pagamentos**: some `payments[].payment_value` por `payment_method.name`. Mostre valor e % dos principais.
 - **Pessoas atendidas**: soma de `people_at_table` (quando houver).
 - **Horários**: agrupe o faturamento por hora local de abertura da comanda (`start_time` − 3h). Aponte o pico e as horas fracas fora do padrão.
@@ -91,7 +100,7 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 
 1. Antes de escrever o HTML, carregue a skill `artifact-design` (e `dataviz` se houver gráfico, como faturamento por hora).
 2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
-3. **Link fixo**: use `Artifact` com `action: "list"` e procure um artifact com o título **"Reporte Kantine"**.
+3. **Link fixo**: https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8 (criado em 11/11/2026). Faça `action: "read"` nesse URL e publique com o mesmo `url`. Se ele não existir mais, use `Artifact` com `action: "list"` e procure um artifact com o título **"Reporte Kantine"**.
    - Se existir: `action: "read"` nele e depois publique com o mesmo `url`, para atualizar no mesmo link.
    - Se não existir: publique um novo (`icon: "chart"`). Esse passa a ser o link fixo.
 4. A página é privada. O usuário decide se compartilha o link pelo claude.ai.

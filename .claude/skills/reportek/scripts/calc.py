@@ -1,0 +1,71 @@
+"""ReporteK: agrega as vendas do dia por operação.
+Uso: python3 calc.py PRODUTOS_MATRIZ.json --m SESSOES_MATRIZ_p1.json [p2 ...] --v SESSOES_VINHEDOS_p1.json [...]
+Os arquivos são as respostas salvas das ferramentas get_products e get_table_sessions (Takeat)."""
+import json,re,sys,collections as C,datetime as dt
+a=sys.argv[1:]; prod=a[0]; i=a.index('--m'); j=a.index('--v')
+mf=a[i+1:j]; vf=a[j+1:]
+cats=json.load(open(prod))['items'][0]['categories']
+NAT={p['id'] for c in cats if c['name'].strip()=='NATAL 2026' for p in c.get('products',[])}
+S={'M':[s for f in mf for s in json.load(open(f))['data']],'V':[s for f in vf for s in json.load(open(f))['data']]}
+print('produtos NATAL 2026:',len(NAT),'| comandas Matriz:',len(S['M']),'| Vinhedos:',len(S['V']))
+def isnat_name(n): s=n.strip(); return s.upper()==s and re.search(r'NATAL\s*$',s) is not None
+def loc(t): return dt.datetime.fromisoformat(t.replace('Z','+00:00'))-dt.timedelta(hours=3)
+conf=[]
+def proc(sess,split):
+  ops=C.defaultdict(lambda:{'rev':0,'cmd':0,'items':C.Counter(),'rev_i':C.Counter(),'chan':C.Counter(),'pay':C.Counter(),'hour':C.Counter(),'ppl':0,'last':None,'big':[],'canc':[],'disc':[],'nitems':0,'sess':[]})
+  excl=[];incl_open=[]
+  for s in sess:
+    if s['status'] in ('canceled','transfer') or s['delivery_canceled_at']:
+      excl.append((s['session_number'],s['status'],s['total_price']));continue
+    paid=sum(float(p['payment_value']) for p in s['payments'])
+    if s['status']=='open':
+      if paid<=0: excl.append((s['session_number'],'open sem pagamento',s['total_price']));continue
+      incl_open.append((s['session_number'],s['total_price'],paid))
+    lines=[]
+    for bl in s['bills']:
+      for b in bl['order_baskets']:
+        bc=b['canceled_at'] or b['order_status']=='canceled'
+        for o in b['orders']:
+          pid=o['product']['id'];nm=o['product']['name']
+          if bc or o['canceled_at']:
+            ops['_canc']['canc'].append((s['session_number'],nm,o['total_price'],o['cancel_reason']));continue
+          lines.append((pid,nm,float(o['amount']),float(o['total_price']),b['channel']))
+    tot=float(s['total_price'] or 0); raw=sum(l[3] for l in lines)
+    f= tot/raw if raw else 1
+    tt=(s.get('table') or {}).get('table_type')
+    ch='iFood' if any(p['payment_method']['name'] in('Pagamento Online iFood','Cupom iFood') for p in s['payments']) else {'table':'Mesa','balcony':'Balcão','delivery':'Delivery próprio'}.get(tt,tt)
+    by=C.defaultdict(list)
+    for l in lines:
+      n=l[0] in NAT; nn=isnat_name(l[1])
+      if split and (n!=nn): conf.append((l[1],'cat' if n else 'nome'))
+      if not split and nn: conf.append((l[1],'Vinhedos'))
+      op=('CS' if (n or nn) else 'M') if split else 'V'
+      by[op].append(l)
+    for op,ls in by.items():
+      O=ops[op]; r=sum(l[3] for l in ls)*f
+      O['rev']+=r;O['cmd']+=1;O['chan'][ch]+=r;O['hour'][loc(s['start_time']).hour]+=r
+      O['sess'].append((s['session_number'],r,s))
+      if op!='CS': O['ppl']+=float(s['people_at_table'] or 0)
+      for l in ls: O['items'][l[1]]+=l[2];O['rev_i'][l[1]]+=l[3]*f;O['nitems']+=l[2]
+      t=loc(s['start_time']); O['last']=max(O['last'] or t,t)
+      if s['discount_total']: O['disc'].append((s['session_number'],float(s['discount_total']),s['discount_obs']))
+    # payments: assign to ops proportionally
+    for op,ls in by.items():
+      share=(sum(l[3] for l in ls)/raw) if raw else 0
+      for p in s['payments']: ops[op]['pay'][p['payment_method']['name']]+=float(p['payment_value'])*share
+  return ops,excl,incl_open
+OM,em,im=proc(S['M'],True); OV,ev,iv=proc(S['V'],False)
+out={}
+for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
+  print('==',nm,round(O['rev'],2),O['cmd'],round(O['rev']/O['cmd'],2),'itens',O['nitems'],'ppl',O['ppl'],'last',O['last'])
+  print(' chan',{k:round(v,2) for k,v in O['chan'].most_common()})
+  print(" chan_cnt",C.Counter(x[2].get("table",{}).get("table_type") if x[2].get("table") else None for x in O["sess"]))
+  print(' pay',{k:round(v,2) for k,v in O['pay'].most_common()})
+  print(' hour',{k:round(v) for k,v in sorted(O['hour'].items())})
+  print(' top',[(k,O['items'][k],round(v,2)) for k,v in O['rev_i'].most_common(40)])
+  print(' disc',O['disc'])
+  big=sorted(O['sess'],key=lambda x:-x[1])[:3]; print(' big',[(b[0],round(b[1],2),b[2]['bills'][0]['buyer'] and b[2]['bills'][0]['buyer']['name']) for b in big])
+print('canc M',OM['_canc']['canc']);print('canc V',OV['_canc']['canc'])
+print('excl M',em,'open M',im);print('excl V',ev,'open V',iv)
+print('conf',C.Counter(conf))
+
