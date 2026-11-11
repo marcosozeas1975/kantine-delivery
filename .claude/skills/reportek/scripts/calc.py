@@ -1,9 +1,13 @@
 """ReporteK: agrega as vendas do dia por operação.
 Funciona para um dia ou um periodo (todas as paginas do intervalo).
-Uso: python3 calc.py PRODUTOS_MATRIZ.json --m SESSOES_MATRIZ_p1.json [p2 ...] --v SESSOES_VINHEDOS_p1.json [...]
+Opcional: --json-dir DIR grava um resumo por dia (DIR/AAAA-MM-DD.json) para o cache no banco da pagina.
+Uso: python3 calc.py PRODUTOS_MATRIZ.json [--json-dir DIR] --m SESSOES_MATRIZ_p1.json [p2 ...] --v SESSOES_VINHEDOS_p1.json [...]
 Os arquivos são as respostas salvas das ferramentas get_products e get_table_sessions (Takeat)."""
 import json,re,sys,collections as C,datetime as dt
-a=sys.argv[1:]; prod=a[0]; i=a.index('--m'); j=a.index('--v')
+a=sys.argv[1:]
+JD=None
+if '--json-dir' in a: k=a.index('--json-dir'); JD=a[k+1]; del a[k:k+2]
+prod=a[0]; i=a.index('--m'); j=a.index('--v')
 mf=a[i+1:j]; vf=a[j+1:]
 cats=json.load(open(prod))['items'][0]['categories']
 NAT={p['id'] for c in cats if c['name'].strip()=='NATAL 2026' for p in c.get('products',[])}
@@ -47,7 +51,7 @@ def proc(sess,split):
       by[op].append(l)
     for op,ls in by.items():
       O=ops[op]; r=sum(l[3] for l in ls)*f
-      O['rev']+=r;O['cmd']+=1;O['chan'][ch]+=r;O['hour'][loc(s['start_time']).hour]+=r;dk=loc(s['start_time']).date().isoformat();O['day'][dk]+=r;O['daycmd'][dk]+=1
+      O['rev']+=r;O['cmd']+=1;O['chan'][ch]+=r;O.setdefault('chancnt',C.Counter())[ch]+=1;O['hour'][loc(s['start_time']).hour]+=r;dk=loc(s['start_time']).date().isoformat();O['day'][dk]+=r;O['daycmd'][dk]+=1
       O['sess'].append((s['session_number'],r,s))
       if op!='CS': O['ppl']+=float(s['people_at_table'] or 0)
       for l in ls: O['items'][l[1]]+=l[2];O['rev_i'][l[1]]+=l[3]*f;O['nitems']+=l[2]
@@ -76,3 +80,34 @@ print('canc M',OM['_canc']['canc']);print('canc V',OV['_canc']['canc'])
 print('excl M',em,'open M',im);print('excl V',ev,'open V',iv)
 print('conf',C.Counter(conf))
 
+
+# ---------- cache: um resumo por dia, sem dados pessoais ----------
+def resumo(O,dia_rev_total):
+  r2=lambda x:round(x,2)
+  grandes=[{'comanda':n,'valor':r2(v),'itens':[(o['amount'],o['product']['name']) for bl in ss['bills'] for b in bl['order_baskets'] for o in b['orders'] if not o['canceled_at']][:10],
+            'desconto':ss['discount_obs'],'retirada':ss['scheduled_to']}
+           for n,v,ss in O['sess'] if dia_rev_total and v>=0.10*dia_rev_total and v>=500]
+  return {'faturamento':r2(O['rev']),'comandas':O['cmd'],'itens':O['nitems'],'pessoas':O['ppl'],
+    'ultima_comanda':O['last'].strftime('%H:%M') if O['last'] else None,
+    'canais':{k:{'valor':r2(v),'comandas':O.get('chancnt',{}).get(k,0)} for k,v in O['chan'].items()},
+    'pagamentos':{k:r2(v) for k,v in O['pay'].items()},
+    'por_hora':{str(k):r2(v) for k,v in O['hour'].items()},
+    'produtos':{k:{'qtd':O['items'][k],'valor':r2(v)} for k,v in O['rev_i'].items()},
+    'descontos':[{'valor':d[1],'origem':(d[2] or '').strip()} for d in O['disc']],
+    'pedidos_grandes':grandes}
+if JD:
+  import os; os.makedirs(JD,exist_ok=True)
+  agora=dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=3)
+  dias=sorted({loc(s['start_time']).date() for k in S for s in S[k]})
+  for d in dias:
+    conf.clear()
+    sm=[s for s in S['M'] if loc(s['start_time']).date()==d]; sv=[s for s in S['V'] if loc(s['start_time']).date()==d]
+    om,em_,im_=proc(sm,True); ov,ev_,iv_=proc(sv,False)
+    doc={'data':d.isoformat(),'dia_fechado':agora.date()>d,'atualizado_em':agora.strftime('%Y-%m-%d %H:%M'),
+         'operacoes':{}, 'cancelamentos':{'M':[{'item':c[1],'valor':float(c[2]),'motivo':c[3]} for c in om['_canc']['canc']],
+                                          'V':[{'item':c[1],'valor':float(c[2]),'motivo':c[3]} for c in ov['_canc']['canc']]},
+         'conferencia':[{'item':c[0],'tipo':c[1]} for c in conf]}
+    for nm,O in [('M',om.get('M')),('CS',om.get('CS')),('V',ov.get('V'))]:
+      if O: doc['operacoes'][nm]=resumo(O,O['rev'])
+    json.dump(doc,open(os.path.join(JD,d.isoformat()+'.json'),'w'),ensure_ascii=False)
+  print('cache: %d dia(s) gravados em %s'%(len(dias),JD))

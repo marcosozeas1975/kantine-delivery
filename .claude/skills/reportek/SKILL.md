@@ -129,7 +129,8 @@ Depois de publicar, responda curto, para leitura no celular:
 
 Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, com estas diferenças:
 
-- **Coleta**: `get_table_sessions` com `start_date` = primeiro dia e `end_date` = último dia. Siga **todas** as páginas: um mês da Matriz pode passar de 40 páginas. Avise o usuário no começo que um mês leva alguns minutos. `get_ratings` aceita no máximo 92 dias por consulta, com `end_date` = último dia + 1 e filtro pelo horário local.
+- **Use o cache primeiro (seção 9).** Busque no Takeat só os dias que faltam no cache, os gravados com `dia_fechado: false` e os últimos 7 dias. Depois grave esses dias no cache e consolide com `scripts/period.py`.
+- **Coleta dos dias que faltam**: `get_table_sessions` com `start_date` = primeiro dia e `end_date` = último dia de cada trecho que falta. Siga **todas** as páginas: um mês da Matriz pode passar de 40 páginas. Avise o usuário no começo que um mês leva alguns minutos. `get_ratings` aceita no máximo 92 dias por consulta, com `end_date` = último dia + 1 e filtro pelo horário local.
 - **Center Shopping**: só entra nos dias entre 06/11/2026 e 05/01/2027. O script já aplica essa janela. Se o período começa antes ou termina depois, diga na página em que dias o quiosque operou e calcule a média por dia só sobre esses dias.
 - **Conteúdo** (no lugar do gráfico por hora):
   - Cartões do consolidado com total do período, comandas, ticket médio e **média por dia** de cada operação.
@@ -141,4 +142,17 @@ Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, c
 - **Publicação**: link fixo separado, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
   - Procure com `Artifact` `action: "list"` um artifact com esse título. Se existir, faça `action: "read"` e publique com o mesmo `url`. Se não existir, publique um novo (`icon: "chart"`) e registre o URL aqui na skill.
   - **Nunca** publique um período no link do relatório diário.
+
+## 9. Cache no banco da página (histórico)
+
+Os resumos diários ficam guardados no banco da página do relatório diário (https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8), na coleção **`dias`**, um documento por dia com id `AAAA-MM-DD`. A regra de acesso é `read: admin, write: admin`: só o dono e editores leem e gravam, mesmo que a página seja compartilhada. O cache guarda só números e nomes de produtos, sem nome nem telefone de cliente.
+
+- **Ao republicar a página diária, não passe `capabilities`.** Omitir mantém o banco. Passar `{}` apaga a declaração.
+- **Gravar depois de todo relatório (diário ou período):**
+  1. Rode `calc.py` com `--json-dir <pasta>`. Ele grava um arquivo por dia com faturamento, comandas, itens, pessoas, canais (valor e comandas), pagamentos, faturamento por hora, produtos, descontos, pedidos grandes, cancelamentos e conferência. Também marca `dia_fechado` (verdadeiro se o dia já tinha terminado na hora da busca).
+  2. Acrescente ao arquivo o campo `avaliacoes`: por loja (`M`, `V` e, se houver, `CS`), `total`, `media`, `criterios` (comida, atendimento, preco, ambiente), `com_criterios`, `abaixo_de_5` (mesa, hora, nota, critérios abaixo de 5) e `comentarios` (mesa, hora, nota, texto). Não guarde nome nem telefone.
+  3. Grave com `ArtifactData`: `set` em `dias/<AAAA-MM-DD>` com `file_path`. Se o documento já existir, leia antes (`get`) e passe o `version` em `if_version`. Para vários dias, use `batch` (até 50 por chamada).
+- **Ler para um período:** `ArtifactData` `list` na coleção `dias` com `out_dir` (pagine com `query.cursor`, até 1000 por página) e rode `python3 scripts/period.py <out_dir> <início> <fim>`. Ele soma o período e mostra a série por dia, o melhor e o pior dia, a média por dia da semana, canais, pagamentos, descontos, produtos, pedidos grandes, avaliações abaixo de 5, comentários, cancelamentos e a conferência. Também lista os dias gravados antes de fechar, que precisam ser buscados de novo.
+- **Sempre buscar de novo no Takeat:** dias ausentes do cache, dias com `dia_fechado: false` e os últimos 7 dias (cancelamentos e ajustes do iFood ainda podem mudar o número). Dias mais antigos que isso valem como estão no cache.
+- **Na tarefa automática das 22h30:** grave o dia de hoje como `dia_fechado: false`. Grave também o dia anterior completo, buscando de novo no Takeat, para que fique como `dia_fechado: true`.
 
