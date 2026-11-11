@@ -11,7 +11,12 @@ prod=a[0]; i=a.index('--m'); j=a.index('--v')
 mf=a[i+1:j]; vf=a[j+1:]
 cats=json.load(open(prod))['items'][0]['categories']
 NAT={p['id'] for c in cats if c['name'].strip()=='NATAL 2026' for p in c.get('products',[])}
-S={'M':[s for f in mf for s in json.load(open(f))['data']],'V':[s for f in vf for s in json.load(open(f))['data']]}
+def _load(fs):
+  seen={}
+  for f in fs:
+    for x in json.load(open(f))['data']: seen[x['id']]=x  # remove duplicadas (paginas/janelas sobrepostas)
+  return list(seen.values())
+S={'M':_load(mf),'V':_load(vf)}
 print('produtos NATAL 2026:',len(NAT),'| comandas Matriz:',len(S['M']),'| Vinhedos:',len(S['V']))
 def isnat_name(n): s=n.strip(); return s.upper()==s and re.search(r'NATAL\s*$',s) is not None
 CS_INI=dt.date(2026,11,6); CS_FIM=dt.date(2027,1,5)  # periodo do quiosque Center Shopping
@@ -65,6 +70,7 @@ def proc(sess,split):
 OM,em,im=proc(S['M'],True); OV,ev,iv=proc(S['V'],False)
 out={}
 for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
+  if not O['cmd']: print('==',nm,'sem vendas no periodo'); continue
   print('==',nm,round(O['rev'],2),O['cmd'],round(O['rev']/O['cmd'],2),'itens',O['nitems'],'ppl',O['ppl'],'last',O['last'])
   print(' chan',{k:round(v,2) for k,v in O['chan'].most_common()})
   print(" chan_cnt",C.Counter(x[2].get("table",{}).get("table_type") if x[2].get("table") else None for x in O["sess"]))

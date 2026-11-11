@@ -130,6 +130,12 @@ Depois de publicar, responda curto, para leitura no celular:
 Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, com estas diferenças:
 
 - **Use o cache primeiro (seção 9).** Busque no Takeat só os dias que faltam no cache, os gravados com `dia_fechado: false` e os últimos 7 dias. Depois grave esses dias no cache e consolide com `scripts/period.py`.
+- **Como buscar muitos dias sem estourar o contexto:**
+  - Faça uma consulta por dia e por loja (`start_date = end_date = dia`), várias em paralelo. Respostas grandes vão para arquivos em `tool-results/`, e é isso que o script lê.
+  - Uma página pequena (menos de ~10 comandas, típica da 2ª página de um dia) volta **dentro da conversa**, sem arquivo. Não copie à mão: busque de novo o mesmo trecho com uma janela ISO maior, que inclua a sobra do dia e a manhã seguinte (ex.: `2026-10-07T21:00:00Z` a `2026-10-08T14:30:00Z`). Ela volta grande e vai para arquivo. O `calc.py` remove comandas repetidas pelo id.
+  - Para a 2ª página, prefira a janela ISO (1 h antes da última comanda da 1ª página até a manhã seguinte) em vez do cursor. Em sábado, termine a janela às 02:59:59Z do domingo.
+  - Domingos voltam vazios: as duas lojas fecham.
+  - `get_ratings` de um mês inteiro volta dentro da conversa (sem arquivo). Transcreva só o necessário para o cache (loja, data, hora local, mesa, nota, critérios e comentário), sem nome e sem telefone.
 - **Coleta dos dias que faltam**: `get_table_sessions` com `start_date` = primeiro dia e `end_date` = último dia de cada trecho que falta. Siga **todas** as páginas: um mês da Matriz pode passar de 40 páginas. Avise o usuário no começo que um mês leva alguns minutos. `get_ratings` aceita no máximo 92 dias por consulta, com `end_date` = último dia + 1 e filtro pelo horário local.
 - **Center Shopping**: só entra nos dias entre 06/11/2026 e 05/01/2027. O script já aplica essa janela. Se o período começa antes ou termina depois, diga na página em que dias o quiosque operou e calcule a média por dia só sobre esses dias.
 - **Conteúdo** (no lugar do gráfico por hora):
@@ -140,7 +146,7 @@ Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, c
   - Rankings, canais, pagamentos, cancelamentos, descontos e avaliações somados no período. Nas avaliações, liste todas as notas abaixo de 5 e todos os comentários do período.
   - Pedidos fora da curva: comandas que representem 10% ou mais do faturamento de um dia, listadas com a data.
 - **Publicação**: link fixo separado, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
-  - Procure com `Artifact` `action: "list"` um artifact com esse título. Se existir, faça `action: "read"` e publique com o mesmo `url`. Se não existir, publique um novo (`icon: "chart"`) e registre o URL aqui na skill.
+  - **Link fixo do período:** https://claude.ai/artifact/TyctYfSLTJEo19NTZ1S4Mt (criado em 11/11/2026 com outubro de 2026). Faça `action: "read"` nele e publique com o mesmo `url`. Se não existir mais, procure com `Artifact` `action: "list"` o título "Reporte Kantine Período".
   - **Nunca** publique um período no link do relatório diário.
 
 ## 9. Cache no banco da página (histórico)
