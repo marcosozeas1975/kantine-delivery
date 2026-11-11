@@ -94,6 +94,14 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 - Cartões com as 3 operações (faturamento, comandas, ticket) e o total do grupo.
 - **Comparativo**: Matriz "normal" (sem Natal e sem pedido fora da curva) × Vinhedos × Center Shopping. Inclua diferença % de faturamento, ticket médio e perfil de canal (salão × balcão).
 
+**Avaliações do dia no Takeat** (antes da Conferência)
+- Busque com `get_ratings(restaurant_id=<id>, start_date=<dia>, end_date=<dia+1>)` para cada loja. As datas dessa ferramenta são em UTC: filtre por `created_at` − 3h para ficar só com o dia local.
+- Por loja: nota média, quantidade de avaliações e média de cada critério (`food` = comida, `service` = atendimento, `price` = preço, `enviroment` = ambiente), dizendo em quantas avaliações os critérios foram preenchidos.
+- **Destaque toda nota abaixo de 5**, seja a nota geral ou de um critério, em bloco de alerta: cliente, mesa, horário local, nota geral e quais critérios ficaram abaixo de 5.
+- **Mostre todos os comentários** escritos (`comment` não vazio), na íntegra, com cliente, mesa, horário e nota. Se não houver, diga que nenhum cliente comentou.
+- As avaliações da loja 40695 entram na Kantine Gastronomia. Se a mesa da avaliação for do quiosque ou a comanda ligada tiver só itens Natal 2026, atribua ao Center Shopping.
+- Na resposta do chat, inclua a nota média de cada loja e as notas abaixo de 5.
+
 **Conferência** (rodapé): problemas do cruzamento categoria × nome, páginas não carregadas e qualquer dado que pareça inconsistente.
 
 ## 6. Publicação (página com link fixo)
