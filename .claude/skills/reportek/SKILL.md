@@ -77,7 +77,7 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 **Kantine Gastronomia (Matriz)**
 - Total sem Natal 2026, nº de comandas, ticket médio. Também mostre o total bruto da loja e quanto foi Natal 2026.
 - Pedido fora da curva (se houver) e o dia "normal" sem ele.
-- Canais, pagamentos, picos de horário, top 5 produtos por faturamento.
+- Canais, pagamentos, picos de horário, top 5 produtos por faturamento. Nos canais, mostre **delivery próprio e iFood em linhas separadas** (comandas, faturamento e ticket de cada um). Avise quantas comandas do delivery próprio foram retirada na loja (`with_withdrawal`) e o total de taxas de entrega, que não entra no faturamento. Encomenda fora da curva fica fora dessa conta.
 - Como os números foram calculados (exclusões e inclusões).
 
 **Kantine Vinhedos**
@@ -94,12 +94,20 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 - Cartões com as 3 operações (faturamento, comandas, ticket) e o total do grupo.
 - **Comparativo**: Matriz "normal" (sem Natal e sem pedido fora da curva) × Vinhedos × Center Shopping. Inclua diferença % de faturamento, ticket médio e perfil de canal (salão × balcão).
 
+**Avaliações do dia no Takeat** (antes da Conferência)
+- Busque com `get_ratings(restaurant_id=<id>, start_date=<dia>, end_date=<dia+1>)` para cada loja. As datas dessa ferramenta são em UTC: filtre por `created_at` − 3h para ficar só com o dia local.
+- Por loja: nota média, quantidade de avaliações e média de cada critério (`food` = comida, `service` = atendimento, `price` = preço, `enviroment` = ambiente), dizendo em quantas avaliações os critérios foram preenchidos.
+- **Destaque toda nota abaixo de 5**, seja a nota geral ou de um critério, em bloco de alerta: cliente, mesa, horário local, nota geral e quais critérios ficaram abaixo de 5.
+- **Mostre todos os comentários** escritos (`comment` não vazio), na íntegra, com cliente, mesa, horário e nota. Se não houver, diga que nenhum cliente comentou.
+- As avaliações da loja 40695 entram na Kantine Gastronomia. Se a mesa da avaliação for do quiosque ou a comanda ligada tiver só itens Natal 2026, atribua ao Center Shopping.
+- Na resposta do chat, inclua a nota média de cada loja e as notas abaixo de 5.
+
 **Conferência** (rodapé): problemas do cruzamento categoria × nome, páginas não carregadas e qualquer dado que pareça inconsistente.
 
 ## 6. Publicação (página com link fixo)
 
 1. Antes de escrever o HTML, carregue a skill `artifact-design` (e `dataviz` se houver gráfico, como faturamento por hora).
-2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
+2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. **Cores fixas por operação** (use em cartões, marcadores e gráficos): **azul** para Kantine Gastronomia (Matriz) `#2a5d9c` (tema escuro `#82aee6`), **vinho** para Kantine Vinhedos `#7b3046` (escuro `#e08ba2`), **verde** para Kantine Center Shopping `#2f7a4a` (escuro `#7cc79a`). Mantenha o layout da versão atual do link fixo. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
 3. **Link fixo**: https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8 (criado em 11/11/2026). Faça `action: "read"` nesse URL e publique com o mesmo `url`. Se ele não existir mais, use `Artifact` com `action: "list"` e procure um artifact com o título **"Reporte Kantine"**.
    - Se existir: `action: "read"` nele e depois publique com o mesmo `url`, para atualizar no mesmo link.
    - Se não existir: publique um novo (`icon: "chart"`). Esse passa a ser o link fixo.
