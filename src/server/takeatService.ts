@@ -51,6 +51,8 @@ export interface TakeatOrderRecord {
   calculated_freight_details: any;
   created_route_id: number | null;
   raw_payload: any;
+  vehicle_category: 'MOTO' | 'CAR' | null;
+  vehicle_reason: string | null;
   created_at: Date;
   accepted_at: Date | null;
   dispatched_at: Date | null;
@@ -395,7 +397,11 @@ export class TakeatService {
 
     // Calcular frete pelo Motor de Fretes da Kantine usando a loja específica (Matriz ou Vinhedos)
     const pickupPresetKey = storeKey === 'VINHEDOS' ? 'VINHEDOS' : (config.default_pickup_preset || 'MATRIZ');
-    const modality = config.preferred_modality || 'MOTO';
+    // Veículo do pedido: informado pela ponte (bolo → carro, demais → moto) ou o padrão da loja
+    const incomingVehicle = String(payload?.vehicle || '').toUpperCase();
+    const vehicleCategory: 'MOTO' | 'CAR' | null = incomingVehicle === 'CAR' || incomingVehicle === 'MOTO' ? incomingVehicle : null;
+    const vehicleReason = vehicleCategory ? String(payload?.vehicleReason || '').slice(0, 300) || null : null;
+    const modality = vehicleCategory || config.preferred_modality || 'MOTO';
     const freightCalc = this.calculateOrderFreight(
       matchedNeighborhood,
       formattedAddress,
@@ -448,6 +454,8 @@ export class TakeatService {
           calculated_freight_value: calculatedFreightValue,
           calculated_freight_details: freightCalc,
           raw_payload: rawPayload,
+          vehicle_category: vehicleCategory ?? existing.vehicle_category,
+          vehicle_reason: vehicleCategory ? vehicleReason : existing.vehicle_reason,
         })
         .where(eq(takeatOrders.id, existing.id))
         .returning();
@@ -470,6 +478,8 @@ export class TakeatService {
         customer_name: customerName,
         customer_phone: customerPhone,
         destination_address: formattedAddress,
+        vehicle_category: vehicleCategory,
+        vehicle_reason: vehicleReason,
         destination_neighborhood: matchedNeighborhood,
         destination_city: city,
         order_items_summary: itemsSummary || 'Pedido Kantine Delivery',
@@ -572,7 +582,8 @@ export class TakeatService {
     const order = rows[0] as TakeatOrderRecord;
     const config = await this.getConfig(order.store_key || 'MATRIZ');
 
-    const modality = options?.modality || config.preferred_modality || 'MOTO';
+    // O veículo definido no pedido (bolo → carro) prevalece sobre o padrão da loja
+    const modality = order.vehicle_category || options?.modality || config.preferred_modality || 'MOTO';
     const pickupPresetKey = options?.pickupPreset || order.pickup_preset || (order.store_key === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ');
     const pickupPreset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
 
@@ -650,6 +661,7 @@ export class TakeatService {
       : '';
     return [
       `Takeat ${order.display_id} (${storeLabel})`,
+      order.vehicle_category === 'CAR' ? `CARRO${order.vehicle_reason ? ` (${order.vehicle_reason})` : ''}` : '',
       raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
       order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : '',
       d.reference ? `Ref.: ${d.reference}` : '',
