@@ -223,7 +223,7 @@ export class TakeatService {
     explicitStoreKey?: string
   ): Promise<{
     order: TakeatOrderRecord;
-    action: 'CREATED' | 'UPDATED' | 'IGNORED';
+    action: 'CREATED' | 'UPDATED' | 'IGNORED' | 'CANCELED';
     storeKey: 'MATRIZ' | 'VINHEDOS';
     reason?: string;
   }> {
@@ -292,6 +292,23 @@ export class TakeatService {
       orderId.slice(-4)
     ).replace(/^#/, '');
     const displayId = `#${displayCode}`;
+
+    // Cancelamento vindo da ponte do Zelo (pedido cancelado no Takeat depois de enviado)
+    const event = String(rawPayload?.event || payload?.event || '');
+    if (event === 'order.canceled') {
+      const [existing] = await db.select().from(takeatOrders).where(eq(takeatOrders.takeat_order_id, orderId)).limit(1);
+      if (!existing) throw new Error(`Pedido ${orderId} não encontrado para cancelar.`);
+      if (existing.status === 'PENDING_COURIER') {
+        const [updated] = await db.update(takeatOrders).set({ status: 'DISMISSED' })
+          .where(eq(takeatOrders.id, existing.id)).returning();
+        return { order: updated as TakeatOrderRecord, action: 'CANCELED', storeKey };
+      }
+      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas já está ${existing.status}: avise o entregador.`);
+      return {
+        order: existing as TakeatOrderRecord, action: 'IGNORED', storeKey,
+        reason: `Cancelado no Takeat, mas já está ${existing.status}: avise o entregador.`,
+      };
+    }
 
     // Extrair dados do cliente
     const customer = payload?.customer || payload?.cliente || {};
@@ -587,7 +604,7 @@ export class TakeatService {
             cargo_description: cargoDescription,
             is_horizontal_condo: false,
             delivery_mode: 'IN_PERSON',
-            observations: `Originado do Takeat (${storeLabel}). Valor pedido: R$ ${order.order_total || '0,00'}. Pagto: ${order.payment_method || 'PIX'}`,
+            observations: this.stopObservations(order, storeLabel),
           },
         ],
       },
@@ -618,6 +635,29 @@ export class TakeatService {
       route: createdRoute,
       order: updatedOrder as TakeatOrderRecord,
     };
+  }
+
+  /** Observações da parada para o entregador (cobrança, troco, referência, horário agendado). */
+  private stopObservations(order: TakeatOrderRecord, storeLabel: string): string {
+    const raw: any = order.raw_payload || {};
+    if (raw?.source !== 'kantine-zelo-bridge') {
+      return `Originado do Takeat (${storeLabel}). Valor pedido: R$ ${order.order_total || '0,00'}. Pagto: ${order.payment_method || 'PIX'}`;
+    }
+    const d = raw.delivery || {};
+    const brl = (n: unknown) => `R$ ${Number(n || 0).toFixed(2).replace('.', ',')}`;
+    const when = raw.scheduledTo
+      ? new Date(raw.scheduledTo).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })
+      : '';
+    return [
+      `Takeat ${order.display_id} (${storeLabel})`,
+      raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
+      order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : '',
+      d.reference ? `Ref.: ${d.reference}` : '',
+      d.zipCode ? `CEP ${d.zipCode}` : '',
+      when ? `Agendado: ${when}` : '',
+      order.customer_phone ? `Tel.: ${order.customer_phone}` : '',
+      raw.notes ? `Obs.: ${raw.notes}` : '',
+    ].filter(Boolean).join(' · ');
   }
 
   /**

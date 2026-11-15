@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -1733,14 +1734,20 @@ async function handleTakeatWebhook(req: any, res: any, explicitStoreKey?: string
     const rawPayload = req.body;
     console.log(`[Takeat Webhook Received (${explicitStoreKey || 'AUTO'})]`, JSON.stringify(rawPayload).slice(0, 300));
 
-    // Validação opcional de Webhook Secret se configurado na loja
-    const storeKeyToValidate = (explicitStoreKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
+    // Webhook Secret OBRIGATÓRIO: sem ele, qualquer pessoa poderia criar pedidos (e despachar entregadores)
+    const storeKeyToValidate = (String(explicitStoreKey || '').toUpperCase() === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
     const config = await takeatService.getConfig(storeKeyToValidate);
-    if (config.webhook_secret) {
-      const authHeader = req.headers['authorization'] || req.headers['x-takeat-signature'] || req.headers['x-webhook-token'];
-      if (authHeader && authHeader !== config.webhook_secret && !authHeader.includes(config.webhook_secret)) {
-        console.warn(`[Takeat Webhook ${storeKeyToValidate}] Token mismatch warning`);
-      }
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || '').trim();
+    if (!expected) {
+      return res.status(503).json({ error: 'WEBHOOK_SECRET_NOT_CONFIGURED', details: `Cadastre o Webhook secret da loja ${storeKeyToValidate} nas configurações do Takeat.` });
+    }
+    const rawToken = String(req.headers['x-webhook-token'] || req.headers['authorization'] || req.headers['x-takeat-signature'] || '');
+    const token = rawToken.replace(/^Bearer\s+/i, '').trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn(`[Takeat Webhook ${storeKeyToValidate}] token inválido — pedido recusado`);
+      return res.status(401).json({ error: 'INVALID_WEBHOOK_TOKEN' });
     }
 
     const result = await takeatService.processIncomingWebhook(rawPayload, explicitStoreKey);
