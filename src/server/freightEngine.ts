@@ -31,7 +31,9 @@ export const PICKUP_PRESETS: Record<string, PickupLocationPreset> = {
     name: 'Kantine Matriz',
     address: 'Av. Getúlio Vargas, 1846 — Uberlândia/MG',
     neighborhood: 'Daniel Fonseca',
-    coords: { lat: -18.92211, lng: -48.28854 },
+    // Mesma localização que o Takeat usa para a loja (Av. Getúlio Vargas, 1846 — CEP 38400-329),
+    // para o raio/taxa sair igual nos dois sistemas. A anterior (-18.92211, -48.28854) ficava ~520 m a leste.
+    coords: { lat: -18.9239602, lng: -48.2931244 },
   },
   VINHEDOS: {
     name: 'Kantine Vinhedos',
