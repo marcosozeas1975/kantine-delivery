@@ -1912,6 +1912,24 @@ var init_routeService = __esm({
        * If OFFERED, notifies all drivers who received SENT offer.
        * If ACCEPTED/IN_TRANSIT/etc with an allocated driver, notifies the driver via Telegram.
        */
+      /**
+       * Exclui DE VEZ uma rota que nunca teve entregador (rascunho ou cancelada sem motorista).
+       * Rotas que chegaram a ter motorista não podem ser excluídas (histórico financeiro/pendências).
+       */
+      async deleteRouteWithoutDriver(id) {
+        const route = await this.getRouteById(id);
+        if (!route) throw new Error("ROUTE_NOT_FOUND");
+        if (route.accepted_driver_id) throw new Error("ROUTE_HAS_DRIVER");
+        if (route.status !== "DRAFT" && route.status !== "CANCELLED") throw new Error("ROUTE_NOT_DELETABLE");
+        await db.transaction(async (tx) => {
+          await tx.delete(routeOfferDispatches).where(eq2(routeOfferDispatches.route_id, id));
+          await tx.delete(routeUpdates).where(eq2(routeUpdates.route_id, id));
+          await tx.delete(routeEvents).where(eq2(routeEvents.route_id, id));
+          await tx.delete(routeStops).where(eq2(routeStops.route_id, id));
+          await tx.update(takeatOrders).set({ created_route_id: null, status: "DISMISSED" }).where(eq2(takeatOrders.created_route_id, id));
+          await tx.delete(routes).where(eq2(routes.id, id));
+        });
+      }
       async cancelRoute(id, actor, reason, options) {
         const route = await this.getRouteById(id);
         if (!route) throw new Error("ROUTE_NOT_FOUND");
@@ -12363,6 +12381,22 @@ app.post("/api/admin/routes/:id/cancel", requireAdminAuth, async (req, res) => {
     if (err.message === "ROUTE_NOT_FOUND") return res.status(404).json({ error: err.message });
     if (err.message === "ROUTE_ALREADY_CANCELLED") return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message || "Failed to cancel route" });
+  }
+});
+app.delete("/api/admin/routes/:id", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    await routeService.deleteRouteWithoutDriver(id);
+    res.json({ success: true, message: `Rota #${id} exclu\xEDda.` });
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (msg === "ROUTE_NOT_FOUND") return res.status(404).json({ error: msg });
+    if (msg === "ROUTE_HAS_DRIVER" || msg === "ROUTE_NOT_DELETABLE") {
+      return res.status(409).json({ error: msg, message: "S\xF3 rotas em rascunho ou canceladas que nunca tiveram entregador podem ser exclu\xEDdas." });
+    }
+    console.error(`[API DELETE /api/admin/routes/${req.params.id} error]`, msg);
+    res.status(500).json({ error: msg || "Falha ao excluir rota." });
   }
 });
 app.post("/api/admin/routes/:id/edit-preview", requireAdminAuth, async (req, res) => {

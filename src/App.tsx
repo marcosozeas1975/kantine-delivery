@@ -2345,6 +2345,27 @@ export default function App() {
     }
   };
 
+  // Exclusão definitiva: só rascunhos ou canceladas que nunca tiveram entregador
+  const canDeleteRoute = (route: Route) =>
+    (route.status === 'DRAFT' || route.status === 'CANCELLED') && !route.accepted_driver_id;
+
+  const handleDeleteRoute = async (route: Route) => {
+    if (!confirm(`Excluir DE VEZ a rota #${route.id}? Ela some da lista e do histórico. Não dá para desfazer.`)) return;
+    setCancellingId(route.id);
+    setErrorMessage(null);
+    try {
+      const res = await fetch(`/api/admin/routes/${route.id}`, { method: 'DELETE', headers: await getAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Falha ao excluir rota.');
+      setSuccessMessage(`Rota #${route.id} excluída.`);
+      await fetchRoutes();
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const openCancelModal = (route: Route) => {
     setRouteToCancel(route);
     setCancelReasonInput('');
@@ -3547,6 +3568,18 @@ export default function App() {
                                   title="Cancelar corrida em qualquer status e encaminhar para Pendências Operacionais"
                                 >
                                   {cancellingId === route.id ? 'Cancelando...' : 'Cancelar'}
+                                </button>
+                              )}
+
+                              {canDeleteRoute(route) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteRoute(route)}
+                                  disabled={cancellingId === route.id}
+                                  className="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Excluir de vez (só rascunhos ou canceladas sem entregador)"
+                                >
+                                  Excluir
                                 </button>
                               )}
 
