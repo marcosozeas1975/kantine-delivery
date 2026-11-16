@@ -964,7 +964,8 @@ export default function App() {
     totalPendenciasCount > 0 ||
     pendingPaymentsCount > 0 ||
     pendingTakeatCount > 0 ||
-    inFluxRoutesCount > 0;
+    inFluxRoutesCount > 0 ||
+    draftRoutesCount > 0;
 
   // New Route Form State (Motor de Fretes Kantine)
   interface FormStop {
@@ -2830,12 +2831,12 @@ export default function App() {
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'ROUTES'
                 ? 'border-orange-600 text-orange-600'
-                : inFluxRoutesCount > 0
+                : inFluxRoutesCount > 0 || draftRoutesCount > 0
                 ? 'border-amber-500 text-amber-700 bg-amber-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
-            <Layers className={`w-3.5 h-3.5 ${inFluxRoutesCount > 0 ? 'text-amber-600 animate-pulse' : ''}`} />
+            <Layers className={`w-3.5 h-3.5 ${inFluxRoutesCount > 0 || draftRoutesCount > 0 ? 'text-amber-600 animate-pulse' : ''}`} />
             <span>Rotas de Entrega</span>
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-200 text-neutral-700 font-bold">
               {allRoutesList.length > 0 ? allRoutesList.length : routesList.length}
@@ -2847,6 +2848,15 @@ export default function App() {
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
                 <span>{inFluxRoutesCount} em fluxo</span>
+              </span>
+            )}
+            {draftRoutesCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse ring-2 ring-amber-300 shadow-xs"
+                title={`${draftRoutesCount} rota(s) em rascunho aguardando revisão e publicação`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{draftRoutesCount} {draftRoutesCount === 1 ? 'rascunho' : 'rascunhos'}</span>
               </span>
             )}
           </button>
