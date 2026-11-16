@@ -1230,7 +1230,7 @@ export const FreightEngineSettings: React.FC<Props> = ({
                               </span>
                             ) : order.status === 'IN_ROUTE' ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
-                                🛵 Em Rota {order.created_route_id ? `(#${order.created_route_id})` : ''}
+                                🛵 {order.created_route_id ? `Rota #${order.created_route_id}` : 'Em Rota'}
                               </span>
                             ) : order.status === 'DELIVERED' ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">

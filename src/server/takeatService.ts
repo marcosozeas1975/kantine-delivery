@@ -300,12 +300,22 @@ export class TakeatService {
     if (event === 'order.canceled') {
       const [existing] = await db.select().from(takeatOrders).where(eq(takeatOrders.takeat_order_id, orderId)).limit(1);
       if (!existing) throw new Error(`Pedido ${orderId} não encontrado para cancelar.`);
-      if (existing.status === 'PENDING_COURIER') {
+      // Rota ainda sem entregador (rascunho ou ofertada): cancela junto
+      let routeCanceled = !existing.created_route_id;
+      if (existing.created_route_id) {
+        const route = await routeService.getRouteById(existing.created_route_id);
+        if (!route || route.status === 'CANCELLED') routeCanceled = true;
+        else if ((route.status === 'DRAFT' || route.status === 'OFFERED') && !route.accepted_driver_id) {
+          await routeService.cancelRoute(route.id, 'TAKEAT', `Pedido ${existing.display_id} cancelado no Takeat`);
+          routeCanceled = true;
+        }
+      }
+      if (routeCanceled && (existing.status === 'PENDING_COURIER' || existing.status === 'IN_ROUTE')) {
         const [updated] = await db.update(takeatOrders).set({ status: 'DISMISSED' })
           .where(eq(takeatOrders.id, existing.id)).returning();
         return { order: updated as TakeatOrderRecord, action: 'CANCELED', storeKey };
       }
-      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas já está ${existing.status}: avise o entregador.`);
+      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas a rota #${existing.created_route_id ?? '-'} já tem entregador (${existing.status}): avise o entregador.`);
       return {
         order: existing as TakeatOrderRecord, action: 'IGNORED', storeKey,
         reason: `Cancelado no Takeat, mas já está ${existing.status}: avise o entregador.`,
@@ -497,8 +507,17 @@ export class TakeatService {
       })
       .returning();
 
+    // Como as entregas avulsas: o pedido vira um RASCUNHO em "Rotas de Entrega", aguardando revisão e publicação.
+    // Se falhar, o pedido continua na aba de pedidos Takeat para criar a rota manualmente.
+    let order = inserted as TakeatOrderRecord;
+    try {
+      order = (await this.convertOrderToRoute(order.id, { offerNow: false, asDraftRoute: true })).order;
+    } catch (e: any) {
+      console.warn(`[Takeat] Pedido ${displayId}: não foi possível criar o rascunho de rota (${e.message}). Fica aguardando na aba Takeat.`);
+    }
+
     return {
-      order: inserted as TakeatOrderRecord,
+      order,
       action: 'CREATED',
       storeKey,
     };
@@ -572,6 +591,8 @@ export class TakeatService {
       offerNow?: boolean;
       modality?: 'MOTO' | 'CAR';
       pickupPreset?: string;
+      /** Rascunho criado automaticamente: o pedido sai de "Aguardando entregador" (a rota está em Rotas de Entrega). */
+      asDraftRoute?: boolean;
     }
   ): Promise<{ route: any; order: TakeatOrderRecord }> {
     const rows = await db.select().from(takeatOrders).where(eq(takeatOrders.id, orderId)).limit(1);
@@ -605,7 +626,7 @@ export class TakeatService {
       {
         pickup_type: 'REGISTERED',
         pickup_location_id: pickupPresetKey === 'VINHEDOS' ? 2 : 1,
-        final_deadline: '50 min',
+        final_deadline: this.routeDeadline(order),
         total_fee: freightCalc.driver_remuneration.toFixed(2),
         accepted_vehicle_types: modality === 'CAR' ? ['CAR'] : ['MOTO', 'MOTO_WITH_BAG'],
         stops: [
@@ -636,7 +657,7 @@ export class TakeatService {
       .update(takeatOrders)
       .set({
         created_route_id: createdRoute.id,
-        status: options?.offerNow ? 'IN_ROUTE' : 'PENDING_COURIER',
+        status: options?.offerNow || options?.asDraftRoute ? 'IN_ROUTE' : 'PENDING_COURIER',
         dispatched_at: options?.offerNow ? new Date() : null,
       })
       .where(eq(takeatOrders.id, order.id))
@@ -646,6 +667,13 @@ export class TakeatService {
       route: createdRoute,
       order: updatedOrder as TakeatOrderRecord,
     };
+  }
+
+  /** Prazo da rota: horário agendado do Takeat, se houver; senão o padrão de 50 min. */
+  private routeDeadline(order: TakeatOrderRecord): string {
+    const when = (order.raw_payload as any)?.scheduledTo;
+    if (!when || !Number.isFinite(Date.parse(when))) return '50 min';
+    return `Agendado ${new Date(when).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
   }
 
   /** Observações da parada para o entregador (cobrança, troco, referência, horário agendado). */
