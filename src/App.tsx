@@ -1767,8 +1767,12 @@ export default function App() {
     }
   };
 
+  // Só busca dados depois que o login (Google ou chave) estiver pronto: evita chamadas sem credencial (401)
+  const canLoad = authReady && !accessError && (!!currentUser || (useAdminKey && !!adminKey.trim()));
+
   // Carga inicial e quando as credenciais/usuário mudarem
   useEffect(() => {
+    if (!canLoad) return;
     fetchDrivers();
     fetchPickupLocations();
     fetchRoutes();
@@ -1779,31 +1783,44 @@ export default function App() {
     fetchPayments();
     fetchVehicleAudit();
     fetchTakeatPendingCount();
-  }, [currentUser, useAdminKey, adminKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canLoad, currentUser, useAdminKey, adminKey]);
 
   // Efeitos dedicados para cada filtro (evita disparar todas as requisições desnecessariamente)
   useEffect(() => {
+    if (!canLoad) return;
     fetchDrivers(driverFilter);
-  }, [driverFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[driverFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchRoutes(routeFilter);
-  }, [routeFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[routeFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchReferrals(referralFilter);
-  }, [referralFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[referralFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchIncidents(incidentResolutionFilter);
-  }, [incidentResolutionFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[incidentResolutionFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchPayments(paymentFilter);
-  }, [paymentFilter, selectedDriverFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentFilter, selectedDriverFilter, canLoad]);
 
   // Polling em tempo real (12s) silencioso para atualizar as 4 situações críticas em segundo plano
+  // Recriado quando o login muda, para usar sempre as credenciais atuais
   useEffect(() => {
+    if (!canLoad) return;
     const timer = setInterval(() => {
       fetchDrivers(undefined, true);
       fetchReferrals(undefined, true);
@@ -1813,7 +1830,8 @@ export default function App() {
       fetchTakeatPendingCount(true);
     }, 12000);
     return () => clearInterval(timer);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canLoad, currentUser, useAdminKey, adminKey]);
 
   // Driver Actions (M1 & M1.1)
   const handleApproveDriver = async (driverId: number) => {
