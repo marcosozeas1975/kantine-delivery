@@ -8772,7 +8772,9 @@ var PICKUP_PRESETS = {
     name: "Kantine Matriz",
     address: "Av. Get\xFAlio Vargas, 1846 \u2014 Uberl\xE2ndia/MG",
     neighborhood: "Daniel Fonseca",
-    coords: { lat: -18.92211, lng: -48.28854 }
+    // Mesma localização que o Takeat usa para a loja (Av. Getúlio Vargas, 1846 — CEP 38400-329),
+    // para o raio/taxa sair igual nos dois sistemas. A anterior (-18.92211, -48.28854) ficava ~520 m a leste.
+    coords: { lat: -18.9239602, lng: -48.2931244 }
   },
   VINHEDOS: {
     name: "Kantine Vinhedos",
@@ -10634,6 +10636,15 @@ function vehicleOf(order) {
   return { vehicle_category, vehicle_reason: vehicle_category ? String(p?.vehicleReason || "") || null : null };
 }
 var withVehicle = (o) => ({ ...o, ...vehicleOf(o) });
+function dropoffCoordsOf(raw) {
+  const p = raw?.data || raw?.order || raw || {};
+  const d = p?.delivery || p?.endereco || p?.deliveryAddress || p?.address || {};
+  const lat = Number(d?.latitude ?? d?.lat);
+  const lng = Number(d?.longitude ?? d?.lng ?? d?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 && lng === 0) return void 0;
+  if (lat < -19.6 || lat > -18.4 || lng < -48.9 || lng > -47.6) return void 0;
+  return { lat, lng };
+}
 var TakeatService = class {
   /**
    * Retorna todas as configurações de lojas cadastradas (Matriz e Vinhedos)
@@ -10721,13 +10732,15 @@ var TakeatService = class {
   /**
    * Calcula o frete preliminar pelo Motor de Fretes da Kantine considerando a loja de origem
    */
-  calculateOrderFreight(destinationNeighborhood, destinationAddress, pickupPresetKey = "MATRIZ", vehicleCategory = "MOTO") {
+  calculateOrderFreight(destinationNeighborhood, destinationAddress, pickupPresetKey = "MATRIZ", vehicleCategory = "MOTO", dropoffCoords) {
     const preset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
     const stopInput = {
       sequence: 1,
       destination_address: destinationAddress,
       destination_neighborhood: destinationNeighborhood,
-      is_horizontal_condo: false
+      is_horizontal_condo: false,
+      // Endereço exato (quando o Takeat informa); sem ele, o motor usa o centro do bairro
+      ...dropoffCoords ? { dropoff_coords: dropoffCoords } : {}
     };
     const calculation = calculateRoutePricing(
       vehicleCategory,
@@ -10865,7 +10878,8 @@ var TakeatService = class {
       matchedNeighborhood,
       formattedAddress,
       pickupPresetKey,
-      modality
+      modality,
+      dropoffCoordsOf(rawPayload)
     );
     const calculatedFreightValue = freightCalc.route_operational_total.toFixed(2);
     const storeIdVal = payload?.store_id || payload?.storeId || config.store_id || null;
@@ -11006,7 +11020,8 @@ var TakeatService = class {
       order.destination_neighborhood,
       order.destination_address,
       pickupPresetKey,
-      modality
+      modality,
+      dropoffCoordsOf(order.raw_payload)
     );
     const storeLabel = order.store_key === "VINHEDOS" ? "Vinhedos" : "Matriz";
     const cargoDescription = `Pedido Takeat ${order.display_id} (${storeLabel}) \u2014 ${order.customer_name}${order.order_items_summary ? ` | ${order.order_items_summary}` : ""}`;
@@ -11015,7 +11030,8 @@ var TakeatService = class {
         pickup_type: "REGISTERED",
         pickup_location_id: await this.pickupLocationId(pickupPresetKey === "VINHEDOS" ? "VINHEDOS" : "MATRIZ"),
         final_deadline: this.routeDeadline(order),
-        total_fee: freightCalc.driver_remuneration.toFixed(2),
+        // Mesmo critério do simulador: valor da corrida = preço da tabela (antes era só o repasse de 90%)
+        total_fee: freightCalc.route_operational_total.toFixed(2),
         accepted_vehicle_types: modality === "CAR" ? ["CAR"] : ["MOTO", "MOTO_WITH_BAG"],
         stops: [
           {

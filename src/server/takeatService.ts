@@ -8,6 +8,7 @@ import {
   normalizeName,
   DEFAULT_FREIGHT_PARAMETERS,
   StopCalculationInput,
+  GeoCoordinate,
 } from './freightEngine.ts';
 import { routeService } from './routeService.ts';
 
@@ -71,6 +72,21 @@ export function vehicleOf(order: { raw_payload?: any }): { vehicle_category: 'MO
 }
 
 const withVehicle = <T extends { raw_payload?: any }>(o: T): T => ({ ...o, ...vehicleOf(o) });
+
+/**
+ * Localização exata do endereço do cliente, como o Takeat guardou (latitude/longitude).
+ * Com ela o frete é medido até a casa do cliente, igual ao Takeat — e não até o centro do bairro.
+ * Só aceita coordenadas plausíveis da região de Uberlândia.
+ */
+export function dropoffCoordsOf(raw: any): GeoCoordinate | undefined {
+  const p = raw?.data || raw?.order || raw || {};
+  const d = p?.delivery || p?.endereco || p?.deliveryAddress || p?.address || {};
+  const lat = Number(d?.latitude ?? d?.lat);
+  const lng = Number(d?.longitude ?? d?.lng ?? d?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return undefined;
+  if (lat < -19.6 || lat > -18.4 || lng < -48.9 || lng > -47.6) return undefined;
+  return { lat, lng };
+}
 
 export class TakeatService {
   /**
@@ -205,7 +221,8 @@ export class TakeatService {
     destinationNeighborhood: string,
     destinationAddress: string,
     pickupPresetKey: string = 'MATRIZ',
-    vehicleCategory: 'MOTO' | 'CAR' = 'MOTO'
+    vehicleCategory: 'MOTO' | 'CAR' = 'MOTO',
+    dropoffCoords?: GeoCoordinate
   ) {
     const preset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
 
@@ -214,6 +231,8 @@ export class TakeatService {
       destination_address: destinationAddress,
       destination_neighborhood: destinationNeighborhood,
       is_horizontal_condo: false,
+      // Endereço exato (quando o Takeat informa); sem ele, o motor usa o centro do bairro
+      ...(dropoffCoords ? { dropoff_coords: dropoffCoords } : {}),
     };
 
     const calculation = calculateRoutePricing(
@@ -431,7 +450,8 @@ export class TakeatService {
       matchedNeighborhood,
       formattedAddress,
       pickupPresetKey,
-      modality
+      modality,
+      dropoffCoordsOf(rawPayload)
     );
 
     const calculatedFreightValue = freightCalc.route_operational_total.toFixed(2);
@@ -627,7 +647,8 @@ export class TakeatService {
       order.destination_neighborhood,
       order.destination_address,
       pickupPresetKey,
-      modality
+      modality,
+      dropoffCoordsOf(order.raw_payload)
     );
 
     const storeLabel = order.store_key === 'VINHEDOS' ? 'Vinhedos' : 'Matriz';
@@ -641,7 +662,8 @@ export class TakeatService {
         pickup_type: 'REGISTERED',
         pickup_location_id: await this.pickupLocationId(pickupPresetKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ'),
         final_deadline: this.routeDeadline(order),
-        total_fee: freightCalc.driver_remuneration.toFixed(2),
+        // Mesmo critério do simulador: valor da corrida = preço da tabela (antes era só o repasse de 90%)
+        total_fee: freightCalc.route_operational_total.toFixed(2),
         accepted_vehicle_types: modality === 'CAR' ? ['CAR'] : ['MOTO', 'MOTO_WITH_BAG'],
         stops: [
           {
