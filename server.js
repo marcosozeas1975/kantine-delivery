@@ -26,6 +26,7 @@ __export(schema_exports, {
   pickupLocations: () => pickupLocations,
   routeEvents: () => routeEvents,
   routeOfferDispatches: () => routeOfferDispatches,
+  routeSchedules: () => routeSchedules,
   routeStops: () => routeStops,
   routeUpdates: () => routeUpdates,
   routes: () => routes,
@@ -36,7 +37,7 @@ __export(schema_exports, {
 });
 import { sql } from "drizzle-orm";
 import { boolean, check, integer, jsonb, numeric, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
-var users, drivers, driverEvents, deliveries, deliveryOfferDispatches, deliveryEvents, pickupLocations, deliveryModalities, neighborhoods, deliveryConfigurations, freightPrices, routes, routeStops, routeOfferDispatches, routeEvents, routeUpdates, driverInvitations, driverReferrals, driverReferralEvents, telegramBotSessions, takeatConfigs, takeatOrders;
+var users, drivers, driverEvents, deliveries, deliveryOfferDispatches, deliveryEvents, pickupLocations, deliveryModalities, neighborhoods, deliveryConfigurations, freightPrices, routes, routeStops, routeOfferDispatches, routeSchedules, routeEvents, routeUpdates, driverInvitations, driverReferrals, driverReferralEvents, telegramBotSessions, takeatConfigs, takeatOrders;
 var init_schema = __esm({
   "src/db/schema.ts"() {
     users = pgTable("users", {
@@ -351,6 +352,14 @@ var init_schema = __esm({
         check("route_dispatches_status_check", sql`${table.status} IN ('SENT', 'FAILED')`)
       ]
     );
+    routeSchedules = pgTable("route_schedules", {
+      route_id: integer("route_id").primaryKey(),
+      scheduled_for: timestamp("scheduled_for", { withTimezone: true }),
+      publish_at: timestamp("publish_at", { withTimezone: true }),
+      publish_error: text("publish_error"),
+      published_at: timestamp("published_at", { withTimezone: true }),
+      updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+    });
     routeEvents = pgTable("route_events", {
       id: serial("id").primaryKey(),
       route_id: integer("route_id").references(() => routes.id, { onDelete: "cascade" }).notNull(),
@@ -535,6 +544,23 @@ var init_schema = __esm({
 // src/db/index.ts
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+function getAdminDb() {
+  if (!_adminDb) {
+    const targetDatabase = process.env.FORCE_DEV_DB === "true" ? process.env.SQL_DB_NAME || "cloud_sql_development_database" : "cloud_sql_production_database";
+    const pool2 = new Pool({
+      host: process.env.SQL_HOST,
+      user: process.env.SQL_ADMIN_USER || process.env.SQL_USER,
+      password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD,
+      database: targetDatabase,
+      max: 2,
+      connectionTimeoutMillis: 15e3,
+      idleTimeoutMillis: 3e4
+    });
+    pool2.on("error", (err) => console.warn("[Postgres adminDb] conex\xE3o:", err?.message || err));
+    _adminDb = drizzle(pool2, { schema: schema_exports });
+  }
+  return _adminDb;
+}
 async function initDbConstraints() {
   const adminUser = process.env.SQL_ADMIN_USER || process.env.SQL_USER;
   const adminPassword = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD;
@@ -570,7 +596,7 @@ async function initDbConstraints() {
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
       await client.query(`CREATE TABLE IF NOT EXISTS "route_schedules" (
-        "route_id" integer PRIMARY KEY REFERENCES "routes"("id") ON DELETE CASCADE,
+        "route_id" integer PRIMARY KEY,
         "scheduled_for" timestamptz,
         "publish_at" timestamptz,
         "publish_error" text,
@@ -691,7 +717,7 @@ async function initDbConstraints() {
     });
   }
 }
-var createPool, pool, db, createProdPool, prodPool, prodDb;
+var createPool, pool, db, createProdPool, prodPool, prodDb, _adminDb;
 var init_db = __esm({
   "src/db/index.ts"() {
     init_schema();
@@ -727,6 +753,7 @@ var init_db = __esm({
     };
     prodPool = createProdPool();
     prodDb = drizzle(prodPool, { schema: schema_exports });
+    _adminDb = null;
   }
 });
 
@@ -10653,6 +10680,7 @@ init_routeService();
 init_db();
 init_routeService();
 import { sql as sql8 } from "drizzle-orm";
+var db2 = { execute: (q) => getAdminDb().execute(q) };
 var OFFER_LEAD_MINUTES = () => {
   const n = Number(process.env.OFFER_LEAD_MINUTES);
   return Number.isFinite(n) && n >= 0 && n <= 24 * 60 ? n : 90;
@@ -10660,27 +10688,38 @@ var OFFER_LEAD_MINUTES = () => {
 var fmtBRT = (d) => d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 var iso = (v) => v ? new Date(v).toISOString() : null;
 var tableReady = null;
+var lastScheduleTableError = null;
+var CREATE_SQL = sql8`CREATE TABLE IF NOT EXISTS "route_schedules" (
+  "route_id" integer PRIMARY KEY,
+  "scheduled_for" timestamptz,
+  "publish_at" timestamptz,
+  "publish_error" text,
+  "published_at" timestamptz,
+  "updated_at" timestamptz DEFAULT now() NOT NULL
+)`;
 function ensureScheduleTable() {
   if (!tableReady) {
     tableReady = (async () => {
       try {
-        await db.execute(sql8`CREATE TABLE IF NOT EXISTS "route_schedules" (
-          "route_id" integer PRIMARY KEY REFERENCES "routes"("id") ON DELETE CASCADE,
-          "scheduled_for" timestamptz,
-          "publish_at" timestamptz,
-          "publish_error" text,
-          "published_at" timestamptz,
-          "updated_at" timestamptz DEFAULT now() NOT NULL
-        )`);
+        await db2.execute(CREATE_SQL);
+        lastScheduleTableError = null;
         return true;
       } catch (e) {
         try {
-          await db.execute(sql8`SELECT 1 FROM "route_schedules" LIMIT 1`);
+          await db2.execute(sql8`SELECT 1 FROM "route_schedules" LIMIT 1`);
+          lastScheduleTableError = null;
           return true;
         } catch {
-          console.error("[agendamento] tabela route_schedules indispon\xEDvel:", e?.message);
-          tableReady = null;
-          return false;
+          try {
+            await db.execute(CREATE_SQL);
+            return true;
+          } catch (e2) {
+            const why = (x) => String(x?.cause?.message || x?.message || x || "").split("\n")[0].slice(0, 200);
+            lastScheduleTableError = `admin: ${why(e)} | app: ${why(e2)}`;
+            console.error("[agendamento] tabela route_schedules indispon\xEDvel:", lastScheduleTableError);
+            tableReady = null;
+            return false;
+          }
         }
       }
     })();
@@ -10704,7 +10743,7 @@ var ScheduleService = class {
     const ids = routeIds.filter((n) => Number.isInteger(n) && n > 0);
     if (!ids.length || !await ensureScheduleTable()) return out;
     try {
-      const res = await db.execute(
+      const res = await db2.execute(
         sql8`SELECT * FROM "route_schedules" WHERE "route_id" IN (${sql8.join(ids.map((i) => sql8`${i}`), sql8`, `)})`
       );
       for (const r of rowsOf(res)) out.set(Number(r.route_id), rowOf(r));
@@ -10726,10 +10765,10 @@ var ScheduleService = class {
   }
   /** Define (ou remove, com null) a data/hora de entrega. Ajusta a publicação programada, se houver. */
   async setScheduledFor(routeId, when) {
-    if (!await ensureScheduleTable()) throw new Error("SCHEDULE_UNAVAILABLE");
+    if (!await ensureScheduleTable()) throw new Error(`SCHEDULE_UNAVAILABLE: ${lastScheduleTableError || ""}`);
     const current = await this.get(routeId);
     const publishAt = when && current?.publish_at ? new Date(when.getTime() - OFFER_LEAD_MINUTES() * 6e4) : null;
-    await db.execute(sql8`
+    await db2.execute(sql8`
       INSERT INTO "route_schedules" ("route_id", "scheduled_for", "publish_at", "publish_error", "updated_at")
       VALUES (${routeId}, ${when ? when.toISOString() : null}, ${publishAt ? publishAt.toISOString() : null}, NULL, now())
       ON CONFLICT ("route_id") DO UPDATE SET
@@ -10756,11 +10795,11 @@ var ScheduleService = class {
     const publishAt = new Date(delivery.getTime() - OFFER_LEAD_MINUTES() * 6e4);
     if (publishAt.getTime() <= Date.now()) {
       await routeService.publishRoute(routeId, actor);
-      await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL,
+      await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL,
         "published_at" = now(), "updated_at" = now() WHERE "route_id" = ${routeId}`);
       return { schedule: await this.get(routeId), publishedNow: true };
     }
-    await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = ${publishAt.toISOString()}, "publish_error" = NULL,
+    await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = ${publishAt.toISOString()}, "publish_error" = NULL,
       "updated_at" = now() WHERE "route_id" = ${routeId}`);
     await routeService.logRouteEvent(routeId, "ROUTE_UPDATED", actor, `Oferta agendada para ${fmtBRT(publishAt)} (entrega ${fmtBRT(delivery)}).`).catch(() => {
     });
@@ -10768,7 +10807,7 @@ var ScheduleService = class {
   }
   async unschedulePublish(routeId, actor) {
     if (!await ensureScheduleTable()) throw new Error("SCHEDULE_UNAVAILABLE");
-    await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL, "updated_at" = now()
+    await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL, "updated_at" = now()
       WHERE "route_id" = ${routeId}`);
     await routeService.logRouteEvent(routeId, "ROUTE_UPDATED", actor, "Oferta agendada desfeita (volta a ser rascunho comum).").catch(() => {
     });
@@ -10781,14 +10820,14 @@ var ScheduleService = class {
   async tick() {
     const result = { due: 0, published: 0, failed: 0 };
     if (!await ensureScheduleTable()) return result;
-    const dueRes = await db.execute(
+    const dueRes = await db2.execute(
       sql8`SELECT "route_id", "publish_at" FROM "route_schedules" WHERE "publish_at" IS NOT NULL AND "publish_at" <= now() ORDER BY "publish_at" LIMIT 20`
     );
     for (const r of rowsOf(dueRes)) {
       result.due++;
       const id = Number(r.route_id);
       const claimed = rowsOf(
-        await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "updated_at" = now()
+        await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "updated_at" = now()
           WHERE "route_id" = ${id} AND "publish_at" IS NOT NULL RETURNING "route_id"`)
       );
       if (!claimed.length) continue;
@@ -10796,7 +10835,7 @@ var ScheduleService = class {
         const route = await routeService.getRouteById(id);
         if (!route || route.status !== "DRAFT") continue;
         await routeService.publishRoute(id, "AGENDADOR");
-        await db.execute(sql8`UPDATE "route_schedules" SET "published_at" = now(), "publish_error" = NULL, "updated_at" = now()
+        await db2.execute(sql8`UPDATE "route_schedules" SET "published_at" = now(), "publish_error" = NULL, "updated_at" = now()
           WHERE "route_id" = ${id}`);
         result.published++;
       } catch (e) {
@@ -10804,7 +10843,7 @@ var ScheduleService = class {
         const msg = String(e?.message || e).slice(0, 300);
         const s = await this.get(id).catch(() => null);
         const stillTime = s?.scheduled_for && Date.parse(s.scheduled_for) > Date.now();
-        await db.execute(sql8`UPDATE "route_schedules" SET
+        await db2.execute(sql8`UPDATE "route_schedules" SET
           "publish_at" = ${stillTime ? sql8`now() + interval '5 minutes'` : sql8`NULL`},
           "publish_error" = ${msg}, "updated_at" = now() WHERE "route_id" = ${id}`).catch(() => {
         });

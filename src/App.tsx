@@ -2382,6 +2382,7 @@ export default function App() {
   const [scheduleTarget, setScheduleTarget] = useState<Route | null>(null);
   const [scheduleInput, setScheduleInput] = useState('');
   const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const OFFER_LEAD_MIN = 90;
 
   /** ISO → "datetime-local" no horário de Brasília (AAAA-MM-DDTHH:MM). */
@@ -2393,13 +2394,15 @@ export default function App() {
 
   const openScheduleModal = (route: Route) => {
     setScheduleTarget(route);
+    setScheduleError(null);
     setScheduleInput(toLocalInput(route.scheduled_for));
   };
 
   const handleConfirmSchedule = async () => {
     if (!scheduleTarget) return;
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(scheduleInput)) { setErrorMessage('Informe a data e a hora da entrega.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(scheduleInput)) { setScheduleError('Informe a data e a hora da entrega.'); return; }
     setScheduleSaving(true);
+    setScheduleError(null);
     setErrorMessage(null);
     try {
       const scheduled_for = new Date(`${scheduleInput}:00-03:00`).toISOString();
@@ -2416,7 +2419,7 @@ export default function App() {
       setScheduleTarget(null);
       await fetchRoutes();
     } catch (err: any) {
-      setErrorMessage(err.message);
+      setScheduleError(err.message); // mostra o motivo dentro da janela
     } finally {
       setScheduleSaving(false);
     }
@@ -7833,6 +7836,11 @@ export default function App() {
                 ? `A oferta será publicada automaticamente para os entregadores em ${fmtScheduleBRT(new Date(new Date(`${scheduleInput}:00-03:00`).getTime() - OFFER_LEAD_MIN * 60000).toISOString())} (${OFFER_LEAD_MIN} min antes da entrega).`
                 : `A oferta é publicada automaticamente ${OFFER_LEAD_MIN} min antes do horário de entrega.`}
             </p>
+            {scheduleError && (
+              <p className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 break-words">
+                Não foi possível agendar: {scheduleError}
+              </p>
+            )}
             <div className="flex justify-end gap-2 pt-1">
               <button type="button" onClick={() => setScheduleTarget(null)} disabled={scheduleSaving}
                 className="px-3 py-2 rounded-lg border border-neutral-300 text-xs font-semibold hover:bg-neutral-50">Voltar</button>

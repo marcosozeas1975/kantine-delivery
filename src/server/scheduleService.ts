@@ -7,7 +7,10 @@
 // Os dados ficam numa tabela própria (route_schedules), fora da tabela de rotas: se algo falhar
 // aqui, só o agendamento é afetado — as rotas continuam funcionando normalmente.
 import { sql } from 'drizzle-orm';
-import { db } from '../db/index.ts';
+import { db as appDb, getAdminDb } from '../db/index.ts';
+
+// Tudo de route_schedules passa pela conexão admin (dona da tabela)
+const db = { execute: (q: any) => getAdminDb().execute(q) };
 import { routeService } from './routeService.ts';
 
 export const OFFER_LEAD_MINUTES = () => {
@@ -30,29 +33,42 @@ const iso = (v: any): string | null => (v ? new Date(v).toISOString() : null);
 
 let tableReady: Promise<boolean> | null = null;
 
-/** Cria a tabela se ainda não existir (também é criada na inicialização pelo initDbConstraints). */
+export let lastScheduleTableError: string | null = null;
+
+const CREATE_SQL = sql`CREATE TABLE IF NOT EXISTS "route_schedules" (
+  "route_id" integer PRIMARY KEY,
+  "scheduled_for" timestamptz,
+  "publish_at" timestamptz,
+  "publish_error" text,
+  "published_at" timestamptz,
+  "updated_at" timestamptz DEFAULT now() NOT NULL
+)`;
+
+/** Garante a tabela (cria pela conexão admin; se não der, confere se já existe). */
 export function ensureScheduleTable(): Promise<boolean> {
   if (!tableReady) {
     tableReady = (async () => {
       try {
-        await db.execute(sql`CREATE TABLE IF NOT EXISTS "route_schedules" (
-          "route_id" integer PRIMARY KEY REFERENCES "routes"("id") ON DELETE CASCADE,
-          "scheduled_for" timestamptz,
-          "publish_at" timestamptz,
-          "publish_error" text,
-          "published_at" timestamptz,
-          "updated_at" timestamptz DEFAULT now() NOT NULL
-        )`);
+        await db.execute(CREATE_SQL);
+        lastScheduleTableError = null;
         return true;
       } catch (e: any) {
-        // Sem permissão para criar? Pode já existir (criada pelo admin na inicialização).
         try {
           await db.execute(sql`SELECT 1 FROM "route_schedules" LIMIT 1`);
+          lastScheduleTableError = null;
           return true;
         } catch {
-          console.error('[agendamento] tabela route_schedules indisponível:', e?.message);
-          tableReady = null; // tenta de novo na próxima chamada
-          return false;
+          // Última tentativa: a conexão comum do app
+          try {
+            await appDb.execute(CREATE_SQL);
+            return true;
+          } catch (e2: any) {
+            const why = (x: any) => String(x?.cause?.message || x?.message || x || '').split('\n')[0].slice(0, 200);
+            lastScheduleTableError = `admin: ${why(e)} | app: ${why(e2)}`;
+            console.error('[agendamento] tabela route_schedules indisponível:', lastScheduleTableError);
+            tableReady = null; // tenta de novo na próxima chamada
+            return false;
+          }
         }
       }
     })();
@@ -106,7 +122,7 @@ export class ScheduleService {
 
   /** Define (ou remove, com null) a data/hora de entrega. Ajusta a publicação programada, se houver. */
   async setScheduledFor(routeId: number, when: Date | null): Promise<RouteSchedule> {
-    if (!(await ensureScheduleTable())) throw new Error('SCHEDULE_UNAVAILABLE');
+    if (!(await ensureScheduleTable())) throw new Error(`SCHEDULE_UNAVAILABLE: ${lastScheduleTableError || ''}`);
     const current = await this.get(routeId);
     const publishAt =
       when && current?.publish_at ? new Date(when.getTime() - OFFER_LEAD_MINUTES() * 60_000) : null;
