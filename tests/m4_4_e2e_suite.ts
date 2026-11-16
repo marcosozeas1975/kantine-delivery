@@ -35,7 +35,7 @@ import { routeService } from '../src/server/routeService.ts';
 import { eq, inArray } from 'drizzle-orm';
 
 const BASE_URL = 'http://127.0.0.1:3000';
-const ADMIN_KEY = 'kantine-admin-secure-key-2026';
+const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
 
 const AUTH_HEADERS = {
   'Content-Type': 'application/json',

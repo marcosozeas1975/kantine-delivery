@@ -628,7 +628,7 @@ async function runM2Tests() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-admin-key': 'kantine-admin-secure-key-2026',
+        'x-admin-key': process.env.ADMIN_API_KEY || '',
       },
     });
 
@@ -662,7 +662,7 @@ async function runM2Tests() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-admin-key': 'kantine-admin-secure-key-2026',
+        'x-admin-key': process.env.ADMIN_API_KEY || '',
       },
     });
     const pubAfterBody: any = await pubAfterReactivation.json();

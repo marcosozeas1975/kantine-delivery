@@ -1128,7 +1128,7 @@ app.post('/api/admin/routes/stops/:id/incident', requireAdminAuth, async (req: A
 });
 
 // M4: Obter URL da Foto de Comprovante do Telegram
-app.get('/api/telegram/file-url/:fileId', async (req, res) => {
+app.get('/api/telegram/file-url/:fileId', requireAdminAuth, async (req, res) => {
   try {
     const fileUrl = await telegramBot.getFileUrl(req.params.fileId);
     res.json({ url: fileUrl });
@@ -1677,7 +1677,7 @@ app.get(
 );
 
 // Driver Route Details Endpoint (M4.2 Parte P: Strict Privacy)
-app.get('/api/driver/routes/:id', async (req, res) => {
+app.get('/api/driver/routes/:id', requireAdminAuth, async (req, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
