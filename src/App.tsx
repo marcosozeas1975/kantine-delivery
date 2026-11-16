@@ -614,12 +614,18 @@ interface TelegramStatus {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [adminKey, setAdminKey] = useState<string>(() => {
-    return localStorage.getItem('kantine_admin_key') || '';
-  });
-  const [useAdminKey, setUseAdminKey] = useState<boolean>(() => {
-    return !!localStorage.getItem('kantine_admin_key');
-  });
+  // Chave administrativa digitada manualmente (opcional). A antiga chave padrão não vale mais e é apagada.
+  const readStoredAdminKey = () => {
+    try {
+      const k = localStorage.getItem('kantine_admin_key') || '';
+      if (k === 'kantine-admin-secure-key-' + '2026') { localStorage.removeItem('kantine_admin_key'); return ''; }
+      return k;
+    } catch { return ''; }
+  };
+  const [adminKey, setAdminKey] = useState<string>(readStoredAdminKey);
+  const [useAdminKey, setUseAdminKey] = useState<boolean>(() => !!readStoredAdminKey());
+  const [authReady, setAuthReady] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
 
   // Main navigation tab
   const [activeTab, setActiveTab] = useState<
@@ -1037,6 +1043,7 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
+      setAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
@@ -1046,21 +1053,39 @@ export default function App() {
       'Content-Type': 'application/json',
     };
 
-    if (useAdminKey && adminKey.trim()) {
-      headers['x-admin-key'] = adminKey.trim();
-      return headers;
-    }
-
+    // Login Google tem prioridade; a chave administrativa só vai se digitada (sem chave padrão embutida)
     if (currentUser) {
       const token = await currentUser.getIdToken();
       headers['Authorization'] = `Bearer ${token}`;
       return headers;
     }
 
-    // Default internal fallback for local dev
-    headers['x-admin-key'] = 'kantine-admin-secure-key-2026';
+    if (useAdminKey && adminKey.trim()) {
+      headers['x-admin-key'] = adminKey.trim();
+    }
     return headers;
   };
+
+  // Confere se a conta logada tem acesso ao painel (e-mail autorizado no servidor)
+  useEffect(() => {
+    if (!authReady) return;
+    if (!currentUser && !(useAdminKey && adminKey.trim())) { setAccessError(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/takeat/pending-count', { headers: await getAuthHeaders() });
+        if (cancelled) return;
+        if (res.status === 401 || res.status === 403 || res.status === 503) {
+          const body = await res.json().catch(() => ({}));
+          setAccessError(body.message || 'Acesso não autorizado ao painel.');
+        } else {
+          setAccessError(null);
+        }
+      } catch { /* rede: não bloqueia */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authReady, currentUser, useAdminKey, adminKey]);
 
   const safeFetchJson = async <T,>(url: string, init?: RequestInit): Promise<T | null> => {
     try {
@@ -2593,7 +2618,7 @@ export default function App() {
       if (proofReference.startsWith('http://') || proofReference.startsWith('https://')) {
         setViewingPhotoUrl(proofReference);
       } else {
-        const res = await fetch(`/api/telegram/file-url/${encodeURIComponent(proofReference)}`);
+        const res = await fetch(`/api/telegram/file-url/${encodeURIComponent(proofReference)}`, { headers: await getAuthHeaders() });
         const data = await res.json();
         if (data.url) {
           setViewingPhotoUrl(data.url);
@@ -2650,6 +2675,42 @@ export default function App() {
     await signOut(auth);
     setSuccessMessage('Sessão encerrada.');
   };
+
+  // Tela de acesso: o painel só abre com login Google autorizado (ou chave administrativa configurada)
+  if (!authReady) {
+    return <div className="min-h-screen flex items-center justify-center text-sm text-neutral-500">Carregando…</div>;
+  }
+  if ((!currentUser && !(useAdminKey && adminKey.trim())) || accessError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 font-sans">
+        <div className="w-full max-w-sm bg-white border border-neutral-200 rounded-2xl shadow-sm p-6 text-center space-y-4">
+          <div className="w-12 h-12 mx-auto rounded-xl border border-neutral-200 p-1.5"><KantineLogo className="w-full h-full object-contain" /></div>
+          <div>
+            <h1 className="text-lg font-black text-neutral-900">Kantine Delivery</h1>
+            <p className="text-xs text-neutral-500">Painel administrativo de rotas e motoristas</p>
+          </div>
+          {accessError && <p className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{accessError}</p>}
+          {currentUser ? (
+            <button onClick={handleLogout} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm font-semibold hover:bg-neutral-50">
+              Sair e entrar com outra conta
+            </button>
+          ) : (
+            <button onClick={handleGoogleLogin} className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-white text-sm font-semibold">
+              <LogIn className="w-4 h-4" /> Entrar com Google
+            </button>
+          )}
+          {!currentUser && useAdminKey && accessError && (
+            <button
+              onClick={() => { try { localStorage.removeItem('kantine_admin_key'); } catch {} setAdminKey(''); setUseAdminKey(false); setAccessError(null); }}
+              className="text-xs text-neutral-500 underline"
+            >
+              Esquecer a chave administrativa salva
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-neutral-900 pb-16 font-sans">
@@ -9023,7 +9084,7 @@ export default function App() {
                 </label>
                 <input
                   type="password"
-                  placeholder="kantine-admin-secure-key-2026"
+                  placeholder="Somente se configurada no servidor (ADMIN_API_KEY)"
                   value={adminKey}
                   onChange={(e) => {
                     setAdminKey(e.target.value);

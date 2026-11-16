@@ -10510,6 +10510,9 @@ init_referralService();
 init_deliveryConfigService();
 init_telegramBot();
 
+// src/middleware/auth.ts
+import { timingSafeEqual } from "crypto";
+
 // src/lib/firebase-admin.ts
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
@@ -10548,35 +10551,53 @@ async function getOrCreateUser(uid, email) {
 }
 
 // src/middleware/auth.ts
+var MIN_KEY_LENGTH = 20;
+function configuredAdminKey() {
+  const key = String(process.env.ADMIN_API_KEY || "").trim();
+  return key.length >= MIN_KEY_LENGTH ? key : null;
+}
+function adminEmails() {
+  return new Set(
+    String(process.env.ADMIN_EMAILS || "").split(/[,;\s]+/).map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+}
+function sameSecret(given, expected) {
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 var requireAdminAuth = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  const adminKeyHeader = req.headers["x-admin-key"];
-  const adminSecret = process.env.ADMIN_API_KEY || "kantine-admin-secure-key-2026";
-  const fallbackSecret = "kantine-admin-secure-key-2026";
-  if (adminKeyHeader && (adminKeyHeader === adminSecret || adminKeyHeader === fallbackSecret)) {
+  const authHeader = String(req.headers.authorization || "");
+  const adminKeyHeader = String(req.headers["x-admin-key"] || "").trim();
+  const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const adminKey = configuredAdminKey();
+  const keyCandidate = adminKeyHeader || (bearer && bearer.length < 200 ? bearer : "");
+  if (adminKey && keyCandidate && sameSecret(keyCandidate, adminKey)) {
     req.user = { uid: "admin-cli", email: "admin@kantine.internal", isAdminKey: true };
     return next();
   }
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split("Bearer ")[1].trim();
-    if (token === adminSecret || token === fallbackSecret) {
-      req.user = { uid: "admin-cli", email: "admin@kantine.internal", isAdminKey: true };
-      return next();
-    }
+  if (bearer) {
+    let decoded;
     try {
-      const decodedToken = await adminAuth.verifyIdToken(token);
-      req.user = decodedToken;
-      if (decodedToken.email) {
-        await getOrCreateUser(decodedToken.uid, decodedToken.email).catch(
-          (e) => console.error("Failed to sync admin user record:", e)
-        );
-      }
-      return next();
-    } catch (error) {
-      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+      decoded = await adminAuth.verifyIdToken(bearer);
+    } catch {
+      return res.status(401).json({ error: "UNAUTHORIZED", message: "Sess\xE3o inv\xE1lida ou expirada. Entre novamente com o Google." });
     }
+    const email = String(decoded.email || "").toLowerCase();
+    const allowed = adminEmails();
+    if (!allowed.size) {
+      console.error("[auth] ADMIN_EMAILS n\xE3o configurada: nenhum login Google \xE9 aceito.");
+      return res.status(503).json({ error: "ADMIN_EMAILS_NOT_CONFIGURED", message: "Configure ADMIN_EMAILS (e-mails autorizados) no servidor." });
+    }
+    if (!email || decoded.email_verified === false || !allowed.has(email)) {
+      console.warn(`[auth] Login recusado para ${email || "conta sem e-mail"}`);
+      return res.status(403).json({ error: "FORBIDDEN", message: `A conta ${email || ""} n\xE3o tem acesso ao painel administrativo.` });
+    }
+    req.user = decoded;
+    await getOrCreateUser(decoded.uid, email).catch((e) => console.error("Failed to sync admin user record:", e));
+    return next();
   }
-  return res.status(401).json({ error: "Unauthorized: Missing or invalid authorization" });
+  return res.status(401).json({ error: "UNAUTHORIZED", message: "Entre com o Google para acessar o painel." });
 };
 
 // server.ts
@@ -12539,7 +12560,7 @@ app.post("/api/admin/routes/stops/:id/incident", requireAdminAuth, async (req, r
     res.status(400).json({ error: err.message });
   }
 });
-app.get("/api/telegram/file-url/:fileId", async (req, res) => {
+app.get("/api/telegram/file-url/:fileId", requireAdminAuth, async (req, res) => {
   try {
     const fileUrl = await telegramBot.getFileUrl(req.params.fileId);
     res.json({ url: fileUrl });
@@ -12985,7 +13006,7 @@ app.get(
     }
   }
 );
-app.get("/api/driver/routes/:id", async (req, res) => {
+app.get("/api/driver/routes/:id", requireAdminAuth, async (req, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
