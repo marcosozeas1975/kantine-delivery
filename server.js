@@ -518,10 +518,6 @@ var init_schema = __esm({
         calculated_freight_details: jsonb("calculated_freight_details"),
         created_route_id: integer("created_route_id").references(() => routes.id, { onDelete: "set null" }),
         raw_payload: jsonb("raw_payload"),
-        vehicle_category: text("vehicle_category"),
-        // CAR (bolos) | MOTO (demais) — informado pela ponte do Zelo
-        vehicle_reason: text("vehicle_reason"),
-        // ex.: "Bolo Leo Ávila (M)"
         created_at: timestamp("created_at").defaultNow().notNull(),
         accepted_at: timestamp("accepted_at"),
         dispatched_at: timestamp("dispatched_at")
@@ -661,8 +657,6 @@ async function initDbConstraints() {
 
         ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_key" text DEFAULT 'MATRIZ';
         ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_id" text;
-        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "vehicle_category" text;
-        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "vehicle_reason" text;
 
         -- Ensure both MATRIZ and VINHEDOS rows exist in takeat_configs
         INSERT INTO "takeat_configs" ("store_key", "store_name", "store_id", "default_pickup_preset", "auto_calculate_freight", "preferred_modality", "is_active")
@@ -10593,6 +10587,14 @@ init_db();
 init_schema();
 import { eq as eq8, and as and6, desc as desc6, sql as sql8 } from "drizzle-orm";
 init_routeService();
+function vehicleOf(order) {
+  const raw = order?.raw_payload || {};
+  const p = raw?.data || raw?.order || raw;
+  const v = String(p?.vehicle || "").toUpperCase();
+  const vehicle_category = v === "CAR" || v === "MOTO" ? v : null;
+  return { vehicle_category, vehicle_reason: vehicle_category ? String(p?.vehicleReason || "") || null : null };
+}
+var withVehicle = (o) => ({ ...o, ...vehicleOf(o) });
 var TakeatService = class {
   /**
    * Retorna todas as configurações de lojas cadastradas (Matriz e Vinhedos)
@@ -10736,11 +10738,20 @@ var TakeatService = class {
     if (event === "order.canceled") {
       const [existing] = await db.select().from(takeatOrders).where(eq8(takeatOrders.takeat_order_id, orderId)).limit(1);
       if (!existing) throw new Error(`Pedido ${orderId} n\xE3o encontrado para cancelar.`);
-      if (existing.status === "PENDING_COURIER") {
+      let routeCanceled = !existing.created_route_id;
+      if (existing.created_route_id) {
+        const route = await routeService.getRouteById(existing.created_route_id);
+        if (!route || route.status === "CANCELLED") routeCanceled = true;
+        else if ((route.status === "DRAFT" || route.status === "OFFERED") && !route.accepted_driver_id) {
+          await routeService.cancelRoute(route.id, "TAKEAT", `Pedido ${existing.display_id} cancelado no Takeat`);
+          routeCanceled = true;
+        }
+      }
+      if (routeCanceled && (existing.status === "PENDING_COURIER" || existing.status === "IN_ROUTE")) {
         const [updated] = await db.update(takeatOrders).set({ status: "DISMISSED" }).where(eq8(takeatOrders.id, existing.id)).returning();
         return { order: updated, action: "CANCELED", storeKey };
       }
-      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas j\xE1 est\xE1 ${existing.status}: avise o entregador.`);
+      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas a rota #${existing.created_route_id ?? "-"} j\xE1 tem entregador (${existing.status}): avise o entregador.`);
       return {
         order: existing,
         action: "IGNORED",
@@ -10810,7 +10821,6 @@ var TakeatService = class {
     const pickupPresetKey = storeKey === "VINHEDOS" ? "VINHEDOS" : config.default_pickup_preset || "MATRIZ";
     const incomingVehicle = String(payload?.vehicle || "").toUpperCase();
     const vehicleCategory = incomingVehicle === "CAR" || incomingVehicle === "MOTO" ? incomingVehicle : null;
-    const vehicleReason = vehicleCategory ? String(payload?.vehicleReason || "").slice(0, 300) || null : null;
     const modality = vehicleCategory || config.preferred_modality || "MOTO";
     const freightCalc = this.calculateOrderFreight(
       matchedNeighborhood,
@@ -10849,9 +10859,7 @@ var TakeatService = class {
         pickup_preset: pickupPresetKey,
         calculated_freight_value: calculatedFreightValue,
         calculated_freight_details: freightCalc,
-        raw_payload: rawPayload,
-        vehicle_category: vehicleCategory ?? existing.vehicle_category,
-        vehicle_reason: vehicleCategory ? vehicleReason : existing.vehicle_reason
+        raw_payload: rawPayload
       }).where(eq8(takeatOrders.id, existing.id)).returning();
       return {
         order: updated,
@@ -10867,8 +10875,6 @@ var TakeatService = class {
       customer_name: customerName,
       customer_phone: customerPhone,
       destination_address: formattedAddress,
-      vehicle_category: vehicleCategory,
-      vehicle_reason: vehicleReason,
       destination_neighborhood: matchedNeighborhood,
       destination_city: city,
       order_items_summary: itemsSummary || "Pedido Kantine Delivery",
@@ -10884,8 +10890,14 @@ var TakeatService = class {
       raw_payload: rawPayload,
       accepted_at: /* @__PURE__ */ new Date()
     }).returning();
+    let order = inserted;
+    try {
+      order = (await this.convertOrderToRoute(order.id, { offerNow: false, asDraftRoute: true })).order;
+    } catch (e) {
+      console.warn(`[Takeat] Pedido ${displayId}: n\xE3o foi poss\xEDvel criar o rascunho de rota (${e.message}). Fica aguardando na aba Takeat.`);
+    }
     return {
-      order: inserted,
+      order,
       action: "CREATED",
       storeKey
     };
@@ -10904,13 +10916,13 @@ var TakeatService = class {
     let query = db.select().from(takeatOrders);
     if (conditions.length === 1) {
       const rows2 = await query.where(conditions[0]).orderBy(desc6(takeatOrders.created_at)).limit(60);
-      return rows2;
+      return rows2.map(withVehicle);
     } else if (conditions.length > 1) {
       const rows2 = await query.where(and6(...conditions)).orderBy(desc6(takeatOrders.created_at)).limit(60);
-      return rows2;
+      return rows2.map(withVehicle);
     }
     const rows = await query.orderBy(desc6(takeatOrders.created_at)).limit(60);
-    return rows;
+    return rows.map(withVehicle);
   }
   /**
    * Retorna a quantidade de pedidos aguardando entregador (PENDING_COURIER)
@@ -10945,7 +10957,7 @@ var TakeatService = class {
     }
     const order = rows[0];
     const config = await this.getConfig(order.store_key || "MATRIZ");
-    const modality = order.vehicle_category || options?.modality || config.preferred_modality || "MOTO";
+    const modality = vehicleOf(order).vehicle_category || options?.modality || config.preferred_modality || "MOTO";
     const pickupPresetKey = options?.pickupPreset || order.pickup_preset || (order.store_key === "VINHEDOS" ? "VINHEDOS" : "MATRIZ");
     const pickupPreset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
     const freightCalc = this.calculateOrderFreight(
@@ -10960,7 +10972,7 @@ var TakeatService = class {
       {
         pickup_type: "REGISTERED",
         pickup_location_id: pickupPresetKey === "VINHEDOS" ? 2 : 1,
-        final_deadline: "50 min",
+        final_deadline: this.routeDeadline(order),
         total_fee: freightCalc.driver_remuneration.toFixed(2),
         accepted_vehicle_types: modality === "CAR" ? ["CAR"] : ["MOTO", "MOTO_WITH_BAG"],
         stops: [
@@ -10985,13 +10997,19 @@ var TakeatService = class {
     }
     const [updatedOrder] = await db.update(takeatOrders).set({
       created_route_id: createdRoute.id,
-      status: options?.offerNow ? "IN_ROUTE" : "PENDING_COURIER",
+      status: options?.offerNow || options?.asDraftRoute ? "IN_ROUTE" : "PENDING_COURIER",
       dispatched_at: options?.offerNow ? /* @__PURE__ */ new Date() : null
     }).where(eq8(takeatOrders.id, order.id)).returning();
     return {
       route: createdRoute,
       order: updatedOrder
     };
+  }
+  /** Prazo da rota: horário agendado do Takeat, se houver; senão o padrão de 50 min. */
+  routeDeadline(order) {
+    const when = order.raw_payload?.scheduledTo;
+    if (!when || !Number.isFinite(Date.parse(when))) return "50 min";
+    return `Agendado ${new Date(when).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
   }
   /** Observações da parada para o entregador (cobrança, troco, referência, horário agendado). */
   stopObservations(order, storeLabel) {
@@ -11004,7 +11022,7 @@ var TakeatService = class {
     const when = raw.scheduledTo ? new Date(raw.scheduledTo).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "";
     return [
       `Takeat ${order.display_id} (${storeLabel})`,
-      order.vehicle_category === "CAR" ? `CARRO${order.vehicle_reason ? ` (${order.vehicle_reason})` : ""}` : "",
+      vehicleOf(order).vehicle_category === "CAR" ? `CARRO${vehicleOf(order).vehicle_reason ? ` (${vehicleOf(order).vehicle_reason})` : ""}` : "",
       raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
       order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : "",
       d.reference ? `Ref.: ${d.reference}` : "",

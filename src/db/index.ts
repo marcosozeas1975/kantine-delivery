@@ -195,8 +195,6 @@ export async function initDbConstraints() {
 
         ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_key" text DEFAULT 'MATRIZ';
         ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_id" text;
-        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "vehicle_category" text;
-        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "vehicle_reason" text;
 
         -- Ensure both MATRIZ and VINHEDOS rows exist in takeat_configs
         INSERT INTO "takeat_configs" ("store_key", "store_name", "store_id", "default_pickup_preset", "auto_calculate_freight", "preferred_modality", "is_active")

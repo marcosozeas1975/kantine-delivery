@@ -473,8 +473,6 @@ export const takeatOrders = pgTable(
     calculated_freight_details: jsonb('calculated_freight_details'),
     created_route_id: integer('created_route_id').references(() => routes.id, { onDelete: 'set null' }),
     raw_payload: jsonb('raw_payload'),
-    vehicle_category: text('vehicle_category'), // CAR (bolos) | MOTO (demais) — informado pela ponte do Zelo
-    vehicle_reason: text('vehicle_reason'), // ex.: "Bolo Leo Ávila (M)"
     created_at: timestamp('created_at').defaultNow().notNull(),
     accepted_at: timestamp('accepted_at'),
     dispatched_at: timestamp('dispatched_at'),
