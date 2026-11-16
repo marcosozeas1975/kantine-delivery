@@ -569,6 +569,19 @@ async function initDbConstraints() {
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "driver_acknowledged_version" integer DEFAULT 1 NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
+      await client.query(`CREATE TABLE IF NOT EXISTS "route_schedules" (
+        "route_id" integer PRIMARY KEY REFERENCES "routes"("id") ON DELETE CASCADE,
+        "scheduled_for" timestamptz,
+        "publish_at" timestamptz,
+        "publish_error" text,
+        "published_at" timestamptz,
+        "updated_at" timestamptz DEFAULT now() NOT NULL
+      )`);
+      const appUser = String(process.env.SQL_USER || "");
+      if (appUser && appUser !== adminUser && /^[A-Za-z0-9_.@-]+$/.test(appUser)) {
+        await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "route_schedules" TO "${appUser}"`).catch(() => {
+        });
+      }
       await client.query(`ALTER TABLE "route_offer_dispatches" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);
       await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_status_check"`);
       await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_status_check" CHECK (status IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED'))`);
@@ -1912,6 +1925,13 @@ var init_routeService = __esm({
        * If OFFERED, notifies all drivers who received SENT offer.
        * If ACCEPTED/IN_TRANSIT/etc with an allocated driver, notifies the driver via Telegram.
        */
+      /** Atualiza o texto de prazo da rota (ex.: "Entregar às 16/11 15:00"). Só em rascunho. */
+      async setFinalDeadlineText(id, text2) {
+        await db.update(routes).set({ final_deadline: text2.slice(0, 120) }).where(and2(eq2(routes.id, id), eq2(routes.status, "DRAFT")));
+      }
+      async logRouteEvent(id, eventType, actor, details) {
+        await db.insert(routeEvents).values({ route_id: id, event_type: eventType, actor, details });
+      }
       /**
        * Exclui DE VEZ uma rota que nunca teve entregador (rascunho ou cancelada sem motorista).
        * Rotas que chegaram a ter motorista não podem ser excluídas (histórico financeiro/pendências).
@@ -10626,8 +10646,177 @@ init_eligibility();
 // src/server/takeatService.ts
 init_db();
 init_schema();
-import { eq as eq8, and as and6, desc as desc6, sql as sql8 } from "drizzle-orm";
+import { eq as eq8, and as and6, desc as desc6, sql as sql9 } from "drizzle-orm";
 init_routeService();
+
+// src/server/scheduleService.ts
+init_db();
+init_routeService();
+import { sql as sql8 } from "drizzle-orm";
+var OFFER_LEAD_MINUTES = () => {
+  const n = Number(process.env.OFFER_LEAD_MINUTES);
+  return Number.isFinite(n) && n >= 0 && n <= 24 * 60 ? n : 90;
+};
+var fmtBRT = (d) => d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+var iso = (v) => v ? new Date(v).toISOString() : null;
+var tableReady = null;
+function ensureScheduleTable() {
+  if (!tableReady) {
+    tableReady = (async () => {
+      try {
+        await db.execute(sql8`CREATE TABLE IF NOT EXISTS "route_schedules" (
+          "route_id" integer PRIMARY KEY REFERENCES "routes"("id") ON DELETE CASCADE,
+          "scheduled_for" timestamptz,
+          "publish_at" timestamptz,
+          "publish_error" text,
+          "published_at" timestamptz,
+          "updated_at" timestamptz DEFAULT now() NOT NULL
+        )`);
+        return true;
+      } catch (e) {
+        try {
+          await db.execute(sql8`SELECT 1 FROM "route_schedules" LIMIT 1`);
+          return true;
+        } catch {
+          console.error("[agendamento] tabela route_schedules indispon\xEDvel:", e?.message);
+          tableReady = null;
+          return false;
+        }
+      }
+    })();
+  }
+  return tableReady;
+}
+function rowOf(r) {
+  return {
+    route_id: Number(r.route_id),
+    scheduled_for: iso(r.scheduled_for),
+    publish_at: iso(r.publish_at),
+    publish_error: r.publish_error || null,
+    published_at: iso(r.published_at)
+  };
+}
+var rowsOf = (res) => Array.isArray(res) ? res : res?.rows || [];
+var ScheduleService = class {
+  /** Agendamentos das rotas informadas (falha aqui nunca derruba a listagem de rotas). */
+  async getMany(routeIds) {
+    const out = /* @__PURE__ */ new Map();
+    const ids = routeIds.filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length || !await ensureScheduleTable()) return out;
+    try {
+      const res = await db.execute(
+        sql8`SELECT * FROM "route_schedules" WHERE "route_id" IN (${sql8.join(ids.map((i) => sql8`${i}`), sql8`, `)})`
+      );
+      for (const r of rowsOf(res)) out.set(Number(r.route_id), rowOf(r));
+    } catch (e) {
+      console.warn("[agendamento] leitura falhou:", e?.message);
+    }
+    return out;
+  }
+  async get(routeId) {
+    return (await this.getMany([routeId])).get(routeId) || null;
+  }
+  /** Acrescenta scheduled_for / publish_at / publish_error às rotas (para a tela). */
+  async decorate(list) {
+    const map = await this.getMany(list.map((r) => r.id));
+    return list.map((r) => {
+      const s = map.get(r.id);
+      return s ? { ...r, scheduled_for: s.scheduled_for, publish_at: s.publish_at, publish_error: s.publish_error, schedule_published_at: s.published_at } : r;
+    });
+  }
+  /** Define (ou remove, com null) a data/hora de entrega. Ajusta a publicação programada, se houver. */
+  async setScheduledFor(routeId, when) {
+    if (!await ensureScheduleTable()) throw new Error("SCHEDULE_UNAVAILABLE");
+    const current = await this.get(routeId);
+    const publishAt = when && current?.publish_at ? new Date(when.getTime() - OFFER_LEAD_MINUTES() * 6e4) : null;
+    await db.execute(sql8`
+      INSERT INTO "route_schedules" ("route_id", "scheduled_for", "publish_at", "publish_error", "updated_at")
+      VALUES (${routeId}, ${when ? when.toISOString() : null}, ${publishAt ? publishAt.toISOString() : null}, NULL, now())
+      ON CONFLICT ("route_id") DO UPDATE SET
+        "scheduled_for" = EXCLUDED."scheduled_for",
+        "publish_at" = EXCLUDED."publish_at",
+        "publish_error" = NULL,
+        "updated_at" = now()`);
+    if (when) await routeService.setFinalDeadlineText(routeId, `Entregar \xE0s ${fmtBRT(when)}`).catch(() => {
+    });
+    return await this.get(routeId);
+  }
+  /**
+   * Programa a publicação da oferta (entrega − antecedência). Se esse horário já passou,
+   * publica na hora. A rota precisa estar em rascunho e ter data/hora de entrega.
+   */
+  async schedulePublish(routeId, actor) {
+    const route = await routeService.getRouteById(routeId);
+    if (!route) throw new Error("ROUTE_NOT_FOUND");
+    if (route.status !== "DRAFT") throw new Error("ROUTE_NOT_DRAFT");
+    const s = await this.get(routeId);
+    if (!s?.scheduled_for) throw new Error("SCHEDULED_FOR_REQUIRED");
+    const delivery = new Date(s.scheduled_for);
+    if (delivery.getTime() < Date.now()) throw new Error("SCHEDULED_FOR_IN_PAST");
+    const publishAt = new Date(delivery.getTime() - OFFER_LEAD_MINUTES() * 6e4);
+    if (publishAt.getTime() <= Date.now()) {
+      await routeService.publishRoute(routeId, actor);
+      await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL,
+        "published_at" = now(), "updated_at" = now() WHERE "route_id" = ${routeId}`);
+      return { schedule: await this.get(routeId), publishedNow: true };
+    }
+    await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = ${publishAt.toISOString()}, "publish_error" = NULL,
+      "updated_at" = now() WHERE "route_id" = ${routeId}`);
+    await routeService.logRouteEvent(routeId, "ROUTE_UPDATED", actor, `Oferta agendada para ${fmtBRT(publishAt)} (entrega ${fmtBRT(delivery)}).`).catch(() => {
+    });
+    return { schedule: await this.get(routeId), publishedNow: false };
+  }
+  async unschedulePublish(routeId, actor) {
+    if (!await ensureScheduleTable()) throw new Error("SCHEDULE_UNAVAILABLE");
+    await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL, "updated_at" = now()
+      WHERE "route_id" = ${routeId}`);
+    await routeService.logRouteEvent(routeId, "ROUTE_UPDATED", actor, "Oferta agendada desfeita (volta a ser rascunho comum).").catch(() => {
+    });
+    return this.get(routeId);
+  }
+  /**
+   * Publica as ofertas cujo horário chegou. Cada rota é "reservada" com um UPDATE atômico,
+   * então duas execuções simultâneas (timer interno + chamada externa) não publicam em dobro.
+   */
+  async tick() {
+    const result = { due: 0, published: 0, failed: 0 };
+    if (!await ensureScheduleTable()) return result;
+    const dueRes = await db.execute(
+      sql8`SELECT "route_id", "publish_at" FROM "route_schedules" WHERE "publish_at" IS NOT NULL AND "publish_at" <= now() ORDER BY "publish_at" LIMIT 20`
+    );
+    for (const r of rowsOf(dueRes)) {
+      result.due++;
+      const id = Number(r.route_id);
+      const claimed = rowsOf(
+        await db.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "updated_at" = now()
+          WHERE "route_id" = ${id} AND "publish_at" IS NOT NULL RETURNING "route_id"`)
+      );
+      if (!claimed.length) continue;
+      try {
+        const route = await routeService.getRouteById(id);
+        if (!route || route.status !== "DRAFT") continue;
+        await routeService.publishRoute(id, "AGENDADOR");
+        await db.execute(sql8`UPDATE "route_schedules" SET "published_at" = now(), "publish_error" = NULL, "updated_at" = now()
+          WHERE "route_id" = ${id}`);
+        result.published++;
+      } catch (e) {
+        result.failed++;
+        const msg = String(e?.message || e).slice(0, 300);
+        const s = await this.get(id).catch(() => null);
+        const stillTime = s?.scheduled_for && Date.parse(s.scheduled_for) > Date.now();
+        await db.execute(sql8`UPDATE "route_schedules" SET
+          "publish_at" = ${stillTime ? sql8`now() + interval '5 minutes'` : sql8`NULL`},
+          "publish_error" = ${msg}, "updated_at" = now() WHERE "route_id" = ${id}`).catch(() => {
+        });
+        console.warn(`[agendamento] rota #${id} n\xE3o publicada: ${msg}`);
+      }
+    }
+    return result;
+  }
+};
+var scheduleService = new ScheduleService();
+
+// src/server/takeatService.ts
 function vehicleOf(order) {
   const raw = order?.raw_payload || {};
   const p = raw?.data || raw?.order || raw;
@@ -10986,7 +11175,7 @@ var TakeatService = class {
   async getPendingCount() {
     const rows = await db.select({
       store_key: takeatOrders.store_key,
-      count: sql8`count(*)`
+      count: sql9`count(*)`
     }).from(takeatOrders).where(eq8(takeatOrders.status, "PENDING_COURIER")).groupBy(takeatOrders.store_key);
     let matrizCount = 0;
     let vinhedosCount = 0;
@@ -11024,7 +11213,8 @@ var TakeatService = class {
       dropoffCoordsOf(order.raw_payload)
     );
     const storeLabel = order.store_key === "VINHEDOS" ? "Vinhedos" : "Matriz";
-    const cargoDescription = `Pedido Takeat ${order.display_id} (${storeLabel}) \u2014 ${order.customer_name}${order.order_items_summary ? ` | ${order.order_items_summary}` : ""}`;
+    const channelLabel = order.raw_payload?.channel === "site" ? "Pedido do site" : "Pedido Takeat";
+    const cargoDescription = `${channelLabel} ${order.display_id} (${storeLabel}) \u2014 ${order.customer_name}${order.order_items_summary ? ` | ${order.order_items_summary}` : ""}`;
     const createdRoute = await routeService.createDraft(
       {
         pickup_type: "REGISTERED",
@@ -11046,6 +11236,12 @@ var TakeatService = class {
       },
       "TAKEAT_ORDER"
     );
+    const scheduledTo = order.raw_payload?.scheduledTo;
+    if (scheduledTo && Date.parse(scheduledTo) > Date.now()) {
+      await scheduleService.setScheduledFor(createdRoute.id, new Date(scheduledTo)).catch(
+        (e) => console.warn(`[Takeat] rota #${createdRoute.id}: data de entrega n\xE3o registrada (${e?.message})`)
+      );
+    }
     if (options?.offerNow) {
       try {
         await routeService.publishRoute(createdRoute.id, "TAKEAT_AUTO_DISPATCH");
@@ -11094,7 +11290,7 @@ var TakeatService = class {
     const brl = (n) => `R$ ${Number(n || 0).toFixed(2).replace(".", ",")}`;
     const when = raw.scheduledTo ? new Date(raw.scheduledTo).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "";
     return [
-      `Takeat ${order.display_id} (${storeLabel})`,
+      `${raw.channel === "site" ? "Site" : "Takeat"} ${order.display_id} (${storeLabel})`,
       vehicleOf(order).vehicle_category === "CAR" ? `CARRO${vehicleOf(order).vehicle_reason ? ` (${vehicleOf(order).vehicle_reason})` : ""}` : "",
       raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
       order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : "",
@@ -12301,7 +12497,7 @@ app.get("/api/admin/routes", requireAdminAuth, async (req, res) => {
       return res.status(400).json({ error: "INVALID_STATUS_FILTER" });
     }
     const routesList = await routeService.getRoutes(status);
-    res.json(routesList);
+    res.json(await scheduleService.decorate(routesList));
   } catch (err) {
     console.error("[API GET /api/admin/routes failed]", err.message);
     res.status(500).json({ error: "Failed to retrieve routes" });
@@ -12321,6 +12517,7 @@ app.get("/api/admin/routes/:id", requireAdminAuth, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
     const details = await routeService.getRouteDetails(id);
+    if (details?.route) details.route = (await scheduleService.decorate([details.route]))[0];
     res.json(details);
   } catch (err) {
     console.error(`[API GET /api/admin/routes/${req.params.id} failed]`, err.message);
@@ -12397,6 +12594,70 @@ app.post("/api/admin/routes/:id/cancel", requireAdminAuth, async (req, res) => {
     if (err.message === "ROUTE_NOT_FOUND") return res.status(404).json({ error: err.message });
     if (err.message === "ROUTE_ALREADY_CANCELLED") return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message || "Failed to cancel route" });
+  }
+});
+app.post("/api/admin/routes/:id/scheduled-for", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    const raw = req.body?.scheduled_for;
+    const when = raw ? new Date(raw) : null;
+    if (when && isNaN(when.getTime())) return res.status(400).json({ error: "INVALID_DATE", message: "Data/hora inv\xE1lida." });
+    const route = await routeService.getRouteById(id);
+    if (!route) return res.status(404).json({ error: "ROUTE_NOT_FOUND" });
+    if (route.status !== "DRAFT") return res.status(409).json({ error: "ROUTE_NOT_DRAFT", message: "S\xF3 d\xE1 para mudar o hor\xE1rio de rotas em rascunho." });
+    res.json({ success: true, schedule: await scheduleService.setScheduledFor(id, when) });
+  } catch (err) {
+    console.error(`[API POST /api/admin/routes/${req.params.id}/scheduled-for]`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/admin/routes/:id/schedule", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    if (req.body?.scheduled_for) {
+      const when = new Date(req.body.scheduled_for);
+      if (isNaN(when.getTime())) return res.status(400).json({ error: "INVALID_DATE", message: "Data/hora inv\xE1lida." });
+      await scheduleService.setScheduledFor(id, when);
+    }
+    const r = await scheduleService.schedulePublish(id, req.user?.email || "ADMIN");
+    res.json({ success: true, ...r, leadMinutes: OFFER_LEAD_MINUTES() });
+  } catch (err) {
+    const msg = String(err?.message || "");
+    const known = {
+      ROUTE_NOT_FOUND: [404, "Rota n\xE3o encontrada."],
+      ROUTE_NOT_DRAFT: [409, "S\xF3 rotas em rascunho podem ter a oferta agendada."],
+      SCHEDULED_FOR_REQUIRED: [400, "Informe a data e hora da entrega."],
+      SCHEDULED_FOR_IN_PAST: [400, "A data/hora da entrega j\xE1 passou."],
+      NO_ACTIVE_DRIVERS_AVAILABLE: [400, "Hor\xE1rio da oferta j\xE1 chegou, mas nenhum motorista ativo com ve\xEDculo compat\xEDvel est\xE1 dispon\xEDvel. A rota segue como rascunho."]
+    };
+    if (known[msg]) return res.status(known[msg][0]).json({ error: msg, message: known[msg][1] });
+    console.error(`[API POST /api/admin/routes/${req.params.id}/schedule]`, msg);
+    res.status(500).json({ error: msg || "Falha ao agendar a oferta." });
+  }
+});
+app.post("/api/admin/routes/:id/unschedule", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    res.json({ success: true, schedule: await scheduleService.unschedulePublish(id, req.user?.email || "ADMIN") });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/webhooks/scheduler/tick", async (req, res) => {
+  try {
+    const config = await takeatService.getConfig("MATRIZ");
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || "").trim();
+    const token = String(req.headers["x-webhook-token"] || req.headers["authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (!expected || a.length !== b.length || !crypto2.timingSafeEqual(a, b)) return res.status(401).json({ error: "INVALID_WEBHOOK_TOKEN" });
+    res.json({ success: true, ...await scheduleService.tick() });
+  } catch (err) {
+    console.error("[agendador tick]", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 app.delete("/api/admin/routes/:id", requireAdminAuth, async (req, res) => {
@@ -13355,6 +13616,11 @@ async function startServer() {
   initDbConstraints().catch((err) => {
     console.error("[initDbConstraints] Startup check warning:", err.message);
   });
+  setInterval(() => {
+    scheduleService.tick().then((r) => {
+      if (r.published || r.failed) console.log("[agendador]", JSON.stringify(r));
+    }).catch((e) => console.warn("[agendador]", e?.message));
+  }, 6e4);
   telegramBot.start().catch((err) => {
     console.error("[Kantine Delivery M1] Telegram Bot start error:", err.message);
   });

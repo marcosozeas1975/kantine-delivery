@@ -731,6 +731,15 @@ export class RouteService {
    * If OFFERED, notifies all drivers who received SENT offer.
    * If ACCEPTED/IN_TRANSIT/etc with an allocated driver, notifies the driver via Telegram.
    */
+  /** Atualiza o texto de prazo da rota (ex.: "Entregar às 16/11 15:00"). Só em rascunho. */
+  public async setFinalDeadlineText(id: number, text: string): Promise<void> {
+    await db.update(routes).set({ final_deadline: text.slice(0, 120) }).where(and(eq(routes.id, id), eq(routes.status, 'DRAFT')));
+  }
+
+  public async logRouteEvent(id: number, eventType: string, actor: string, details: string): Promise<void> {
+    await db.insert(routeEvents).values({ route_id: id, event_type: eventType, actor, details });
+  }
+
   /**
    * Exclui DE VEZ uma rota que nunca teve entregador (rascunho ou cancelada sem motorista).
    * Rotas que chegaram a ter motorista não podem ser excluídas (histórico financeiro/pendências).

@@ -102,6 +102,21 @@ export async function initDbConstraints() {
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
 
+      // Agendamento de corridas (tabela própria, separada de routes)
+      await client.query(`CREATE TABLE IF NOT EXISTS "route_schedules" (
+        "route_id" integer PRIMARY KEY REFERENCES "routes"("id") ON DELETE CASCADE,
+        "scheduled_for" timestamptz,
+        "publish_at" timestamptz,
+        "publish_error" text,
+        "published_at" timestamptz,
+        "updated_at" timestamptz DEFAULT now() NOT NULL
+      )`);
+      // O app usa SQL_USER; se for outro usuário além do admin, garante acesso à tabela nova
+      const appUser = String(process.env.SQL_USER || '');
+      if (appUser && appUser !== adminUser && /^[A-Za-z0-9_.@-]+$/.test(appUser)) {
+        await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "route_schedules" TO "${appUser}"`).catch(() => {});
+      }
+
       // M4.4B Versionamento de Dispatches de Ofertas
       await client.query(`ALTER TABLE "route_offer_dispatches" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);
 
