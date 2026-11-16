@@ -394,8 +394,14 @@ export const FreightEngineSettings: React.FC<Props> = ({
       }
       const data = await res.json();
       const storeLabel = targetStore === 'VINHEDOS' ? 'Vinhedos' : 'Matriz';
-      setSuccessMessage(`Pedido ${data.order?.display_id} do Takeat (${storeLabel}) recebido e calculado com sucesso pelo Motor de Fretes!`);
-      await fetchTakeatOrders('PENDING_COURIER', 'ALL');
+      if (data.order?.created_route_id) {
+        setSuccessMessage(`Pedido ${data.order?.display_id} do Takeat (${storeLabel}) recebido: rascunho da Rota #${data.order.created_route_id} criado em Rotas de Entrega, aguardando revisão e publicação.`);
+      } else if (data.order?.draft_error) {
+        setErrorMessage(`Pedido ${data.order?.display_id} (${storeLabel}) recebido, mas o rascunho de rota NÃO foi criado: ${data.order.draft_error}. Ele ficou em "Aguardando entregador".`);
+      } else {
+        setSuccessMessage(`Pedido ${data.order?.display_id} do Takeat (${storeLabel}) recebido e calculado com sucesso pelo Motor de Fretes!`);
+      }
+      await fetchTakeatOrders('ALL', 'ALL');
       setActiveSubTab('TAKEAT_ORDERS');
       if (onRefreshPendingTakeatCount) {
         onRefreshPendingTakeatCount();

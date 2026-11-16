@@ -10891,15 +10891,18 @@ var TakeatService = class {
       accepted_at: /* @__PURE__ */ new Date()
     }).returning();
     let order = inserted;
+    let draftError;
     try {
       order = (await this.convertOrderToRoute(order.id, { offerNow: false, asDraftRoute: true })).order;
     } catch (e) {
-      console.warn(`[Takeat] Pedido ${displayId}: n\xE3o foi poss\xEDvel criar o rascunho de rota (${e.message}). Fica aguardando na aba Takeat.`);
+      draftError = String(e?.message || e);
+      console.warn(`[Takeat] Pedido ${displayId}: n\xE3o foi poss\xEDvel criar o rascunho de rota (${draftError}). Fica aguardando na aba Takeat.`);
     }
     return {
-      order,
+      order: withVehicle(order),
       action: "CREATED",
-      storeKey
+      storeKey,
+      draftError
     };
   }
   /**
@@ -10971,7 +10974,7 @@ var TakeatService = class {
     const createdRoute = await routeService.createDraft(
       {
         pickup_type: "REGISTERED",
-        pickup_location_id: pickupPresetKey === "VINHEDOS" ? 2 : 1,
+        pickup_location_id: await this.pickupLocationId(pickupPresetKey === "VINHEDOS" ? "VINHEDOS" : "MATRIZ"),
         final_deadline: this.routeDeadline(order),
         total_fee: freightCalc.driver_remuneration.toFixed(2),
         accepted_vehicle_types: modality === "CAR" ? ["CAR"] : ["MOTO", "MOTO_WITH_BAG"],
@@ -11004,6 +11007,21 @@ var TakeatService = class {
       route: createdRoute,
       order: updatedOrder
     };
+  }
+  /** Local de coleta cadastrado da unidade (pelo nome: "Matriz"/"Vinhedos"); se não achar, os ids padrão 1/2. */
+  async pickupLocationId(store) {
+    const fallback = store === "VINHEDOS" ? 2 : 1;
+    try {
+      const all = await routeService.getPickupLocations();
+      const active = all.filter((p) => p.active !== false);
+      const want = store === "VINHEDOS" ? /vinhedo/i : /matriz/i;
+      const byName = active.find((p) => want.test(String(p.name || "")));
+      if (byName) return Number(byName.id);
+      if (active.some((p) => Number(p.id) === fallback)) return fallback;
+      if (store === "MATRIZ" && active.length === 1) return Number(active[0].id);
+    } catch {
+    }
+    return fallback;
   }
   /** Prazo da rota: horário agendado do Takeat, se houver; senão o padrão de 50 min. */
   routeDeadline(order) {
@@ -11115,7 +11133,7 @@ var TakeatService = class {
       },
       storeKey
     );
-    return result.order;
+    return { ...result.order, draft_error: result.draftError || null };
   }
   /**
    * Consulta ativa à API REST da Takeat usando a Chave de REST (Bearer Token)
@@ -13029,7 +13047,9 @@ async function handleTakeatWebhook(req, res, explicitStoreKey) {
       orderId: result.order.id,
       displayId: result.order.display_id,
       status: result.order.status,
-      calculatedFreight: result.order.calculated_freight_value
+      calculatedFreight: result.order.calculated_freight_value,
+      routeId: result.order.created_route_id ?? null,
+      draftError: result.draftError ?? null
     });
   } catch (err) {
     console.error("[Takeat Webhook Error]", err.message);
