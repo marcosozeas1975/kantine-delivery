@@ -11,6 +11,7 @@ import {
   GeoCoordinate,
 } from './freightEngine.ts';
 import { routeService } from './routeService.ts';
+import { scheduleService } from './scheduleService.ts';
 
 export interface TakeatConfigData {
   id: number;
@@ -652,7 +653,8 @@ export class TakeatService {
     );
 
     const storeLabel = order.store_key === 'VINHEDOS' ? 'Vinhedos' : 'Matriz';
-    const cargoDescription = `Pedido Takeat ${order.display_id} (${storeLabel}) — ${order.customer_name}${
+    const channelLabel = (order.raw_payload as any)?.channel === 'site' ? 'Pedido do site' : 'Pedido Takeat';
+    const cargoDescription = `${channelLabel} ${order.display_id} (${storeLabel}) — ${order.customer_name}${
       order.order_items_summary ? ` | ${order.order_items_summary}` : ''
     }`;
 
@@ -678,6 +680,15 @@ export class TakeatService {
       },
       'TAKEAT_ORDER'
     );
+
+    // Pedido agendado (Takeat ou site): a rota já nasce com a data/hora de entrega,
+    // pronta para "Agendar oferta" (publicação automática antes do horário)
+    const scheduledTo = (order.raw_payload as any)?.scheduledTo;
+    if (scheduledTo && Date.parse(scheduledTo) > Date.now()) {
+      await scheduleService.setScheduledFor(createdRoute.id, new Date(scheduledTo)).catch((e: any) =>
+        console.warn(`[Takeat] rota #${createdRoute.id}: data de entrega não registrada (${e?.message})`)
+      );
+    }
 
     // Se solicitado ofertar imediatamente aos entregadores
     if (options?.offerNow) {
@@ -739,7 +750,7 @@ export class TakeatService {
       ? new Date(raw.scheduledTo).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })
       : '';
     return [
-      `Takeat ${order.display_id} (${storeLabel})`,
+      `${raw.channel === 'site' ? 'Site' : 'Takeat'} ${order.display_id} (${storeLabel})`,
       vehicleOf(order).vehicle_category === 'CAR' ? `CARRO${vehicleOf(order).vehicle_reason ? ` (${vehicleOf(order).vehicle_reason})` : ''}` : '',
       raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
       order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : '',

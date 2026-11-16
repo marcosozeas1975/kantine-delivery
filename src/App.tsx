@@ -490,8 +490,18 @@ export interface DeliveryConfiguration {
   default_route_discount_percent: number;
 }
 
+/** Data/hora no horário de Brasília, ex.: "17/11 15:00". */
+function fmtScheduleBRT(iso?: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+}
+
 interface Route {
   id: number;
+  // Agendamento (route_schedules): data/hora de entrega e publicação programada da oferta
+  scheduled_for?: string | null;
+  publish_at?: string | null;
+  publish_error?: string | null;
   pickup_type: 'REGISTERED' | 'AD_HOC';
   pickup_location_id: number | null;
   pickup_name: string;
@@ -955,8 +965,12 @@ export default function App() {
     );
   }, [routeStatusCounts]);
 
-  // Rotas em rascunho prontas para publicação
-  const draftRoutesCount = routeStatusCounts['DRAFT'] || 0;
+  // Rascunhos aguardando revisão (os que já têm oferta agendada contam à parte)
+  const scheduledRoutesCount = useMemo(
+    () => (allRoutesList.length > 0 ? allRoutesList : routesList).filter((r) => r.status === 'DRAFT' && r.publish_at).length,
+    [allRoutesList, routesList]
+  );
+  const draftRoutesCount = Math.max(0, (routeStatusCounts['DRAFT'] || 0) - scheduledRoutesCount);
 
   const hasCriticalAlerts =
     pendingApprovalDriversCount > 0 ||
@@ -2364,6 +2378,63 @@ export default function App() {
     }
   };
 
+  // ---------------- Agendamento de corridas ----------------
+  const [scheduleTarget, setScheduleTarget] = useState<Route | null>(null);
+  const [scheduleInput, setScheduleInput] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const OFFER_LEAD_MIN = 90;
+
+  /** ISO → "datetime-local" no horário de Brasília (AAAA-MM-DDTHH:MM). */
+  const toLocalInput = (iso?: string | null) => {
+    if (!iso) return '';
+    const d = new Date(new Date(iso).getTime() - 3 * 3600_000);
+    return d.toISOString().slice(0, 16);
+  };
+
+  const openScheduleModal = (route: Route) => {
+    setScheduleTarget(route);
+    setScheduleInput(toLocalInput(route.scheduled_for));
+  };
+
+  const handleConfirmSchedule = async () => {
+    if (!scheduleTarget) return;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(scheduleInput)) { setErrorMessage('Informe a data e a hora da entrega.'); return; }
+    setScheduleSaving(true);
+    setErrorMessage(null);
+    try {
+      const scheduled_for = new Date(`${scheduleInput}:00-03:00`).toISOString();
+      const res = await fetch(`/api/admin/routes/${scheduleTarget.id}/schedule`, {
+        method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify({ scheduled_for }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Falha ao agendar a oferta.');
+      setSuccessMessage(
+        data.publishedNow
+          ? `Rota #${scheduleTarget.id}: o horário da oferta já tinha chegado, então ela foi publicada agora.`
+          : `Rota #${scheduleTarget.id}: oferta agendada para ${fmtScheduleBRT(data.schedule?.publish_at)} (entrega ${fmtScheduleBRT(data.schedule?.scheduled_for)}).`
+      );
+      setScheduleTarget(null);
+      await fetchRoutes();
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  const handleUnschedule = async (route: Route) => {
+    if (!confirm(`Desfazer a oferta agendada da rota #${route.id}? Ela volta a ser um rascunho comum (a data de entrega é mantida).`)) return;
+    try {
+      const res = await fetch(`/api/admin/routes/${route.id}/unschedule`, { method: 'POST', headers: await getAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Falha ao desagendar.');
+      setSuccessMessage(`Rota #${route.id}: oferta desagendada.`);
+      await fetchRoutes();
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    }
+  };
+
   // Exclusão definitiva: só rascunhos ou canceladas que nunca tiveram entregador
   const canDeleteRoute = (route: Route) =>
     (route.status === 'DRAFT' || route.status === 'CANCELLED') && !route.accepted_driver_id;
@@ -2857,6 +2928,14 @@ export default function App() {
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
                 <span>{draftRoutesCount} {draftRoutesCount === 1 ? 'rascunho' : 'rascunhos'}</span>
+              </span>
+            )}
+            {scheduledRoutesCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-xs"
+                title={`${scheduledRoutesCount} corrida(s) com oferta agendada (publicação automática)`}
+              >
+                <span>⏰ {scheduledRoutesCount} {scheduledRoutesCount === 1 ? 'agendada' : 'agendadas'}</span>
               </span>
             )}
           </button>
@@ -3462,6 +3541,21 @@ export default function App() {
                               <Clock className="w-3.5 h-3.5 text-neutral-400" />
                               <span>{route.final_deadline}</span>
                             </div>
+                            {route.scheduled_for && !/^Entregar às/.test(route.final_deadline || '') && (
+                              <div className="text-[10px] font-semibold text-neutral-600 mt-0.5">
+                                📅 Entrega {fmtScheduleBRT(route.scheduled_for)}
+                              </div>
+                            )}
+                            {route.status === 'DRAFT' && route.publish_at && (
+                              <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                                ⏰ Oferta automática {fmtScheduleBRT(route.publish_at)}
+                              </div>
+                            )}
+                            {route.status === 'DRAFT' && route.publish_error && (
+                              <div className="text-[10px] font-semibold text-red-700 mt-0.5 whitespace-normal max-w-[220px]" title={route.publish_error}>
+                                Oferta não publicada: {route.publish_error === 'NO_ACTIVE_DRIVERS_AVAILABLE' ? 'nenhum motorista ativo compatível (nova tentativa em 5 min)' : route.publish_error}
+                              </div>
+                            )}
                           </td>
 
                           <td className="px-3 py-3 whitespace-nowrap w-[100px] min-w-[95px]">
@@ -3584,6 +3678,28 @@ export default function App() {
                                 >
                                   <Send className="w-3 h-3" />
                                   <span>Publicar</span>
+                                </button>
+                              )}
+
+                              {route.status === 'DRAFT' && !route.publish_at && (
+                                <button
+                                  type="button"
+                                  onClick={() => openScheduleModal(route)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Programar a publicação da oferta para antes do horário de entrega"
+                                >
+                                  ⏰ Agendar oferta
+                                </button>
+                              )}
+
+                              {route.status === 'DRAFT' && route.publish_at && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnschedule(route)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Desfazer a oferta agendada (volta a ser rascunho comum)"
+                                >
+                                  Desagendar
                                 </button>
                               )}
 
@@ -7699,6 +7815,36 @@ export default function App() {
       {/* ============================================================== */}
       {/* MODAL: CANCELAMENTO OPERACIONAL DE ROTA                        */}
       {/* ============================================================== */}
+      {scheduleTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !scheduleSaving && setScheduleTarget(null)}>
+          <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-black text-neutral-900">⏰ Agendar oferta · Rota #{scheduleTarget.id}</h3>
+            <label className="block text-xs font-semibold text-neutral-700">
+              Data e hora da entrega
+              <input
+                type="datetime-local"
+                value={scheduleInput}
+                onChange={(e) => setScheduleInput(e.target.value)}
+                className="mt-1 w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </label>
+            <p className="text-xs text-neutral-600">
+              {/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(scheduleInput)
+                ? `A oferta será publicada automaticamente para os entregadores em ${fmtScheduleBRT(new Date(new Date(`${scheduleInput}:00-03:00`).getTime() - OFFER_LEAD_MIN * 60000).toISOString())} (${OFFER_LEAD_MIN} min antes da entrega).`
+                : `A oferta é publicada automaticamente ${OFFER_LEAD_MIN} min antes do horário de entrega.`}
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setScheduleTarget(null)} disabled={scheduleSaving}
+                className="px-3 py-2 rounded-lg border border-neutral-300 text-xs font-semibold hover:bg-neutral-50">Voltar</button>
+              <button type="button" onClick={handleConfirmSchedule} disabled={scheduleSaving}
+                className="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold">
+                {scheduleSaving ? 'Agendando…' : 'Agendar oferta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {routeToCancel && (
         <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-200 space-y-4">
