@@ -1759,6 +1759,8 @@ async function handleTakeatWebhook(req: any, res: any, explicitStoreKey?: string
       displayId: result.order.display_id,
       status: result.order.status,
       calculatedFreight: result.order.calculated_freight_value,
+      routeId: result.order.created_route_id ?? null,
+      draftError: result.draftError ?? null,
     });
   } catch (err: any) {
     console.error('[Takeat Webhook Error]', err.message);

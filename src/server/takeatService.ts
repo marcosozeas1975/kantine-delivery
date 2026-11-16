@@ -242,6 +242,8 @@ export class TakeatService {
     action: 'CREATED' | 'UPDATED' | 'IGNORED' | 'CANCELED';
     storeKey: 'MATRIZ' | 'VINHEDOS';
     reason?: string;
+    /** Motivo, quando o rascunho de rota não pôde ser criado automaticamente. */
+    draftError?: string;
   }> {
     const allConfigs = await this.getAllConfigs();
 
@@ -519,16 +521,19 @@ export class TakeatService {
     // Como as entregas avulsas: o pedido vira um RASCUNHO em "Rotas de Entrega", aguardando revisão e publicação.
     // Se falhar, o pedido continua na aba de pedidos Takeat para criar a rota manualmente.
     let order = inserted as TakeatOrderRecord;
+    let draftError: string | undefined;
     try {
       order = (await this.convertOrderToRoute(order.id, { offerNow: false, asDraftRoute: true })).order;
     } catch (e: any) {
-      console.warn(`[Takeat] Pedido ${displayId}: não foi possível criar o rascunho de rota (${e.message}). Fica aguardando na aba Takeat.`);
+      draftError = String(e?.message || e);
+      console.warn(`[Takeat] Pedido ${displayId}: não foi possível criar o rascunho de rota (${draftError}). Fica aguardando na aba Takeat.`);
     }
 
     return {
-      order,
+      order: withVehicle(order),
       action: 'CREATED',
       storeKey,
+      draftError,
     };
   }
 
@@ -634,7 +639,7 @@ export class TakeatService {
     const createdRoute = await routeService.createDraft(
       {
         pickup_type: 'REGISTERED',
-        pickup_location_id: pickupPresetKey === 'VINHEDOS' ? 2 : 1,
+        pickup_location_id: await this.pickupLocationId(pickupPresetKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ'),
         final_deadline: this.routeDeadline(order),
         total_fee: freightCalc.driver_remuneration.toFixed(2),
         accepted_vehicle_types: modality === 'CAR' ? ['CAR'] : ['MOTO', 'MOTO_WITH_BAG'],
@@ -676,6 +681,21 @@ export class TakeatService {
       route: createdRoute,
       order: updatedOrder as TakeatOrderRecord,
     };
+  }
+
+  /** Local de coleta cadastrado da unidade (pelo nome: "Matriz"/"Vinhedos"); se não achar, os ids padrão 1/2. */
+  private async pickupLocationId(store: 'MATRIZ' | 'VINHEDOS'): Promise<number> {
+    const fallback = store === 'VINHEDOS' ? 2 : 1;
+    try {
+      const all = await routeService.getPickupLocations();
+      const active = all.filter((p: any) => p.active !== false);
+      const want = store === 'VINHEDOS' ? /vinhedo/i : /matriz/i;
+      const byName = active.find((p: any) => want.test(String(p.name || '')));
+      if (byName) return Number(byName.id);
+      if (active.some((p: any) => Number(p.id) === fallback)) return fallback;
+      if (store === 'MATRIZ' && active.length === 1) return Number(active[0].id);
+    } catch { /* usa o padrão */ }
+    return fallback;
   }
 
   /** Prazo da rota: horário agendado do Takeat, se houver; senão o padrão de 50 min. */
@@ -740,7 +760,7 @@ export class TakeatService {
     items?: string;
     customerName?: string;
     total?: number;
-  }): Promise<TakeatOrderRecord> {
+  }): Promise<TakeatOrderRecord & { draft_error?: string | null }> {
     const storeKey = preset?.storeKey || (Math.random() > 0.5 ? 'VINHEDOS' : 'MATRIZ');
     
     // Bairros próximos de cada unidade para realismo
@@ -816,7 +836,7 @@ export class TakeatService {
       storeKey
     );
 
-    return result.order;
+    return { ...result.order, draft_error: result.draftError || null } as TakeatOrderRecord & { draft_error: string | null };
   }
 
   /**
