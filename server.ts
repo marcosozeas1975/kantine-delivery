@@ -887,6 +887,24 @@ app.post('/api/admin/routes/:id/cancel', requireAdminAuth, async (req: AuthReque
 });
 
 // M4.4 Preview e Classificação de Edição de Rota
+// Excluir de vez uma rota que nunca teve entregador (rascunho ou cancelada sem motorista)
+app.delete('/api/admin/routes/:id', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+    await routeService.deleteRouteWithoutDriver(id);
+    res.json({ success: true, message: `Rota #${id} excluída.` });
+  } catch (err: any) {
+    const msg = String(err?.message || '');
+    if (msg === 'ROUTE_NOT_FOUND') return res.status(404).json({ error: msg });
+    if (msg === 'ROUTE_HAS_DRIVER' || msg === 'ROUTE_NOT_DELETABLE') {
+      return res.status(409).json({ error: msg, message: 'Só rotas em rascunho ou canceladas que nunca tiveram entregador podem ser excluídas.' });
+    }
+    console.error(`[API DELETE /api/admin/routes/${req.params.id} error]`, msg);
+    res.status(500).json({ error: msg || 'Falha ao excluir rota.' });
+  }
+});
+
 app.post('/api/admin/routes/:id/edit-preview', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const id = parseInt(req.params.id, 10);

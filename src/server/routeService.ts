@@ -11,6 +11,8 @@ import {
   routeStops,
   routeOfferDispatches,
   routeEvents,
+  routeUpdates,
+  takeatOrders,
   drivers,
 } from '../db/schema.ts';
 import { eq, desc, asc, and, or, isNotNull, sql } from 'drizzle-orm';
@@ -729,6 +731,27 @@ export class RouteService {
    * If OFFERED, notifies all drivers who received SENT offer.
    * If ACCEPTED/IN_TRANSIT/etc with an allocated driver, notifies the driver via Telegram.
    */
+  /**
+   * Exclui DE VEZ uma rota que nunca teve entregador (rascunho ou cancelada sem motorista).
+   * Rotas que chegaram a ter motorista não podem ser excluídas (histórico financeiro/pendências).
+   */
+  public async deleteRouteWithoutDriver(id: number): Promise<void> {
+    const route = await this.getRouteById(id);
+    if (!route) throw new Error('ROUTE_NOT_FOUND');
+    if (route.accepted_driver_id) throw new Error('ROUTE_HAS_DRIVER');
+    if (route.status !== 'DRAFT' && route.status !== 'CANCELLED') throw new Error('ROUTE_NOT_DELETABLE');
+
+    await db.transaction(async (tx) => {
+      await tx.delete(routeOfferDispatches).where(eq(routeOfferDispatches.route_id, id));
+      await tx.delete(routeUpdates).where(eq(routeUpdates.route_id, id));
+      await tx.delete(routeEvents).where(eq(routeEvents.route_id, id));
+      await tx.delete(routeStops).where(eq(routeStops.route_id, id));
+      // Pedido Takeat que gerou a rota: perde o vínculo e sai da fila
+      await tx.update(takeatOrders).set({ created_route_id: null, status: 'DISMISSED' }).where(eq(takeatOrders.created_route_id, id));
+      await tx.delete(routes).where(eq(routes.id, id));
+    });
+  }
+
   public async cancelRoute(
     id: number,
     actor?: string,
