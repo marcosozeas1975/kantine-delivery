@@ -518,6 +518,10 @@ var init_schema = __esm({
         calculated_freight_details: jsonb("calculated_freight_details"),
         created_route_id: integer("created_route_id").references(() => routes.id, { onDelete: "set null" }),
         raw_payload: jsonb("raw_payload"),
+        vehicle_category: text("vehicle_category"),
+        // CAR (bolos) | MOTO (demais) — informado pela ponte do Zelo
+        vehicle_reason: text("vehicle_reason"),
+        // ex.: "Bolo Leo Ávila (M)"
         created_at: timestamp("created_at").defaultNow().notNull(),
         accepted_at: timestamp("accepted_at"),
         dispatched_at: timestamp("dispatched_at")
@@ -657,6 +661,8 @@ async function initDbConstraints() {
 
         ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_key" text DEFAULT 'MATRIZ';
         ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "store_id" text;
+        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "vehicle_category" text;
+        ALTER TABLE "takeat_orders" ADD COLUMN IF NOT EXISTS "vehicle_reason" text;
 
         -- Ensure both MATRIZ and VINHEDOS rows exist in takeat_configs
         INSERT INTO "takeat_configs" ("store_key", "store_name", "store_id", "default_pickup_preset", "auto_calculate_freight", "preferred_modality", "is_active")
@@ -8735,6 +8741,7 @@ Seu cadastro permanece desativado.`;
 });
 
 // server.ts
+import crypto2 from "crypto";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path3 from "path";
@@ -10725,6 +10732,22 @@ var TakeatService = class {
       payload?.displayId || payload?.code || payload?.numero || payload?.orderNumber || orderId.slice(-4)
     ).replace(/^#/, "");
     const displayId = `#${displayCode}`;
+    const event = String(rawPayload?.event || payload?.event || "");
+    if (event === "order.canceled") {
+      const [existing] = await db.select().from(takeatOrders).where(eq8(takeatOrders.takeat_order_id, orderId)).limit(1);
+      if (!existing) throw new Error(`Pedido ${orderId} n\xE3o encontrado para cancelar.`);
+      if (existing.status === "PENDING_COURIER") {
+        const [updated] = await db.update(takeatOrders).set({ status: "DISMISSED" }).where(eq8(takeatOrders.id, existing.id)).returning();
+        return { order: updated, action: "CANCELED", storeKey };
+      }
+      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas j\xE1 est\xE1 ${existing.status}: avise o entregador.`);
+      return {
+        order: existing,
+        action: "IGNORED",
+        storeKey,
+        reason: `Cancelado no Takeat, mas j\xE1 est\xE1 ${existing.status}: avise o entregador.`
+      };
+    }
     const customer = payload?.customer || payload?.cliente || {};
     const customerName = String(
       customer?.name || customer?.nome || payload?.customerName || payload?.nome_cliente || "Cliente Takeat"
@@ -10785,7 +10808,10 @@ var TakeatService = class {
       paymentMethod = payload.paymentMethod;
     }
     const pickupPresetKey = storeKey === "VINHEDOS" ? "VINHEDOS" : config.default_pickup_preset || "MATRIZ";
-    const modality = config.preferred_modality || "MOTO";
+    const incomingVehicle = String(payload?.vehicle || "").toUpperCase();
+    const vehicleCategory = incomingVehicle === "CAR" || incomingVehicle === "MOTO" ? incomingVehicle : null;
+    const vehicleReason = vehicleCategory ? String(payload?.vehicleReason || "").slice(0, 300) || null : null;
+    const modality = vehicleCategory || config.preferred_modality || "MOTO";
     const freightCalc = this.calculateOrderFreight(
       matchedNeighborhood,
       formattedAddress,
@@ -10823,7 +10849,9 @@ var TakeatService = class {
         pickup_preset: pickupPresetKey,
         calculated_freight_value: calculatedFreightValue,
         calculated_freight_details: freightCalc,
-        raw_payload: rawPayload
+        raw_payload: rawPayload,
+        vehicle_category: vehicleCategory ?? existing.vehicle_category,
+        vehicle_reason: vehicleCategory ? vehicleReason : existing.vehicle_reason
       }).where(eq8(takeatOrders.id, existing.id)).returning();
       return {
         order: updated,
@@ -10839,6 +10867,8 @@ var TakeatService = class {
       customer_name: customerName,
       customer_phone: customerPhone,
       destination_address: formattedAddress,
+      vehicle_category: vehicleCategory,
+      vehicle_reason: vehicleReason,
       destination_neighborhood: matchedNeighborhood,
       destination_city: city,
       order_items_summary: itemsSummary || "Pedido Kantine Delivery",
@@ -10915,7 +10945,7 @@ var TakeatService = class {
     }
     const order = rows[0];
     const config = await this.getConfig(order.store_key || "MATRIZ");
-    const modality = options?.modality || config.preferred_modality || "MOTO";
+    const modality = order.vehicle_category || options?.modality || config.preferred_modality || "MOTO";
     const pickupPresetKey = options?.pickupPreset || order.pickup_preset || (order.store_key === "VINHEDOS" ? "VINHEDOS" : "MATRIZ");
     const pickupPreset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
     const freightCalc = this.calculateOrderFreight(
@@ -10940,7 +10970,7 @@ var TakeatService = class {
             cargo_description: cargoDescription,
             is_horizontal_condo: false,
             delivery_mode: "IN_PERSON",
-            observations: `Originado do Takeat (${storeLabel}). Valor pedido: R$ ${order.order_total || "0,00"}. Pagto: ${order.payment_method || "PIX"}`
+            observations: this.stopObservations(order, storeLabel)
           }
         ]
       },
@@ -10962,6 +10992,27 @@ var TakeatService = class {
       route: createdRoute,
       order: updatedOrder
     };
+  }
+  /** Observações da parada para o entregador (cobrança, troco, referência, horário agendado). */
+  stopObservations(order, storeLabel) {
+    const raw = order.raw_payload || {};
+    if (raw?.source !== "kantine-zelo-bridge") {
+      return `Originado do Takeat (${storeLabel}). Valor pedido: R$ ${order.order_total || "0,00"}. Pagto: ${order.payment_method || "PIX"}`;
+    }
+    const d = raw.delivery || {};
+    const brl = (n) => `R$ ${Number(n || 0).toFixed(2).replace(".", ",")}`;
+    const when = raw.scheduledTo ? new Date(raw.scheduledTo).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "";
+    return [
+      `Takeat ${order.display_id} (${storeLabel})`,
+      order.vehicle_category === "CAR" ? `CARRO${order.vehicle_reason ? ` (${order.vehicle_reason})` : ""}` : "",
+      raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
+      order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : "",
+      d.reference ? `Ref.: ${d.reference}` : "",
+      d.zipCode ? `CEP ${d.zipCode}` : "",
+      when ? `Agendado: ${when}` : "",
+      order.customer_phone ? `Tel.: ${order.customer_phone}` : "",
+      raw.notes ? `Obs.: ${raw.notes}` : ""
+    ].filter(Boolean).join(" \xB7 ");
   }
   /**
    * Descarta / dispensa pedido
@@ -12938,13 +12989,19 @@ async function handleTakeatWebhook(req, res, explicitStoreKey) {
   try {
     const rawPayload = req.body;
     console.log(`[Takeat Webhook Received (${explicitStoreKey || "AUTO"})]`, JSON.stringify(rawPayload).slice(0, 300));
-    const storeKeyToValidate = explicitStoreKey === "VINHEDOS" ? "VINHEDOS" : "MATRIZ";
+    const storeKeyToValidate = String(explicitStoreKey || "").toUpperCase() === "VINHEDOS" ? "VINHEDOS" : "MATRIZ";
     const config = await takeatService.getConfig(storeKeyToValidate);
-    if (config.webhook_secret) {
-      const authHeader = req.headers["authorization"] || req.headers["x-takeat-signature"] || req.headers["x-webhook-token"];
-      if (authHeader && authHeader !== config.webhook_secret && !authHeader.includes(config.webhook_secret)) {
-        console.warn(`[Takeat Webhook ${storeKeyToValidate}] Token mismatch warning`);
-      }
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || "").trim();
+    if (!expected) {
+      return res.status(503).json({ error: "WEBHOOK_SECRET_NOT_CONFIGURED", details: `Cadastre o Webhook secret da loja ${storeKeyToValidate} nas configura\xE7\xF5es do Takeat.` });
+    }
+    const rawToken = String(req.headers["x-webhook-token"] || req.headers["authorization"] || req.headers["x-takeat-signature"] || "");
+    const token = rawToken.replace(/^Bearer\s+/i, "").trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto2.timingSafeEqual(a, b)) {
+      console.warn(`[Takeat Webhook ${storeKeyToValidate}] token inv\xE1lido \u2014 pedido recusado`);
+      return res.status(401).json({ error: "INVALID_WEBHOOK_TOKEN" });
     }
     const result = await takeatService.processIncomingWebhook(rawPayload, explicitStoreKey);
     res.status(200).json({
