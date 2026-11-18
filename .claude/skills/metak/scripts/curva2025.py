@@ -2,14 +2,14 @@
 Entrada: data/vendas_2025.json (linhas {data, loja M|V, grupo, produto, qtd}, vendas do Takeat de 01/11 a 31/12/2025 sem cancelados).
 Saída: {rows, meta} com uma linha por dia + loja + meta: data, ref_2025, operacao, grupo, alvo.
 Regras aprovadas em 15/11/2026:
-- metas gerais: 2.800 minis e 2.200 tradicionais e recheados (01/11 a 31/12/2026);
+- metas gerais: 2.800 minis e 2.500 tradicionais e recheados (meta corrigida de 2.200 para 2.500 em 17/11/2026) (01/11 a 31/12/2026);
 - Kantine Gastronomia = 85% da parte que a Matriz teve em 2025; o resto da meta vai 70% Center Shopping e 30% Vinhedos;
 - Gastronomia e Vinhedos seguem a própria curva de 2025; Center Shopping segue a curva da Matriz;
 - até 19/12 o dia de 2026 usa o mesmo dia da semana de 2025 (364 dias antes); de 20/12 a 31/12, a mesma data.
 Uso: python3 curva2025.py data/vendas_2025.json SAIDA.json"""
 import json, sys, collections as C, datetime as dt
 
-METAS = {'Mini Kantitones': 2800, 'Tradicionais e recheados': 2200}
+METAS = {'Mini Kantitones': 2800, 'Tradicionais e recheados': 2500}
 NOME = {'M': 'Kantine Gastronomia', 'V': 'Kantine Vinhedos', 'CS': 'Kantine Center Shopping'}
 vendas = json.load(open(sys.argv[1]))
 porDia, tot = C.defaultdict(C.Counter), C.Counter()
