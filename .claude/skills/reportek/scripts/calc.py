@@ -65,6 +65,7 @@ def proc(sess,split):
 OM,em,im=proc(S['M'],True); OV,ev,iv=proc(S['V'],False)
 out={}
 for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
+  if not O['cmd']: print('==',nm,'sem vendas no periodo'); continue
   print('==',nm,round(O['rev'],2),O['cmd'],round(O['rev']/O['cmd'],2),'itens',O['nitems'],'ppl',O['ppl'],'last',O['last'])
   print(' chan',{k:round(v,2) for k,v in O['chan'].most_common()})
   print(" chan_cnt",C.Counter(x[2].get("table",{}).get("table_type") if x[2].get("table") else None for x in O["sess"]))
