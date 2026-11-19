@@ -99,6 +99,8 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 - Cartões com as 3 operações (faturamento, comandas, ticket) e o total do grupo.
 - **Comparativo**: Matriz "normal" (sem Natal e sem pedido fora da curva) × Vinhedos × Center Shopping. Inclua diferença % de faturamento, ticket médio e perfil de canal (salão × balcão).
 
+**Comparativo com o período anterior** (logo abaixo dos cartões do consolidado): siga a seção 10. Cada cartão ganha uma linha com a variação % do faturamento.
+
 **Avaliações do dia no Takeat** (antes da Conferência)
 - Busque com `get_ratings(restaurant_id=<id>, start_date=<dia>, end_date=<dia+1>)` para cada loja. As datas dessa ferramenta são em UTC: filtre por `created_at` − 3h para ficar só com o dia local.
 - Por loja: nota média, quantidade de avaliações e média de cada critério (`food` = comida, `service` = atendimento, `price` = preço, `enviroment` = ambiente), dizendo em quantas avaliações os critérios foram preenchidos.
@@ -122,7 +124,8 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 
 Depois de publicar, responda curto, para leitura no celular:
 - Uma linha por operação: `*Operação*: R$ X em N comandas · ticket R$ Y`.
-- Total do grupo e 1–3 alertas (pedido grande, cancelamentos, problemas de conferência).
+- Em cada linha, acrescente a variação do faturamento contra o período de comparação (ex.: `+8% vs sex 13/11`). Se não houver base de comparação, diga isso em uma frase.
+- Total do grupo (com variação) e 1–3 alertas (pedido grande, cancelamentos, problemas de conferência).
 - O link da página.
 
 ## 8. Modo período (semana, mês ou intervalo)
@@ -139,6 +142,7 @@ Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, c
   - Em período de 14 dias ou mais, a **média por dia da semana** (seg a dom) de cada operação.
   - Rankings, canais, pagamentos, cancelamentos, descontos e avaliações somados no período. Nas avaliações, liste todas as notas abaixo de 5 e todos os comentários do período.
   - Pedidos fora da curva: comandas que representem 10% ou mais do faturamento de um dia, listadas com a data.
+  - **Comparativo com o período anterior** (seção 10): mês → mesmo mês do ano anterior; semana → semana anterior; intervalo → período imediatamente anterior de mesmo tamanho. Cartões com variação %, tabela de comparação e, se houver dados, a linha de referência no gráfico dia a dia.
 - **Publicação**: link fixo separado, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
   - Procure com `Artifact` `action: "list"` um artifact com esse título. Se existir, faça `action: "read"` e publique com o mesmo `url`. Se não existir, publique um novo (`icon: "chart"`) e registre o URL aqui na skill.
   - **Nunca** publique um período no link do relatório diário.
@@ -156,3 +160,39 @@ Os resumos diários ficam guardados no banco da página do relatório diário (h
 - **Sempre buscar de novo no Takeat:** dias ausentes do cache, dias com `dia_fechado: false` e os últimos 7 dias (cancelamentos e ajustes do iFood ainda podem mudar o número). Dias mais antigos que isso valem como estão no cache.
 - **Na tarefa automática das 22h30:** grave o dia de hoje como `dia_fechado: false`. Grave também o dia anterior completo, buscando de novo no Takeat, para que fique como `dia_fechado: true`.
 
+
+## 10. Comparativo com o período anterior
+
+Todo relatório (diário ou período) compara o resultado com um período de referência. A base de comparação depende do que foi pedido:
+
+| Pedido | Comparar com |
+|---|---|
+| Dia (`/reportek 14/11`, sem argumento) | **O mesmo dia da semana anterior** (7 dias antes). Ex.: sábado 14/11 × sábado 07/11. |
+| Mês (`novembro`, `mês`) | **O mesmo mês do ano anterior** (novembro/2026 × novembro/2025). Se o mês está parcial, use o mesmo intervalo de dias do ano anterior (01/11 a 18/11 × 01/11 a 18/11 de 2025), para comparar igual com igual. |
+| Semana (`semana`, `semana atual`) | **A semana imediatamente anterior**, com o mesmo número de dias (seg a ... × seg a ...). |
+| Intervalo (`DD/MM a DD/MM`) | **O período imediatamente anterior, com o mesmo número de dias** (10 dias pedidos → os 10 dias antes do início). Se o intervalo cobre exatamente um mês fechado, use o mesmo mês do ano anterior. |
+
+Se o usuário pedir outra base (ex.: "compare com outubro"), use a que ele pediu.
+
+**Como buscar os dados de referência**
+1. Leia primeiro o cache (seção 9): `ArtifactData list` na coleção `dias` e filtre as datas do período de referência. Use os dias com `dia_fechado: true` como estão.
+2. Para datas que faltam no cache (ou com `dia_fechado: false`), busque no Takeat com `get_table_sessions` e rode `calc.py --json-dir`, como na seção 3. Siga todas as páginas. Grave esses dias no cache, para a próxima comparação sair do cache. Em comparação com o ano anterior, avise o usuário no começo de que a busca de um mês inteiro leva alguns minutos.
+3. Se a loja não tinha dados no período de referência (ex.: o Takeat não existia ainda, a loja não abriu ou a resposta vem vazia), **não invente base**: escreva "sem dados de <período> no Takeat" e siga sem a variação daquela operação.
+4. O Center Shopping só opera de 06/11/2026 a 05/01/2027, então **não tem comparativo** com o ano anterior nem com semanas antes de 06/11. Mostre "sem base de comparação" e, em relatório diário ou semanal dentro da janela, compare normalmente com o mesmo dia da semana/semana anterior se ela também estiver dentro da janela.
+
+**Regras de comparação (igual com igual)**
+- Compare a Gastronomia **sem Natal 2026** com a Gastronomia do período de referência. Antes de 06/11 a Matriz é a loja inteira, e como o Natal 2026 não existia, a comparação já é consistente.
+- Mostre também a Gastronomia **sem pedidos grandes** (seção 4) nos dois períodos quando houver pedido fora da curva em algum deles, para a variação não vir de uma encomenda isolada.
+- Compare **dias de venda com dias de venda**: em período, use a média por dia de venda, além do total. Se os dois períodos têm quantidade de dias de venda diferente (feriado, loja fechada, domingo), diga isso.
+- Se o dia ou o período em andamento é parcial, compare só até o mesmo horário/dia no período de referência, ou avise que a comparação é parcial.
+- Variação = (atual ÷ referência − 1). Mostre em % com sinal (`+8%`, `−3%`) e a diferença em R$.
+
+**O que mostrar**
+- Em cada cartão do consolidado, uma linha de variação do faturamento (ex.: `+8% vs sáb 07/11`, `−3% vs nov/2025`).
+- Uma tabela **"Comparado com <referência>"** logo abaixo dos cartões, por operação: faturamento, comandas, ticket médio (e média por dia de venda em período), com atual, referência e variação. Inclua o total do grupo.
+- Em uma frase, diga o que explica a variação (canal, dia da semana, pedido grande, comandas ou ticket). Aponte se foi mais comandas ou ticket maior.
+- Nos relatórios diários, quando a variação do dia for maior que 20% para cima ou para baixo, destaque isso como alerta.
+- O gráfico dia a dia do modo período pode mostrar o período de referência como linha cinza tracejada, quando houver dados.
+- Nas avaliações, compare a nota média de cada loja com a do período de referência quando houver.
+- No cache, nada muda: a referência usa os mesmos documentos `dias`. Não guarde a comparação, calcule sempre na hora.
+- Na seção "Conferência", registre de onde veio a base de comparação (cache ou Takeat) e qualquer dia que faltou.
