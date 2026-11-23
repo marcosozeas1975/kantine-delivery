@@ -144,19 +144,19 @@ for r in pend+hist:
 th=''.join(f'<tr><td>{E(g)}</td>'+''.join(f'<td>{brl(mat[g][u]) if mat[g][u] else "–"}</td>' for u in 'MVS')+f'<td><b>{brl(sum(mat[g].values()))}</b></td></tr>' for g in GORD if g in mat)
 conf_h=''.join(f'<li>{E(c)}</li>' for c in dict.fromkeys(conf)) or '<li>Nenhuma inconsistência encontrada.</li>'
 now=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)-dt.timedelta(hours=3)
-CSS_EXTRA=r'''.filters2{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:0 0 14px}.filters2 label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mu);min-width:0}.filters2 select{font:inherit;font-size:14px;padding:7px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);max-width:100%;min-width:0}#fx{border:1px solid var(--ln);background:var(--card);color:var(--tx);padding:7px 13px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer}.fsum{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px 16px;margin-bottom:12px}.fsum table td:first-child{text-align:left}.dq{font-weight:700;color:var(--tx)}
+CSS_EXTRA=r'''.filters2{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:0 0 14px}.filters2 label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mu);min-width:0}.filters2 input{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);min-width:0}.filters2 select{font:inherit;font-size:14px;padding:7px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);max-width:100%;min-width:0}#fx{border:1px solid var(--ln);background:var(--card);color:var(--tx);padding:7px 13px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer}.fsum{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px 16px;margin-bottom:12px}.fsum table td:first-child{text-align:left}.dq{font-weight:700;color:var(--tx)}
 '''
 JS=r'''<script>
-(function(){var ST={u:'',g:'',p:''},fc=document.getElementById('fc'),fp=document.getElementById('fp'),sum=document.getElementById('fsum');
+(function(){var ST={u:'',g:'',p:'',f:'',t:''},fc=document.getElementById('fc'),fp=document.getElementById('fp'),sum=document.getElementById('fsum');
 var items=[].slice.call(document.querySelectorAll('.it[data-g]'));
 function uniq(a){return a.filter(function(x,i){return a.indexOf(x)===i}).sort(function(a,b){return a.localeCompare(b,'pt-BR')})}
 function fillC(){uniq(items.map(function(i){return i.dataset.g})).forEach(function(g){var o=document.createElement('option');o.value=g;o.textContent=g;fc.appendChild(o)})}
 function fillP(){var cur=ST.p;fp.innerHTML='<option value="">Todos</option>';uniq(items.filter(function(i){return !ST.g||i.dataset.g===ST.g}).map(function(i){return i.dataset.p})).forEach(function(n){var o=document.createElement('option');o.value=n;o.textContent=n;fp.appendChild(o)});if([].some.call(fp.options,function(o){return o.value===cur})){fp.value=cur}else{ST.p='';fp.value=''}}
 function brl(v){return 'R$ '+v.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.')}
 function fmtDay(d){var x=d.split('-');return x[2]+'/'+x[1]}
-function apply(){var act=ST.g||ST.p,days={};
+function apply(){var act=ST.g||ST.p||ST.f||ST.t,days={};
 document.querySelectorAll('.ord[data-un]').forEach(function(o){var uok=!ST.u||o.dataset.un===ST.u,vis=0;
-o.querySelectorAll('.it[data-g]').forEach(function(i){var ok=uok&&(!ST.g||i.dataset.g===ST.g)&&(!ST.p||i.dataset.p===ST.p);i.style.display=ok?'':'none';if(ok){vis++;var h=i.closest('[data-day]');if(h){var d=h.dataset.day,pend=h.classList.contains('day');var k=d+(pend?'P':'H');days[k]=days[k]||{d:d,pend:pend,q:0,v:0};days[k].q+=parseFloat(i.dataset.q);days[k].v+=parseFloat(i.dataset.v)}}});
+o.querySelectorAll('.it[data-g]').forEach(function(i){var hd=i.closest('[data-day]'),dd=hd?hd.dataset.day:'';var ok=uok&&(!ST.g||i.dataset.g===ST.g)&&(!ST.p||i.dataset.p===ST.p)&&(!ST.f||dd>=ST.f)&&(!ST.t||dd<=ST.t);i.style.display=ok?'':'none';if(ok){vis++;var h=i.closest('[data-day]');if(h){var d=h.dataset.day,pend=h.classList.contains('day');var k=d+(pend?'P':'H');days[k]=days[k]||{d:d,pend:pend,q:0,v:0};days[k].q+=parseFloat(i.dataset.q);days[k].v+=parseFloat(i.dataset.v)}}});
 o.style.display=(uok&&vis)?'':'none'});
 document.querySelectorAll('.cat').forEach(function(c){var vis=[].slice.call(c.querySelectorAll('.ord[data-un]')).filter(function(o){return o.style.display!=='none'});c.style.display=vis.length?'':'none';
 var m={};vis.forEach(function(o){o.querySelectorAll('.it[data-g]').forEach(function(i){if(i.style.display!=='none'){m[i.dataset.p]=(m[i.dataset.p]||0)+parseFloat(i.dataset.q)}})});
@@ -164,12 +164,13 @@ var pl=c.querySelector('.pl');if(pl){pl.textContent=Object.keys(m).sort(function
 document.querySelectorAll('.day').forEach(function(d){var vis=[].slice.call(d.querySelectorAll('.cat')).filter(function(c){return c.style.display!=='none'});d.style.display=vis.length?'':'none';
 var dq=d.querySelector('.dq'),k=d.dataset.day+'P';dq.textContent=(act&&days[k])?('· filtro: '+days[k].q+' un · '+brl(days[k].v)):''});
 document.querySelectorAll('details[data-day]').forEach(function(d){var vis=[].some.call(d.querySelectorAll('.ord[data-un]'),function(o){return o.style.display!=='none'});d.style.display=vis?'':'none'});
-if(act){var ks=Object.keys(days).sort(),tq=0,tv=0,h='<b>'+(ST.p||ST.g)+'</b>'+(ST.p&&ST.g?' <span class="sub">'+ST.g+'</span>':'')+'<div style="overflow-x:auto"><table><tr><th>Dia</th><th>Situação</th><th>Qtd</th><th>Valor</th></tr>';
+if(act){var ks=Object.keys(days).sort(),tq=0,tv=0,h='<b>'+(ST.p||ST.g||'Todos os produtos')+'</b>'+((ST.f||ST.t)?' <span class="sub">'+(ST.f?fmtDay(ST.f):'início')+' a '+(ST.t?fmtDay(ST.t):'fim')+'</span>':'')+(ST.p&&ST.g?' <span class="sub">'+ST.g+'</span>':'')+'<div style="overflow-x:auto"><table><tr><th>Dia</th><th>Situação</th><th>Qtd</th><th>Valor</th></tr>';
 ks.forEach(function(k){var x=days[k];tq+=x.q;tv+=x.v;h+='<tr><td>'+fmtDay(x.d)+'</td><td>'+(x.pend?'pendente':'entregue')+'</td><td>'+x.q+'</td><td>'+brl(x.v)+'</td></tr>'});
 h+='<tr><td><b>Total</b></td><td></td><td><b>'+tq+'</b></td><td><b>'+brl(tv)+'</b></td></tr></table></div>';sum.innerHTML=ks.length?h:'Nenhuma encomenda com esse filtro.';sum.hidden=false}else{sum.hidden=true}}
 fillC();fillP();
+document.getElementById('fd').onchange=function(){ST.f=this.value;apply()};document.getElementById('ft').onchange=function(){ST.t=this.value;apply()};
 fc.onchange=function(){ST.g=fc.value;fillP();apply()};fp.onchange=function(){ST.p=fp.value;apply()};
-document.getElementById('fx').onclick=function(){ST.g='';ST.p='';fc.value='';fillP();apply()};
+document.getElementById('fx').onclick=function(){ST.g='';ST.p='';ST.f='';ST.t='';fc.value='';document.getElementById('fd').value='';document.getElementById('ft').value='';fillP();apply()};
 var bs=document.querySelectorAll('#f button');bs.forEach(function(b){b.onclick=function(){bs.forEach(function(x){x.classList.remove('on')});b.classList.add('on');ST.u=b.dataset.u;apply()}});
 })();
 </script>'''
@@ -199,7 +200,7 @@ table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{padding:7px 6p
 <h2>Pendentes de entrega · por dia e categoria</h2>
 <p class="sub" style="margin:-6px 0 10px">Os filtros valem também para o histórico mais abaixo.</p>
 <div class="filters" id="f"><button class="on" data-u="">Todas</button><button data-u="M">Matriz</button><button data-u="V">Vinhedos</button><button data-u="S">Site</button></div>
-<div class="filters2"><label>Categoria <select id="fc"><option value="">Todas</option></select></label><label>Produto <select id="fp"><option value="">Todos</option></select></label><button id="fx" type="button">Limpar filtros</button></div>
+<div class="filters2"><label>Categoria <select id="fc"><option value="">Todas</option></select></label><label>Produto <select id="fp"><option value="">Todos</option></select></label><label>De <input type="date" id="fd"></label><label>Até <input type="date" id="ft"></label><button id="fx" type="button">Limpar filtros</button></div>
 <div class="fsum" id="fsum" hidden></div>
 {pend_html}
 <h2>Visão por unidade</h2><div class="units">{units}</div>
