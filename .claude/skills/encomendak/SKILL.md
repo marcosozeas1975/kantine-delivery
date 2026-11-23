@@ -37,7 +37,7 @@ Ele gera o HTML completo (cartões, pendentes por dia/categoria com filtro por u
 
 1. Carregue a skill `artifact-design` antes da primeira publicação.
 2. Link fixo: registrado abaixo. Faça `Artifact` `action: "read"` nele e publique o HTML com o mesmo `url` (título "Encomendas Kantine"). Se não existir mais, procure com `action: "list"` pelo título; se não achar, publique novo (`icon: "calendar"`) e **registre o URL aqui**.
-3. A página é privada; o usuário decide se compartilha. Não passe `capabilities`.
+3. A página é privada; o usuário decide se compartilha. **Sempre publique com `capabilities: {"downloads": true}`** (o botão "Imprimir lista (A4)" salva um HTML formatado em A4 com os filtros ativos; `window.print()` não funciona dentro de artifacts).
 
 **Link fixo atual**: https://claude.ai/artifact/Br7qZ9ci8FhChdxikh641s (criado em 23/11/2026, privado)
 
