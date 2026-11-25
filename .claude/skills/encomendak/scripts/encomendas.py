@@ -38,6 +38,7 @@ def grupo(name,cat):
     if cat=='BOLOS E SOBREMESAS' or (cat=='Site Kantine' and any(k in n for k in ('bolo','cheesecake','merengue','torta'))): return 'Bolos e sobremesas'
     if cat in ('PÂTISSERIE FRANCESA & SOBREMESAS','CHOCOLATES E MACARONS','LE PETITS (Miniaturas)') or 'macaron' in n: return 'Doces e pâtisserie'
     if cat=='PARA PRESENTEAR': return 'Cestas e presentes'
+    if n.startswith(('bolo ','bolo\xa0')) or ' bolo ' in n or n.startswith(('cheesecake','merengue','torta ')): return 'Bolos e sobremesas'
     return 'Outros'
 GORD=['Natal','Sobremesas de Natal','Bolos e sobremesas','Doces e pâtisserie','Cestas e presentes','Revenda','Outros']
 UN={'M':'Matriz','V':'Vinhedos','S':'Site'}
