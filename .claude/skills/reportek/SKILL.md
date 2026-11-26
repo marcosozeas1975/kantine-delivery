@@ -143,8 +143,9 @@ Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, c
   - Em período de 14 dias ou mais, a **média por dia da semana** (seg a dom) de cada operação.
   - Rankings, canais, pagamentos, cancelamentos, descontos e avaliações somados no período. Nas avaliações, liste todas as notas abaixo de 5 e todos os comentários do período.
   - Pedidos fora da curva: comandas que representem 10% ou mais do faturamento de um dia, listadas com a data.
-- **Publicação**: link novo a cada uso, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
-  - Publique sempre um artifact novo (sem `url`, `icon: "chart"`); não reutilize o link de períodos anteriores.
+- **Publicação**: link fixo próprio do período, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
+  - **Link fixo do período (decisão de 26/11/2026):** https://claude.ai/artifact/TtKR4gSLJpzRSWPcjACJNb. Faça `action: "read"` nele e publique com o mesmo `url`. Não use os links de período antigos (TyctYf…), que foram aposentados.
+  - O relatório **diário** continua com link novo a cada uso (seção 6).
   - **Nunca** publique um período no artifact do cache (seção 9).
 
 ## 9. Cache no banco da página (histórico)
