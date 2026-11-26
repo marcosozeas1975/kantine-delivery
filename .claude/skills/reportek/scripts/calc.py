@@ -32,6 +32,8 @@ def proc(sess,split):
     if s['status']=='open':
       if paid<=0: excl.append((s['session_number'],'open sem pagamento',s['total_price']));continue
       incl_open.append((s['session_number'],s['total_price'],paid))
+    if float(s['total_price'] or 0)<=0 and paid<=0:
+      excl.append((s['session_number'],'zerada sem pagamento',s['total_price']));continue  # Takeat nao conta comanda zerada
     lines=[]
     for bl in s['bills']:
       for b in bl['order_baskets']:
@@ -44,7 +46,15 @@ def proc(sess,split):
     tot=float(s['total_price'] or 0); raw=sum(l[3] for l in lines)
     f= tot/raw if raw else 1
     tt=(s.get('table') or {}).get('table_type')
-    ch='iFood' if any(p['payment_method']['name'] in('Pagamento Online iFood','Cupom iFood') for p in s['payments']) else {'table':'Mesa','balcony':'Balcão','delivery':'Delivery próprio'}.get(tt,tt)
+    # Regras iguais ao relatorio do Takeat (decisao de 26/11/2026):
+    #  - iFood = qualquer pagamento com "iFood" no nome (Online, Cupom, Pagamento na Entrega)
+    #  - iFood fatura o que foi pago, COM a taxa de entrega
+    #  - Cashback Takeat e desconto, nao receita (limitado ao valor da comanda)
+    isifood=any('ifood' in p['payment_method']['name'].lower() for p in s['payments'])
+    fee=float(s['delivery_tax_price'] or 0) if isifood else 0.0
+    cb=min(tot,sum(float(p['payment_value']) for p in s['payments'] if 'cashback' in p['payment_method']['name'].lower()))
+    adj=fee-cb   # ajuste de sessao sobre o valor dos produtos
+    ch='iFood' if isifood else {'table':'Mesa','balcony':'Balcão','delivery':'Delivery próprio'}.get(tt,tt)
     by=C.defaultdict(list)
     for l in lines:
       n=l[0] in NAT; nn=isnat_name(l[1])
@@ -56,6 +66,8 @@ def proc(sess,split):
       by[op].append(l)
     for op,ls in by.items():
       O=ops[op]; r=sum(l[3] for l in ls)*f
+      share_=(sum(l[3] for l in ls)/raw) if raw else 1
+      r+=adj*share_; O['taxa_ifood']=O.get('taxa_ifood',0)+fee*share_; O['cashback']=O.get('cashback',0)+cb*share_
       O['rev']+=r;O['cmd']+=1;O['chan'][ch]+=r;O.setdefault('chancnt',C.Counter())[ch]+=1;O['hour'][loc(s['start_time']).hour]+=r;dk=loc(s['start_time']).date().isoformat();O['day'][dk]+=r;O['daycmd'][dk]+=1
       O['sess'].append((s['session_number'],r,s))
       if op!='CS': O['ppl']+=float(s['people_at_table'] or 0)
@@ -71,7 +83,7 @@ OM,em,im=proc(S['M'],True); OV,ev,iv=proc(S['V'],False)
 out={}
 for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
   if not O['cmd']: print('==',nm,'sem vendas no periodo'); continue
-  print('==',nm,round(O['rev'],2),O['cmd'],round(O['rev']/O['cmd'],2),'itens',O['nitems'],'ppl',O['ppl'],'last',O['last'])
+  print('==',nm,round(O['rev'],2),O['cmd'],round(O['rev']/O['cmd'],2),'itens',O['nitems'],'ppl',O['ppl'],'last',O['last'],'| inclui taxa iFood',round(O.get('taxa_ifood',0),2),'| cashback descontado',round(O.get('cashback',0),2))
   print(' chan',{k:round(v,2) for k,v in O['chan'].most_common()})
   print(" chan_cnt",C.Counter(x[2].get("table",{}).get("table_type") if x[2].get("table") else None for x in O["sess"]))
   print(' pay',{k:round(v,2) for k,v in O['pay'].most_common()})
@@ -93,7 +105,7 @@ def resumo(O,dia_rev_total):
   grandes=[{'comanda':n,'valor':r2(v),'itens':[(o['amount'],o['product']['name']) for bl in ss['bills'] for b in bl['order_baskets'] for o in b['orders'] if not o['canceled_at']][:10],
             'desconto':ss['discount_obs'],'retirada':ss['scheduled_to']}
            for n,v,ss in O['sess'] if dia_rev_total and v>=0.10*dia_rev_total and v>=500]
-  return {'faturamento':r2(O['rev']),'comandas':O['cmd'],'itens':O['nitems'],'pessoas':O['ppl'],
+  return {'faturamento':r2(O['rev']),'taxa_ifood_incluida':r2(O.get('taxa_ifood',0)),'cashback_descontado':r2(O.get('cashback',0)),'regra':'takeat-2026-11-26','comandas':O['cmd'],'itens':O['nitems'],'pessoas':O['ppl'],
     'ultima_comanda':O['last'].strftime('%H:%M') if O['last'] else None,
     'canais':{k:{'valor':r2(v),'comandas':O.get('chancnt',{}).get(k,0)} for k,v in O['chan'].items()},
     'pagamentos':{k:r2(v) for k,v in O['pay'].items()},

@@ -61,17 +61,22 @@ python3 .claude/skills/reportek/scripts/calc.py <arquivo get_products da Matriz>
 
 Ele imprime, por operação (`M` = Gastronomia, `CS` = Center Shopping, `V` = Vinhedos): faturamento, comandas, ticket, itens, pessoas, última comanda (já em horário local, ignore o `+00:00`), canais, pagamentos, faturamento por hora, ranking de produtos, descontos, maiores comandas, cancelamentos, exclusões, abertos incluídos e a conferência categoria × nome. Para detalhes de uma comanda específica (ex.: encomenda grande), consulte o arquivo com um trecho curto de Python.
 
-## 4. Regras de cálculo (iguais às análises de referência)
+## 4. Regras de cálculo (iguais ao relatório do Takeat — decisão de 26/11/2026)
 
-- **Faturamento** = valor dos produtos (`orders[].total_price`, ou `total_price` da sessão/basket), **sem taxa de entrega** (`delivery_tax_price`) e **já com descontos** aplicados.
-- **Excluir**: itens com `canceled_at` preenchido, baskets cancelados, deliveries cancelados (`delivery_canceled_at`) e mesas transferidas (sessões com status `transferred` ou equivalente, sem pagamento próprio).
-- **Incluir** comandas ainda em aberto que já tenham pagamento total ou parcial (ex.: iFood pago que ainda aparece aberto). Mencione-as em "como os números foram calculados".
+O faturamento segue o relatório "Faturamento" do Takeat Multilojas, para que os números batam com a tela dele. O `calc.py` já aplica tudo isto. Conferido em 26/11/2026: Vinhedos de 01 a 25/11 deu 1.947 comandas e R$ 150.093,82, igual ao Takeat em todos os canais.
+
+- **Faturamento da comanda** = valor dos produtos (`total_price`, já com descontos) **menos o Cashback Takeat** usado no pagamento (o cashback é desconto, não receita; limitado ao valor da comanda) **mais a taxa de entrega nas comandas do iFood** (`delivery_tax_price`). No iFood isso equivale ao total pago pelo iFood.
+- **Delivery próprio**: valor dos produtos, sem a taxa de entrega.
+- **Excluir**: itens com `canceled_at`, baskets cancelados, deliveries cancelados (`delivery_canceled_at`), mesas transferidas (`status = transfer`), comandas abertas sem pagamento e **comandas zeradas sem pagamento** (o Takeat não conta).
+- **Incluir** comandas ainda abertas que já tenham pagamento total ou parcial. Mencione-as em "como os números foram calculados".
 - **Ticket médio** = faturamento ÷ número de comandas.
-- **Canal**: iFood quando há pagamento "Pagamento Online iFood" ou "Cupom iFood"; senão, pelo `table.table_type`: `table` = mesa, `balcony` = balcão, `delivery` = delivery próprio. Observação: com o Natal 2026 separado, quase todo o balcão do CNPJ da Matriz é o quiosque. Use os campos `table.table_type`, `is_delivery`, `order_baskets[].channel` e `intended_payments.ifood_paid`.
+- **Canal**: **iFood** quando qualquer pagamento tiver "iFood" no nome ("Pagamento Online iFood", "Cupom iFood", "Pagamento na Entrega iFood"); senão, pelo `table.table_type`: `table` = mesa, `balcony` = balcão, `delivery` = delivery próprio. Com o Natal 2026 separado, quase todo o balcão do CNPJ da Matriz é o quiosque.
+- **Produtos (rankings)**: valor dos itens com o desconto da comanda rateado; não recebem taxa de entrega nem cashback.
+- **Transparência**: na seção "como os números foram calculados", informe quanto de taxa de entrega do iFood entrou e quanto de cashback foi descontado (o script imprime os dois e grava `taxa_ifood_incluida` e `cashback_descontado` no cache).
 - **Pagamentos**: some `payments[].payment_value` por `payment_method.name`. Mostre valor e % dos principais.
 - **Pessoas atendidas**: soma de `people_at_table` (quando houver).
 - **Horários**: agrupe o faturamento por hora local de abertura da comanda (`start_time` − 3h). Aponte o pico e as horas fracas fora do padrão.
-- **Pedido fora da curva**: uma comanda isolada que represente **≥ 10% do faturamento do dia** da operação, ou encomenda grande (muitas unidades, retirada futura, desconto negociado), deve ser destacada como "Atenção a um pedido grande": mostre o cliente, os itens, o desconto, a data de retirada (se estiver em `details`, `scheduled_to` ou observações) e o **dia sem esse pedido** (faturamento, comandas, ticket).
+- **Pedido fora da curva**: uma comanda isolada que represente **≥ 10% do faturamento do dia** da operação, ou encomenda grande (muitas unidades, retirada futura, desconto negociado), deve ser destacada como "Atenção a um pedido grande": mostre os itens, o desconto, a data de retirada (se estiver em `details`, `scheduled_to` ou observações) e o **dia sem esse pedido** (faturamento, comandas, ticket).
 - **Cancelamentos e descontos**: liste os itens cancelados (valor e `cancel_reason`) e o total de descontos com a origem (cupom iFood, `discount_obs`, etc.).
 - Valores em R$ no padrão brasileiro (`R$ 1.874,00`). Nos rankings pode arredondar para inteiro (`R$ 266`).
 
@@ -158,6 +163,6 @@ Os resumos diários ficam guardados no banco do artifact de cache (https://claud
   2. Transcreva as avaliações num arquivo de texto (uma por linha: `LOJA MM-DD HH:MM MESA NOTA CRITERIOS [COMENTARIO]`, hora local, critérios como 4 dígitos comida/atendimento/preço/ambiente ou `-`) e rode `python3 scripts/ratings.py <arquivo> <pasta>`. Ele acrescenta a cada dia o campo `avaliacoes`: por loja (`M`, `V` e, se houver, `CS`), `total`, `media`, `criterios` (comida, atendimento, preco, ambiente), `com_criterios`, `abaixo_de_5` (mesa, hora, nota, critérios abaixo de 5) e `comentarios` (mesa, hora, nota, texto). Não guarde nome nem telefone.
   3. Grave com `ArtifactData`: `set` em `dias/<AAAA-MM-DD>` com `file_path`. Se o documento já existir, leia antes (`get`) e passe o `version` em `if_version`. Para vários dias, use `batch` (até 50 por chamada).
 - **Ler para um período:** `ArtifactData` `list` na coleção `dias` com `out_dir` (pagine com `query.cursor`, até 1000 por página) e rode `python3 scripts/period.py <out_dir> <início> <fim>`. Ele soma o período e mostra a série por dia, o melhor e o pior dia, a média por dia da semana, canais, pagamentos, descontos, produtos, pedidos grandes, avaliações abaixo de 5, comentários, cancelamentos e a conferência. Também lista os dias gravados antes de fechar, que precisam ser buscados de novo.
-- **Sempre buscar de novo no Takeat:** dias ausentes do cache, dias com `dia_fechado: false` e os últimos 7 dias (cancelamentos e ajustes do iFood ainda podem mudar o número). Dias mais antigos que isso valem como estão no cache.
+- **Sempre buscar de novo no Takeat:** dias ausentes do cache, dias com `dia_fechado: false`, **dias gravados com a regra antiga (sem `regra: "takeat-2026-11-26"` nas operações; tudo antes de 26/11/2026)** e os últimos 7 dias (cancelamentos e ajustes do iFood ainda podem mudar o número). Dias mais antigos que isso valem como estão no cache.
 - **Na tarefa automática das 22h30:** grave o dia de hoje como `dia_fechado: false`. Grave também o dia anterior completo, buscando de novo no Takeat, para que fique como `dia_fechado: true`.
 
