@@ -314,6 +314,17 @@ export const routeOfferDispatches = pgTable(
   ]
 );
 
+// Agendamento de corridas: data/hora de entrega e publicação programada da oferta.
+// Tabela própria (sem chave estrangeira), separada de routes: falha aqui só afeta o agendamento.
+export const routeSchedules = pgTable('route_schedules', {
+  route_id: integer('route_id').primaryKey(),
+  scheduled_for: timestamp('scheduled_for', { withTimezone: true }),
+  publish_at: timestamp('publish_at', { withTimezone: true }),
+  publish_error: text('publish_error'),
+  published_at: timestamp('published_at', { withTimezone: true }),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Route Events Audit Table (M2.1 Auditoria de Rotas)
 export const routeEvents = pgTable('route_events', {
   id: serial('id').primaryKey(),

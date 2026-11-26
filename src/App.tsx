@@ -490,8 +490,18 @@ export interface DeliveryConfiguration {
   default_route_discount_percent: number;
 }
 
+/** Data/hora no horário de Brasília, ex.: "17/11 15:00". */
+function fmtScheduleBRT(iso?: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+}
+
 interface Route {
   id: number;
+  // Agendamento (route_schedules): data/hora de entrega e publicação programada da oferta
+  scheduled_for?: string | null;
+  publish_at?: string | null;
+  publish_error?: string | null;
   pickup_type: 'REGISTERED' | 'AD_HOC';
   pickup_location_id: number | null;
   pickup_name: string;
@@ -614,12 +624,18 @@ interface TelegramStatus {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [adminKey, setAdminKey] = useState<string>(() => {
-    return localStorage.getItem('kantine_admin_key') || '';
-  });
-  const [useAdminKey, setUseAdminKey] = useState<boolean>(() => {
-    return !!localStorage.getItem('kantine_admin_key');
-  });
+  // Chave administrativa digitada manualmente (opcional). A antiga chave padrão não vale mais e é apagada.
+  const readStoredAdminKey = () => {
+    try {
+      const k = localStorage.getItem('kantine_admin_key') || '';
+      if (k === 'kantine-admin-secure-key-' + '2026') { localStorage.removeItem('kantine_admin_key'); return ''; }
+      return k;
+    } catch { return ''; }
+  };
+  const [adminKey, setAdminKey] = useState<string>(readStoredAdminKey);
+  const [useAdminKey, setUseAdminKey] = useState<boolean>(() => !!readStoredAdminKey());
+  const [authReady, setAuthReady] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
 
   // Main navigation tab
   const [activeTab, setActiveTab] = useState<
@@ -949,8 +965,12 @@ export default function App() {
     );
   }, [routeStatusCounts]);
 
-  // Rotas em rascunho prontas para publicação
-  const draftRoutesCount = routeStatusCounts['DRAFT'] || 0;
+  // Rascunhos aguardando revisão (os que já têm oferta agendada contam à parte)
+  const scheduledRoutesCount = useMemo(
+    () => (allRoutesList.length > 0 ? allRoutesList : routesList).filter((r) => r.status === 'DRAFT' && r.publish_at).length,
+    [allRoutesList, routesList]
+  );
+  const draftRoutesCount = Math.max(0, (routeStatusCounts['DRAFT'] || 0) - scheduledRoutesCount);
 
   const hasCriticalAlerts =
     pendingApprovalDriversCount > 0 ||
@@ -958,7 +978,8 @@ export default function App() {
     totalPendenciasCount > 0 ||
     pendingPaymentsCount > 0 ||
     pendingTakeatCount > 0 ||
-    inFluxRoutesCount > 0;
+    inFluxRoutesCount > 0 ||
+    draftRoutesCount > 0;
 
   // New Route Form State (Motor de Fretes Kantine)
   interface FormStop {
@@ -1037,6 +1058,7 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
+      setAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
@@ -1046,21 +1068,39 @@ export default function App() {
       'Content-Type': 'application/json',
     };
 
-    if (useAdminKey && adminKey.trim()) {
-      headers['x-admin-key'] = adminKey.trim();
-      return headers;
-    }
-
+    // Login Google tem prioridade; a chave administrativa só vai se digitada (sem chave padrão embutida)
     if (currentUser) {
       const token = await currentUser.getIdToken();
       headers['Authorization'] = `Bearer ${token}`;
       return headers;
     }
 
-    // Default internal fallback for local dev
-    headers['x-admin-key'] = 'kantine-admin-secure-key-2026';
+    if (useAdminKey && adminKey.trim()) {
+      headers['x-admin-key'] = adminKey.trim();
+    }
     return headers;
   };
+
+  // Confere se a conta logada tem acesso ao painel (e-mail autorizado no servidor)
+  useEffect(() => {
+    if (!authReady) return;
+    if (!currentUser && !(useAdminKey && adminKey.trim())) { setAccessError(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/takeat/pending-count', { headers: await getAuthHeaders() });
+        if (cancelled) return;
+        if (res.status === 401 || res.status === 403 || res.status === 503) {
+          const body = await res.json().catch(() => ({}));
+          setAccessError(body.message || 'Acesso não autorizado ao painel.');
+        } else {
+          setAccessError(null);
+        }
+      } catch { /* rede: não bloqueia */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authReady, currentUser, useAdminKey, adminKey]);
 
   const safeFetchJson = async <T,>(url: string, init?: RequestInit): Promise<T | null> => {
     try {
@@ -1742,8 +1782,12 @@ export default function App() {
     }
   };
 
+  // Só busca dados depois que o login (Google ou chave) estiver pronto: evita chamadas sem credencial (401)
+  const canLoad = authReady && !accessError && (!!currentUser || (useAdminKey && !!adminKey.trim()));
+
   // Carga inicial e quando as credenciais/usuário mudarem
   useEffect(() => {
+    if (!canLoad) return;
     fetchDrivers();
     fetchPickupLocations();
     fetchRoutes();
@@ -1754,31 +1798,44 @@ export default function App() {
     fetchPayments();
     fetchVehicleAudit();
     fetchTakeatPendingCount();
-  }, [currentUser, useAdminKey, adminKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canLoad, currentUser, useAdminKey, adminKey]);
 
   // Efeitos dedicados para cada filtro (evita disparar todas as requisições desnecessariamente)
   useEffect(() => {
+    if (!canLoad) return;
     fetchDrivers(driverFilter);
-  }, [driverFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[driverFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchRoutes(routeFilter);
-  }, [routeFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[routeFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchReferrals(referralFilter);
-  }, [referralFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[referralFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchIncidents(incidentResolutionFilter);
-  }, [incidentResolutionFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...[incidentResolutionFilter], canLoad]);
 
   useEffect(() => {
+    if (!canLoad) return;
     fetchPayments(paymentFilter);
-  }, [paymentFilter, selectedDriverFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentFilter, selectedDriverFilter, canLoad]);
 
   // Polling em tempo real (12s) silencioso para atualizar as 4 situações críticas em segundo plano
+  // Recriado quando o login muda, para usar sempre as credenciais atuais
   useEffect(() => {
+    if (!canLoad) return;
     const timer = setInterval(() => {
       fetchDrivers(undefined, true);
       fetchReferrals(undefined, true);
@@ -1788,7 +1845,8 @@ export default function App() {
       fetchTakeatPendingCount(true);
     }, 12000);
     return () => clearInterval(timer);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canLoad, currentUser, useAdminKey, adminKey]);
 
   // Driver Actions (M1 & M1.1)
   const handleApproveDriver = async (driverId: number) => {
@@ -2320,6 +2378,87 @@ export default function App() {
     }
   };
 
+  // ---------------- Agendamento de corridas ----------------
+  const [scheduleTarget, setScheduleTarget] = useState<Route | null>(null);
+  const [scheduleInput, setScheduleInput] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const OFFER_LEAD_MIN = 90;
+
+  /** ISO → "datetime-local" no horário de Brasília (AAAA-MM-DDTHH:MM). */
+  const toLocalInput = (iso?: string | null) => {
+    if (!iso) return '';
+    const d = new Date(new Date(iso).getTime() - 3 * 3600_000);
+    return d.toISOString().slice(0, 16);
+  };
+
+  const openScheduleModal = (route: Route) => {
+    setScheduleTarget(route);
+    setScheduleError(null);
+    setScheduleInput(toLocalInput(route.scheduled_for));
+  };
+
+  const handleConfirmSchedule = async () => {
+    if (!scheduleTarget) return;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(scheduleInput)) { setScheduleError('Informe a data e a hora da entrega.'); return; }
+    setScheduleSaving(true);
+    setScheduleError(null);
+    setErrorMessage(null);
+    try {
+      const scheduled_for = new Date(`${scheduleInput}:00-03:00`).toISOString();
+      const res = await fetch(`/api/admin/routes/${scheduleTarget.id}/schedule`, {
+        method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify({ scheduled_for }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Falha ao agendar a oferta.');
+      setSuccessMessage(
+        data.publishedNow
+          ? `Rota #${scheduleTarget.id}: o horário da oferta já tinha chegado, então ela foi publicada agora.`
+          : `Rota #${scheduleTarget.id}: oferta agendada para ${fmtScheduleBRT(data.schedule?.publish_at)} (entrega ${fmtScheduleBRT(data.schedule?.scheduled_for)}).`
+      );
+      setScheduleTarget(null);
+      await fetchRoutes();
+    } catch (err: any) {
+      setScheduleError(err.message); // mostra o motivo dentro da janela
+    } finally {
+      setScheduleSaving(false);
+    }
+  };
+
+  const handleUnschedule = async (route: Route) => {
+    if (!confirm(`Desfazer a oferta agendada da rota #${route.id}? Ela volta a ser um rascunho comum (a data de entrega é mantida).`)) return;
+    try {
+      const res = await fetch(`/api/admin/routes/${route.id}/unschedule`, { method: 'POST', headers: await getAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Falha ao desagendar.');
+      setSuccessMessage(`Rota #${route.id}: oferta desagendada.`);
+      await fetchRoutes();
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    }
+  };
+
+  // Exclusão definitiva: só rascunhos ou canceladas que nunca tiveram entregador
+  const canDeleteRoute = (route: Route) =>
+    (route.status === 'DRAFT' || route.status === 'CANCELLED') && !route.accepted_driver_id;
+
+  const handleDeleteRoute = async (route: Route) => {
+    if (!confirm(`Excluir DE VEZ a rota #${route.id}? Ela some da lista e do histórico. Não dá para desfazer.`)) return;
+    setCancellingId(route.id);
+    setErrorMessage(null);
+    try {
+      const res = await fetch(`/api/admin/routes/${route.id}`, { method: 'DELETE', headers: await getAuthHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Falha ao excluir rota.');
+      setSuccessMessage(`Rota #${route.id} excluída.`);
+      await fetchRoutes();
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const openCancelModal = (route: Route) => {
     setRouteToCancel(route);
     setCancelReasonInput('');
@@ -2593,7 +2732,7 @@ export default function App() {
       if (proofReference.startsWith('http://') || proofReference.startsWith('https://')) {
         setViewingPhotoUrl(proofReference);
       } else {
-        const res = await fetch(`/api/telegram/file-url/${encodeURIComponent(proofReference)}`);
+        const res = await fetch(`/api/telegram/file-url/${encodeURIComponent(proofReference)}`, { headers: await getAuthHeaders() });
         const data = await res.json();
         if (data.url) {
           setViewingPhotoUrl(data.url);
@@ -2650,6 +2789,42 @@ export default function App() {
     await signOut(auth);
     setSuccessMessage('Sessão encerrada.');
   };
+
+  // Tela de acesso: o painel só abre com login Google autorizado (ou chave administrativa configurada)
+  if (!authReady) {
+    return <div className="min-h-screen flex items-center justify-center text-sm text-neutral-500">Carregando…</div>;
+  }
+  if ((!currentUser && !(useAdminKey && adminKey.trim())) || accessError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 font-sans">
+        <div className="w-full max-w-sm bg-white border border-neutral-200 rounded-2xl shadow-sm p-6 text-center space-y-4">
+          <div className="w-12 h-12 mx-auto rounded-xl border border-neutral-200 p-1.5"><KantineLogo className="w-full h-full object-contain" /></div>
+          <div>
+            <h1 className="text-lg font-black text-neutral-900">Kantine Delivery</h1>
+            <p className="text-xs text-neutral-500">Painel administrativo de rotas e motoristas</p>
+          </div>
+          {accessError && <p className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">{accessError}</p>}
+          {currentUser ? (
+            <button onClick={handleLogout} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm font-semibold hover:bg-neutral-50">
+              Sair e entrar com outra conta
+            </button>
+          ) : (
+            <button onClick={handleGoogleLogin} className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-white text-sm font-semibold">
+              <LogIn className="w-4 h-4" /> Entrar com Google
+            </button>
+          )}
+          {!currentUser && useAdminKey && accessError && (
+            <button
+              onClick={() => { try { localStorage.removeItem('kantine_admin_key'); } catch {} setAdminKey(''); setUseAdminKey(false); setAccessError(null); }}
+              className="text-xs text-neutral-500 underline"
+            >
+              Esquecer a chave administrativa salva
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-neutral-900 pb-16 font-sans">
@@ -2730,12 +2905,12 @@ export default function App() {
             className={`flex items-center gap-1.5 px-3 py-1.5 border-b-2 text-xs font-semibold whitespace-nowrap transition-colors ${
               activeTab === 'ROUTES'
                 ? 'border-orange-600 text-orange-600'
-                : inFluxRoutesCount > 0
+                : inFluxRoutesCount > 0 || draftRoutesCount > 0
                 ? 'border-amber-500 text-amber-700 bg-amber-50/50'
                 : 'border-transparent text-neutral-500 hover:text-neutral-900'
             }`}
           >
-            <Layers className={`w-3.5 h-3.5 ${inFluxRoutesCount > 0 ? 'text-amber-600 animate-pulse' : ''}`} />
+            <Layers className={`w-3.5 h-3.5 ${inFluxRoutesCount > 0 || draftRoutesCount > 0 ? 'text-amber-600 animate-pulse' : ''}`} />
             <span>Rotas de Entrega</span>
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-200 text-neutral-700 font-bold">
               {allRoutesList.length > 0 ? allRoutesList.length : routesList.length}
@@ -2747,6 +2922,23 @@ export default function App() {
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
                 <span>{inFluxRoutesCount} em fluxo</span>
+              </span>
+            )}
+            {draftRoutesCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse ring-2 ring-amber-300 shadow-xs"
+                title={`${draftRoutesCount} rota(s) em rascunho aguardando revisão e publicação`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                <span>{draftRoutesCount} {draftRoutesCount === 1 ? 'rascunho' : 'rascunhos'}</span>
+              </span>
+            )}
+            {scheduledRoutesCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-600 text-white shadow-xs"
+                title={`${scheduledRoutesCount} corrida(s) com oferta agendada (publicação automática)`}
+              >
+                <span>⏰ {scheduledRoutesCount} {scheduledRoutesCount === 1 ? 'agendada' : 'agendadas'}</span>
               </span>
             )}
           </button>
@@ -3352,6 +3544,21 @@ export default function App() {
                               <Clock className="w-3.5 h-3.5 text-neutral-400" />
                               <span>{route.final_deadline}</span>
                             </div>
+                            {route.scheduled_for && !/^Entregar às/.test(route.final_deadline || '') && (
+                              <div className="text-[10px] font-semibold text-neutral-600 mt-0.5">
+                                📅 Entrega {fmtScheduleBRT(route.scheduled_for)}
+                              </div>
+                            )}
+                            {route.status === 'DRAFT' && route.publish_at && (
+                              <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
+                                ⏰ Oferta automática {fmtScheduleBRT(route.publish_at)}
+                              </div>
+                            )}
+                            {route.status === 'DRAFT' && route.publish_error && (
+                              <div className="text-[10px] font-semibold text-red-700 mt-0.5 whitespace-normal max-w-[220px]" title={route.publish_error}>
+                                Oferta não publicada: {route.publish_error === 'NO_ACTIVE_DRIVERS_AVAILABLE' ? 'nenhum motorista ativo compatível (nova tentativa em 5 min)' : route.publish_error}
+                              </div>
+                            )}
                           </td>
 
                           <td className="px-3 py-3 whitespace-nowrap w-[100px] min-w-[95px]">
@@ -3477,6 +3684,28 @@ export default function App() {
                                 </button>
                               )}
 
+                              {route.status === 'DRAFT' && !route.publish_at && (
+                                <button
+                                  type="button"
+                                  onClick={() => openScheduleModal(route)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Programar a publicação da oferta para antes do horário de entrega"
+                                >
+                                  ⏰ Agendar oferta
+                                </button>
+                              )}
+
+                              {route.status === 'DRAFT' && route.publish_at && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnschedule(route)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Desfazer a oferta agendada (volta a ser rascunho comum)"
+                                >
+                                  Desagendar
+                                </button>
+                              )}
+
                               {route.status !== 'CANCELLED' && (
                                 <button
                                   type="button"
@@ -3486,6 +3715,18 @@ export default function App() {
                                   title="Cancelar corrida em qualquer status e encaminhar para Pendências Operacionais"
                                 >
                                   {cancellingId === route.id ? 'Cancelando...' : 'Cancelar'}
+                                </button>
+                              )}
+
+                              {canDeleteRoute(route) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteRoute(route)}
+                                  disabled={cancellingId === route.id}
+                                  className="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer"
+                                  title="Excluir de vez (só rascunhos ou canceladas sem entregador)"
+                                >
+                                  Excluir
                                 </button>
                               )}
 
@@ -7577,6 +7818,41 @@ export default function App() {
       {/* ============================================================== */}
       {/* MODAL: CANCELAMENTO OPERACIONAL DE ROTA                        */}
       {/* ============================================================== */}
+      {scheduleTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !scheduleSaving && setScheduleTarget(null)}>
+          <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-black text-neutral-900">⏰ Agendar oferta · Rota #{scheduleTarget.id}</h3>
+            <label className="block text-xs font-semibold text-neutral-700">
+              Data e hora da entrega
+              <input
+                type="datetime-local"
+                value={scheduleInput}
+                onChange={(e) => setScheduleInput(e.target.value)}
+                className="mt-1 w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </label>
+            <p className="text-xs text-neutral-600">
+              {/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(scheduleInput)
+                ? `A oferta será publicada automaticamente para os entregadores em ${fmtScheduleBRT(new Date(new Date(`${scheduleInput}:00-03:00`).getTime() - OFFER_LEAD_MIN * 60000).toISOString())} (${OFFER_LEAD_MIN} min antes da entrega).`
+                : `A oferta é publicada automaticamente ${OFFER_LEAD_MIN} min antes do horário de entrega.`}
+            </p>
+            {scheduleError && (
+              <p className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 break-words">
+                Não foi possível agendar: {scheduleError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setScheduleTarget(null)} disabled={scheduleSaving}
+                className="px-3 py-2 rounded-lg border border-neutral-300 text-xs font-semibold hover:bg-neutral-50">Voltar</button>
+              <button type="button" onClick={handleConfirmSchedule} disabled={scheduleSaving}
+                className="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold">
+                {scheduleSaving ? 'Agendando…' : 'Agendar oferta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {routeToCancel && (
         <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-200 space-y-4">
@@ -9023,7 +9299,7 @@ export default function App() {
                 </label>
                 <input
                   type="password"
-                  placeholder="kantine-admin-secure-key-2026"
+                  placeholder="Somente se configurada no servidor (ADMIN_API_KEY)"
                   value={adminKey}
                   onChange={(e) => {
                     setAdminKey(e.target.value);

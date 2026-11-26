@@ -56,6 +56,33 @@ export const createProdPool = () => {
 export const prodPool = createProdPool();
 export const prodDb = drizzle(prodPool, { schema });
 
+/**
+ * Conexão com o usuário ADMIN do banco (o mesmo que cria/altera tabelas na inicialização).
+ * Usada pelo agendamento de corridas: a tabela route_schedules é criada por ele, e o usuário
+ * comum do app pode não ter permissão de criar nem de usar tabelas novas em produção.
+ */
+let _adminDb: ReturnType<typeof drizzle> | null = null;
+export function getAdminDb() {
+  if (!_adminDb) {
+    const targetDatabase =
+      process.env.FORCE_DEV_DB === 'true'
+        ? (process.env.SQL_DB_NAME || 'cloud_sql_development_database')
+        : 'cloud_sql_production_database';
+    const pool = new Pool({
+      host: process.env.SQL_HOST,
+      user: process.env.SQL_ADMIN_USER || process.env.SQL_USER,
+      password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD,
+      database: targetDatabase,
+      max: 2,
+      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 30000,
+    });
+    pool.on('error', (err: any) => console.warn('[Postgres adminDb] conexão:', err?.message || err));
+    _adminDb = drizzle(pool, { schema });
+  }
+  return _adminDb;
+}
+
 export async function initDbConstraints() {
   const adminUser = process.env.SQL_ADMIN_USER || process.env.SQL_USER;
   const adminPassword = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD;
@@ -101,6 +128,21 @@ export async function initDbConstraints() {
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "driver_acknowledged_version" integer DEFAULT 1 NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
+
+      // Agendamento de corridas (tabela própria, separada de routes)
+      await client.query(`CREATE TABLE IF NOT EXISTS "route_schedules" (
+        "route_id" integer PRIMARY KEY,
+        "scheduled_for" timestamptz,
+        "publish_at" timestamptz,
+        "publish_error" text,
+        "published_at" timestamptz,
+        "updated_at" timestamptz DEFAULT now() NOT NULL
+      )`);
+      // O app usa SQL_USER; se for outro usuário além do admin, garante acesso à tabela nova
+      const appUser = String(process.env.SQL_USER || '');
+      if (appUser && appUser !== adminUser && /^[A-Za-z0-9_.@-]+$/.test(appUser)) {
+        await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "route_schedules" TO "${appUser}"`).catch(() => {});
+      }
 
       // M4.4B Versionamento de Dispatches de Ofertas
       await client.query(`ALTER TABLE "route_offer_dispatches" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);

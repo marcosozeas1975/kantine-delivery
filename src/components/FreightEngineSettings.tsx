@@ -92,6 +92,8 @@ export interface TakeatOrderUI {
   calculated_freight_details: any;
   created_route_id: number | null;
   raw_payload: any;
+  vehicle_category?: 'MOTO' | 'CAR' | null;
+  vehicle_reason?: string | null;
   created_at: string;
   accepted_at: string | null;
   dispatched_at: string | null;
@@ -392,8 +394,14 @@ export const FreightEngineSettings: React.FC<Props> = ({
       }
       const data = await res.json();
       const storeLabel = targetStore === 'VINHEDOS' ? 'Vinhedos' : 'Matriz';
-      setSuccessMessage(`Pedido ${data.order?.display_id} do Takeat (${storeLabel}) recebido e calculado com sucesso pelo Motor de Fretes!`);
-      await fetchTakeatOrders('PENDING_COURIER', 'ALL');
+      if (data.order?.created_route_id) {
+        setSuccessMessage(`Pedido ${data.order?.display_id} do Takeat (${storeLabel}) recebido: rascunho da Rota #${data.order.created_route_id} criado em Rotas de Entrega, aguardando revisão e publicação.`);
+      } else if (data.order?.draft_error) {
+        setErrorMessage(`Pedido ${data.order?.display_id} (${storeLabel}) recebido, mas o rascunho de rota NÃO foi criado: ${data.order.draft_error}. Ele ficou em "Aguardando entregador".`);
+      } else {
+        setSuccessMessage(`Pedido ${data.order?.display_id} do Takeat (${storeLabel}) recebido e calculado com sucesso pelo Motor de Fretes!`);
+      }
+      await fetchTakeatOrders('ALL', 'ALL');
       setActiveSubTab('TAKEAT_ORDERS');
       if (onRefreshPendingTakeatCount) {
         onRefreshPendingTakeatCount();
@@ -442,7 +450,7 @@ export const FreightEngineSettings: React.FC<Props> = ({
         headers,
         body: JSON.stringify({
           offerNow,
-          modality: storeConfig?.preferred_modality || 'MOTO',
+          modality: order?.vehicle_category || storeConfig?.preferred_modality || 'MOTO',
           pickupPreset: storeKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ',
         }),
       });
@@ -473,7 +481,7 @@ export const FreightEngineSettings: React.FC<Props> = ({
   const handleLoadTakeatIntoSimulator = (order: TakeatOrderUI) => {
     const storeKey = order.store_key || 'MATRIZ';
     const storeConfig = storeConfigs[storeKey];
-    setSimModality(storeConfig?.preferred_modality || 'MOTO');
+    setSimModality(order.vehicle_category || storeConfig?.preferred_modality || 'MOTO');
     setSimOriginKey(storeKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ');
     setSimCargoDescription(`Takeat ${order.display_id} (${storeKey}): ${order.order_items_summary || 'Delivery'} (${order.customer_name})`);
     setSimStops([
@@ -498,7 +506,8 @@ export const FreightEngineSettings: React.FC<Props> = ({
 
     // Detectar ponto de saída dominante ou do primeiro pedido
     const primaryStoreKey = selectedOrders[0].store_key || 'MATRIZ';
-    setSimModality('MOTO');
+    // Algum pedido com bolo → a rota agrupada vai de carro
+    setSimModality(selectedOrders.some((o) => o.vehicle_category === 'CAR') ? 'CAR' : 'MOTO');
     setSimOriginKey(primaryStoreKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ');
     setSimCargoDescription(`Rota Agrupada Takeat (${primaryStoreKey}): ${selectedOrders.map((o) => o.display_id).join(' + ')}`);
     setSimStops(
@@ -1192,6 +1201,21 @@ export const FreightEngineSettings: React.FC<Props> = ({
                               {order.display_id}
                             </span>
 
+                            {/* Veículo do pedido (bolo → carro; demais → moto) */}
+                            {order.vehicle_category && (
+                              <span
+                                title={order.vehicle_reason ? `Carro por causa de: ${order.vehicle_reason}` : undefined}
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-black border flex items-center gap-0.5 ${
+                                  order.vehicle_category === 'CAR'
+                                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                    : 'bg-sky-100 text-sky-900 border-sky-200'
+                                }`}
+                              >
+                                <span>{order.vehicle_category === 'CAR' ? '🚗' : '🏍️'}</span>
+                                <span>{order.vehicle_category === 'CAR' ? 'Carro' : 'Moto'}</span>
+                              </span>
+                            )}
+
                             {/* Tag de Unidade (Matriz vs Vinhedos) */}
                             {order.store_key === 'VINHEDOS' ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-0.5">
@@ -1212,7 +1236,7 @@ export const FreightEngineSettings: React.FC<Props> = ({
                               </span>
                             ) : order.status === 'IN_ROUTE' ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
-                                🛵 Em Rota {order.created_route_id ? `(#${order.created_route_id})` : ''}
+                                🛵 {order.created_route_id ? `Rota #${order.created_route_id}` : 'Em Rota'}
                               </span>
                             ) : order.status === 'DELIVERED' ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">

@@ -5,7 +5,7 @@ description: ReporteK — relatório diário de vendas das três operações Kan
 
 # ReporteK — Relatório diário das operações Kantine
 
-Gera a análise de vendas **de um dia** para as três operações, publica numa página compartilhável (link fixo) e mostra um resumo curto no chat.
+Gera a análise de vendas **de um dia** para as três operações, publica numa página privada (link novo a cada uso) e mostra um resumo curto no chat.
 
 Fonte de dados: conector **Takeat Multilojas** (ferramentas `mcp__Takeat_Multilojas__*`; carregue com ToolSearch se ainda não estiverem carregadas). Nada é gravado em banco — o relatório é gerado sob demanda.
 
@@ -109,13 +109,11 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 
 **Conferência** (rodapé): problemas do cruzamento categoria × nome, páginas não carregadas e qualquer dado que pareça inconsistente.
 
-## 6. Publicação (página com link fixo)
+## 6. Publicação (página com link novo a cada uso)
 
 1. Antes de escrever o HTML, carregue a skill `artifact-design` (e `dataviz` se houver gráfico, como faturamento por hora).
-2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. **Cores fixas por operação** (use em cartões, marcadores e gráficos): **azul** para Kantine Gastronomia (Matriz) `#2a5d9c` (tema escuro `#82aee6`), **vinho** para Kantine Vinhedos `#7b3046` (escuro `#e08ba2`), **verde** para Kantine Center Shopping `#2f7a4a` (escuro `#7cc79a`). Mantenha o layout da versão atual do link fixo. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
-3. **Link fixo**: https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8 (criado em 11/11/2026). Faça `action: "read"` nesse URL e publique com o mesmo `url`. Se ele não existir mais, use `Artifact` com `action: "list"` e procure um artifact com o título **"Reporte Kantine"**.
-   - Se existir: `action: "read"` nele e depois publique com o mesmo `url`, para atualizar no mesmo link.
-   - Se não existir: publique um novo (`icon: "chart"`). Esse passa a ser o link fixo.
+2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. **Cores fixas por operação** (use em cartões, marcadores e gráficos): **azul** para Kantine Gastronomia (Matriz) `#2a5d9c` (tema escuro `#82aee6`), **vinho** para Kantine Vinhedos `#7b3046` (escuro `#e08ba2`), **verde** para Kantine Center Shopping `#2f7a4a` (escuro `#7cc79a`). Mantenha o mesmo layout dos relatórios anteriores. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
+3. **Link novo a cada uso (decisão de 23/11/2026)**: o link antigo vazou para quem não devia ver os dados, então **nunca reutilize o `url` de um relatório anterior**. Publique sempre um artifact novo (sem `url`, `icon: "chart"`), de modo que cada execução gere um link diferente. Não passe `capabilities` e não use o artifact do cache (seção 9) como página de relatório.
 4. A página é privada. O usuário decide se compartilha o link pelo claude.ai.
 
 ## 7. Resposta no chat
@@ -145,15 +143,15 @@ Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, c
   - Em período de 14 dias ou mais, a **média por dia da semana** (seg a dom) de cada operação.
   - Rankings, canais, pagamentos, cancelamentos, descontos e avaliações somados no período. Nas avaliações, liste todas as notas abaixo de 5 e todos os comentários do período.
   - Pedidos fora da curva: comandas que representem 10% ou mais do faturamento de um dia, listadas com a data.
-- **Publicação**: link fixo separado, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
-  - **Link fixo do período:** https://claude.ai/artifact/TyctYfSLTJEo19NTZ1S4Mt (criado em 11/11/2026 com outubro de 2026). Faça `action: "read"` nele e publique com o mesmo `url`. Se não existir mais, procure com `Artifact` `action: "list"` o título "Reporte Kantine Período".
-  - **Nunca** publique um período no link do relatório diário.
+- **Publicação**: link novo a cada uso, título **"Reporte Kantine Período"**, mesmas cores e mesmo estilo do diário. No topo, mostre o período em destaque (ex.: "01/11 a 30/11/2026 · 30 dias").
+  - Publique sempre um artifact novo (sem `url`, `icon: "chart"`); não reutilize o link de períodos anteriores.
+  - **Nunca** publique um período no artifact do cache (seção 9).
 
 ## 9. Cache no banco da página (histórico)
 
-Os resumos diários ficam guardados no banco da página do relatório diário (https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8), na coleção **`dias`**, um documento por dia com id `AAAA-MM-DD`. A regra de acesso é `read: admin, write: admin`: só o dono e editores leem e gravam, mesmo que a página seja compartilhada. O cache guarda só números e nomes de produtos, sem nome nem telefone de cliente.
+Os resumos diários ficam guardados no banco do artifact de cache (https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8), que é **somente cache: privado, nunca compartilhe nem divulgue esse link e não publique relatório nele**, na coleção **`dias`**, um documento por dia com id `AAAA-MM-DD`. A regra de acesso é `read: admin, write: admin`: só o dono e editores leem e gravam, mesmo que a página seja compartilhada. O cache guarda só números e nomes de produtos, sem nome nem telefone de cliente.
 
-- **Ao republicar a página diária, não passe `capabilities`.** Omitir mantém o banco. Passar `{}` apaga a declaração.
+- **Não republique o artifact de cache.** Ele só guarda o banco; os relatórios vão em artifacts novos.
 - **Gravar depois de todo relatório (diário ou período):**
   1. Rode `calc.py` com `--json-dir <pasta>`. Ele grava um arquivo por dia com faturamento, comandas, itens, pessoas, canais (valor e comandas), pagamentos, faturamento por hora, produtos, descontos, pedidos grandes, cancelamentos e conferência. Também marca `dia_fechado` (verdadeiro se o dia já tinha terminado na hora da busca).
   2. Transcreva as avaliações num arquivo de texto (uma por linha: `LOJA MM-DD HH:MM MESA NOTA CRITERIOS [COMENTARIO]`, hora local, critérios como 4 dígitos comida/atendimento/preço/ambiente ou `-`) e rode `python3 scripts/ratings.py <arquivo> <pasta>`. Ele acrescenta a cada dia o campo `avaliacoes`: por loja (`M`, `V` e, se houver, `CS`), `total`, `media`, `criterios` (comida, atendimento, preco, ambiente), `com_criterios`, `abaixo_de_5` (mesa, hora, nota, critérios abaixo de 5) e `comentarios` (mesa, hora, nota, texto). Não guarde nome nem telefone.

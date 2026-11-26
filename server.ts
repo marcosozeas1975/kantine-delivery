@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -25,6 +26,7 @@ import { requireAdminAuth, AuthRequest } from './src/middleware/auth.ts';
 import { canReceiveDeliveryOffers, canReceiveRouteOffer } from './src/server/eligibility.ts';
 import { DriverStatus, DeliveryStatus, RouteStatus, PricingVehicleCategory } from './src/server/types.ts';
 import { takeatService } from './src/server/takeatService.ts';
+import { scheduleService, OFFER_LEAD_MINUTES } from './src/server/scheduleService.ts';
 import { initDbConstraints } from './src/db/index.ts';
 import { mercadoPagoService } from './src/server/mercadoPagoService.ts';
 import { searchAddressSuggestions } from './src/server/geocodingService.ts';
@@ -768,7 +770,7 @@ app.get('/api/admin/routes', requireAdminAuth, async (req: AuthRequest, res) => 
       return res.status(400).json({ error: 'INVALID_STATUS_FILTER' });
     }
     const routesList = await routeService.getRoutes(status);
-    res.json(routesList);
+    res.json(await scheduleService.decorate(routesList));
   } catch (err: any) {
     console.error('[API GET /api/admin/routes failed]', err.message);
     res.status(500).json({ error: 'Failed to retrieve routes' });
@@ -792,7 +794,8 @@ app.get('/api/admin/routes/:id', requireAdminAuth, async (req: AuthRequest, res)
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
 
-    const details = await routeService.getRouteDetails(id);
+    const details: any = await routeService.getRouteDetails(id);
+    if (details?.route) details.route = (await scheduleService.decorate([details.route]))[0];
     res.json(details);
   } catch (err: any) {
     console.error(`[API GET /api/admin/routes/${req.params.id} failed]`, err.message);
@@ -886,6 +889,101 @@ app.post('/api/admin/routes/:id/cancel', requireAdminAuth, async (req: AuthReque
 });
 
 // M4.4 Preview e Classificação de Edição de Rota
+// ==========================================
+// AGENDAMENTO DE CORRIDAS (data/hora de entrega + oferta programada)
+// ==========================================
+
+// Define/altera (ou remove, com null) a data e hora de entrega da rota
+app.post('/api/admin/routes/:id/scheduled-for', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+    const raw = req.body?.scheduled_for;
+    const when = raw ? new Date(raw) : null;
+    if (when && isNaN(when.getTime())) return res.status(400).json({ error: 'INVALID_DATE', message: 'Data/hora inválida.' });
+    const route = await routeService.getRouteById(id);
+    if (!route) return res.status(404).json({ error: 'ROUTE_NOT_FOUND' });
+    if (route.status !== 'DRAFT') return res.status(409).json({ error: 'ROUTE_NOT_DRAFT', message: 'Só dá para mudar o horário de rotas em rascunho.' });
+    res.json({ success: true, schedule: await scheduleService.setScheduledFor(id, when) });
+  } catch (err: any) {
+    console.error(`[API POST /api/admin/routes/${req.params.id}/scheduled-for]`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Programa a publicação da oferta (entrega − antecedência); se já passou da hora, publica agora
+app.post('/api/admin/routes/:id/schedule', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+    if (req.body?.scheduled_for) {
+      const when = new Date(req.body.scheduled_for);
+      if (isNaN(when.getTime())) return res.status(400).json({ error: 'INVALID_DATE', message: 'Data/hora inválida.' });
+      await scheduleService.setScheduledFor(id, when);
+    }
+    const r = await scheduleService.schedulePublish(id, req.user?.email || 'ADMIN');
+    res.json({ success: true, ...r, leadMinutes: OFFER_LEAD_MINUTES() });
+  } catch (err: any) {
+    const msg = String(err?.message || '');
+    const known: Record<string, [number, string]> = {
+      ROUTE_NOT_FOUND: [404, 'Rota não encontrada.'],
+      ROUTE_NOT_DRAFT: [409, 'Só rotas em rascunho podem ter a oferta agendada.'],
+      SCHEDULED_FOR_REQUIRED: [400, 'Informe a data e hora da entrega.'],
+      SCHEDULED_FOR_IN_PAST: [400, 'A data/hora da entrega já passou.'],
+      NO_ACTIVE_DRIVERS_AVAILABLE: [400, 'Horário da oferta já chegou, mas nenhum motorista ativo com veículo compatível está disponível. A rota segue como rascunho.'],
+    };
+    if (known[msg]) return res.status(known[msg][0]).json({ error: msg, message: known[msg][1] });
+    console.error(`[API POST /api/admin/routes/${req.params.id}/schedule]`, msg);
+    res.status(500).json({ error: msg || 'Falha ao agendar a oferta.' });
+  }
+});
+
+// Desfaz a oferta programada (a rota volta a ser rascunho comum)
+app.post('/api/admin/routes/:id/unschedule', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+    res.json({ success: true, schedule: await scheduleService.unschedulePublish(id, req.user?.email || 'ADMIN') });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Disparo externo do agendador (a ponte do Zelo chama a cada minuto), com a mesma senha do webhook da Matriz.
+// Garante a publicação na hora certa mesmo se o servidor estiver "dormindo" entre requisições.
+app.post('/api/webhooks/scheduler/tick', async (req, res) => {
+  try {
+    const config = await takeatService.getConfig('MATRIZ');
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || '').trim();
+    const token = String(req.headers['x-webhook-token'] || req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (!expected || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'INVALID_WEBHOOK_TOKEN' });
+    res.json({ success: true, ...(await scheduleService.tick()) });
+  } catch (err: any) {
+    console.error('[agendador tick]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Excluir de vez uma rota que nunca teve entregador (rascunho ou cancelada sem motorista)
+app.delete('/api/admin/routes/:id', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'INVALID_ROUTE_ID' });
+    await routeService.deleteRouteWithoutDriver(id);
+    res.json({ success: true, message: `Rota #${id} excluída.` });
+  } catch (err: any) {
+    const msg = String(err?.message || '');
+    if (msg === 'ROUTE_NOT_FOUND') return res.status(404).json({ error: msg });
+    if (msg === 'ROUTE_HAS_DRIVER' || msg === 'ROUTE_NOT_DELETABLE') {
+      return res.status(409).json({ error: msg, message: 'Só rotas em rascunho ou canceladas que nunca tiveram entregador podem ser excluídas.' });
+    }
+    console.error(`[API DELETE /api/admin/routes/${req.params.id} error]`, msg);
+    res.status(500).json({ error: msg || 'Falha ao excluir rota.' });
+  }
+});
+
 app.post('/api/admin/routes/:id/edit-preview', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -1127,7 +1225,7 @@ app.post('/api/admin/routes/stops/:id/incident', requireAdminAuth, async (req: A
 });
 
 // M4: Obter URL da Foto de Comprovante do Telegram
-app.get('/api/telegram/file-url/:fileId', async (req, res) => {
+app.get('/api/telegram/file-url/:fileId', requireAdminAuth, async (req, res) => {
   try {
     const fileUrl = await telegramBot.getFileUrl(req.params.fileId);
     res.json({ url: fileUrl });
@@ -1676,7 +1774,7 @@ app.get(
 );
 
 // Driver Route Details Endpoint (M4.2 Parte P: Strict Privacy)
-app.get('/api/driver/routes/:id', async (req, res) => {
+app.get('/api/driver/routes/:id', requireAdminAuth, async (req, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
@@ -1733,14 +1831,20 @@ async function handleTakeatWebhook(req: any, res: any, explicitStoreKey?: string
     const rawPayload = req.body;
     console.log(`[Takeat Webhook Received (${explicitStoreKey || 'AUTO'})]`, JSON.stringify(rawPayload).slice(0, 300));
 
-    // Validação opcional de Webhook Secret se configurado na loja
-    const storeKeyToValidate = (explicitStoreKey === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
+    // Webhook Secret OBRIGATÓRIO: sem ele, qualquer pessoa poderia criar pedidos (e despachar entregadores)
+    const storeKeyToValidate = (String(explicitStoreKey || '').toUpperCase() === 'VINHEDOS' ? 'VINHEDOS' : 'MATRIZ') as 'MATRIZ' | 'VINHEDOS';
     const config = await takeatService.getConfig(storeKeyToValidate);
-    if (config.webhook_secret) {
-      const authHeader = req.headers['authorization'] || req.headers['x-takeat-signature'] || req.headers['x-webhook-token'];
-      if (authHeader && authHeader !== config.webhook_secret && !authHeader.includes(config.webhook_secret)) {
-        console.warn(`[Takeat Webhook ${storeKeyToValidate}] Token mismatch warning`);
-      }
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || '').trim();
+    if (!expected) {
+      return res.status(503).json({ error: 'WEBHOOK_SECRET_NOT_CONFIGURED', details: `Cadastre o Webhook secret da loja ${storeKeyToValidate} nas configurações do Takeat.` });
+    }
+    const rawToken = String(req.headers['x-webhook-token'] || req.headers['authorization'] || req.headers['x-takeat-signature'] || '');
+    const token = rawToken.replace(/^Bearer\s+/i, '').trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn(`[Takeat Webhook ${storeKeyToValidate}] token inválido — pedido recusado`);
+      return res.status(401).json({ error: 'INVALID_WEBHOOK_TOKEN' });
     }
 
     const result = await takeatService.processIncomingWebhook(rawPayload, explicitStoreKey);
@@ -1752,6 +1856,8 @@ async function handleTakeatWebhook(req: any, res: any, explicitStoreKey?: string
       displayId: result.order.display_id,
       status: result.order.status,
       calculatedFreight: result.order.calculated_freight_value,
+      routeId: result.order.created_route_id ?? null,
+      draftError: result.draftError ?? null,
     });
   } catch (err: any) {
     console.error('[Takeat Webhook Error]', err.message);
@@ -2029,6 +2135,13 @@ async function startServer() {
   initDbConstraints().catch((err) => {
     console.error('[initDbConstraints] Startup check warning:', err.message);
   });
+
+  // Agendador interno: publica as ofertas programadas a cada minuto (a ponte do Zelo também dispara)
+  setInterval(() => {
+    scheduleService.tick().then((r) => {
+      if (r.published || r.failed) console.log('[agendador]', JSON.stringify(r));
+    }).catch((e) => console.warn('[agendador]', e?.message));
+  }, 60_000);
 
   // Start Telegram Bot polling
   telegramBot.start().catch((err) => {

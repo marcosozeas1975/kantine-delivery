@@ -26,6 +26,7 @@ __export(schema_exports, {
   pickupLocations: () => pickupLocations,
   routeEvents: () => routeEvents,
   routeOfferDispatches: () => routeOfferDispatches,
+  routeSchedules: () => routeSchedules,
   routeStops: () => routeStops,
   routeUpdates: () => routeUpdates,
   routes: () => routes,
@@ -36,7 +37,7 @@ __export(schema_exports, {
 });
 import { sql } from "drizzle-orm";
 import { boolean, check, integer, jsonb, numeric, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
-var users, drivers, driverEvents, deliveries, deliveryOfferDispatches, deliveryEvents, pickupLocations, deliveryModalities, neighborhoods, deliveryConfigurations, freightPrices, routes, routeStops, routeOfferDispatches, routeEvents, routeUpdates, driverInvitations, driverReferrals, driverReferralEvents, telegramBotSessions, takeatConfigs, takeatOrders;
+var users, drivers, driverEvents, deliveries, deliveryOfferDispatches, deliveryEvents, pickupLocations, deliveryModalities, neighborhoods, deliveryConfigurations, freightPrices, routes, routeStops, routeOfferDispatches, routeSchedules, routeEvents, routeUpdates, driverInvitations, driverReferrals, driverReferralEvents, telegramBotSessions, takeatConfigs, takeatOrders;
 var init_schema = __esm({
   "src/db/schema.ts"() {
     users = pgTable("users", {
@@ -351,6 +352,14 @@ var init_schema = __esm({
         check("route_dispatches_status_check", sql`${table.status} IN ('SENT', 'FAILED')`)
       ]
     );
+    routeSchedules = pgTable("route_schedules", {
+      route_id: integer("route_id").primaryKey(),
+      scheduled_for: timestamp("scheduled_for", { withTimezone: true }),
+      publish_at: timestamp("publish_at", { withTimezone: true }),
+      publish_error: text("publish_error"),
+      published_at: timestamp("published_at", { withTimezone: true }),
+      updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+    });
     routeEvents = pgTable("route_events", {
       id: serial("id").primaryKey(),
       route_id: integer("route_id").references(() => routes.id, { onDelete: "cascade" }).notNull(),
@@ -535,6 +544,23 @@ var init_schema = __esm({
 // src/db/index.ts
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+function getAdminDb() {
+  if (!_adminDb) {
+    const targetDatabase = process.env.FORCE_DEV_DB === "true" ? process.env.SQL_DB_NAME || "cloud_sql_development_database" : "cloud_sql_production_database";
+    const pool2 = new Pool({
+      host: process.env.SQL_HOST,
+      user: process.env.SQL_ADMIN_USER || process.env.SQL_USER,
+      password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD,
+      database: targetDatabase,
+      max: 2,
+      connectionTimeoutMillis: 15e3,
+      idleTimeoutMillis: 3e4
+    });
+    pool2.on("error", (err) => console.warn("[Postgres adminDb] conex\xE3o:", err?.message || err));
+    _adminDb = drizzle(pool2, { schema: schema_exports });
+  }
+  return _adminDb;
+}
 async function initDbConstraints() {
   const adminUser = process.env.SQL_ADMIN_USER || process.env.SQL_USER;
   const adminPassword = process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD;
@@ -569,6 +595,19 @@ async function initDbConstraints() {
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "driver_acknowledged_version" integer DEFAULT 1 NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "change_pending_driver_approval" boolean DEFAULT false NOT NULL`);
       await client.query(`ALTER TABLE "routes" ADD COLUMN IF NOT EXISTS "pending_material_change" text`);
+      await client.query(`CREATE TABLE IF NOT EXISTS "route_schedules" (
+        "route_id" integer PRIMARY KEY,
+        "scheduled_for" timestamptz,
+        "publish_at" timestamptz,
+        "publish_error" text,
+        "published_at" timestamptz,
+        "updated_at" timestamptz DEFAULT now() NOT NULL
+      )`);
+      const appUser = String(process.env.SQL_USER || "");
+      if (appUser && appUser !== adminUser && /^[A-Za-z0-9_.@-]+$/.test(appUser)) {
+        await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "route_schedules" TO "${appUser}"`).catch(() => {
+        });
+      }
       await client.query(`ALTER TABLE "route_offer_dispatches" ADD COLUMN IF NOT EXISTS "route_version" integer DEFAULT 1 NOT NULL`);
       await client.query(`ALTER TABLE "drivers" DROP CONSTRAINT IF EXISTS "drivers_status_check"`);
       await client.query(`ALTER TABLE "drivers" ADD CONSTRAINT "drivers_status_check" CHECK (status IN ('PENDING', 'ACTIVE', 'BLOCKED', 'EXCLUDED'))`);
@@ -678,7 +717,7 @@ async function initDbConstraints() {
     });
   }
 }
-var createPool, pool, db, createProdPool, prodPool, prodDb;
+var createPool, pool, db, createProdPool, prodPool, prodDb, _adminDb;
 var init_db = __esm({
   "src/db/index.ts"() {
     init_schema();
@@ -714,6 +753,7 @@ var init_db = __esm({
     };
     prodPool = createProdPool();
     prodDb = drizzle(prodPool, { schema: schema_exports });
+    _adminDb = null;
   }
 });
 
@@ -1912,6 +1952,31 @@ var init_routeService = __esm({
        * If OFFERED, notifies all drivers who received SENT offer.
        * If ACCEPTED/IN_TRANSIT/etc with an allocated driver, notifies the driver via Telegram.
        */
+      /** Atualiza o texto de prazo da rota (ex.: "Entregar às 16/11 15:00"). Só em rascunho. */
+      async setFinalDeadlineText(id, text2) {
+        await db.update(routes).set({ final_deadline: text2.slice(0, 120) }).where(and2(eq2(routes.id, id), eq2(routes.status, "DRAFT")));
+      }
+      async logRouteEvent(id, eventType, actor, details) {
+        await db.insert(routeEvents).values({ route_id: id, event_type: eventType, actor, details });
+      }
+      /**
+       * Exclui DE VEZ uma rota que nunca teve entregador (rascunho ou cancelada sem motorista).
+       * Rotas que chegaram a ter motorista não podem ser excluídas (histórico financeiro/pendências).
+       */
+      async deleteRouteWithoutDriver(id) {
+        const route = await this.getRouteById(id);
+        if (!route) throw new Error("ROUTE_NOT_FOUND");
+        if (route.accepted_driver_id) throw new Error("ROUTE_HAS_DRIVER");
+        if (route.status !== "DRAFT" && route.status !== "CANCELLED") throw new Error("ROUTE_NOT_DELETABLE");
+        await db.transaction(async (tx) => {
+          await tx.delete(routeOfferDispatches).where(eq2(routeOfferDispatches.route_id, id));
+          await tx.delete(routeUpdates).where(eq2(routeUpdates.route_id, id));
+          await tx.delete(routeEvents).where(eq2(routeEvents.route_id, id));
+          await tx.delete(routeStops).where(eq2(routeStops.route_id, id));
+          await tx.update(takeatOrders).set({ created_route_id: null, status: "DISMISSED" }).where(eq2(takeatOrders.created_route_id, id));
+          await tx.delete(routes).where(eq2(routes.id, id));
+        });
+      }
       async cancelRoute(id, actor, reason, options) {
         const route = await this.getRouteById(id);
         if (!route) throw new Error("ROUTE_NOT_FOUND");
@@ -8735,6 +8800,7 @@ Seu cadastro permanece desativado.`;
 });
 
 // server.ts
+import crypto2 from "crypto";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path3 from "path";
@@ -8753,7 +8819,9 @@ var PICKUP_PRESETS = {
     name: "Kantine Matriz",
     address: "Av. Get\xFAlio Vargas, 1846 \u2014 Uberl\xE2ndia/MG",
     neighborhood: "Daniel Fonseca",
-    coords: { lat: -18.92211, lng: -48.28854 }
+    // Mesma localização que o Takeat usa para a loja (Av. Getúlio Vargas, 1846 — CEP 38400-329),
+    // para o raio/taxa sair igual nos dois sistemas. A anterior (-18.92211, -48.28854) ficava ~520 m a leste.
+    coords: { lat: -18.9239602, lng: -48.2931244 }
   },
   VINHEDOS: {
     name: "Kantine Vinhedos",
@@ -10509,6 +10577,9 @@ init_referralService();
 init_deliveryConfigService();
 init_telegramBot();
 
+// src/middleware/auth.ts
+import { timingSafeEqual } from "crypto";
+
 // src/lib/firebase-admin.ts
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
@@ -10547,35 +10618,53 @@ async function getOrCreateUser(uid, email) {
 }
 
 // src/middleware/auth.ts
+var MIN_KEY_LENGTH = 20;
+function configuredAdminKey() {
+  const key = String(process.env.ADMIN_API_KEY || "").trim();
+  return key.length >= MIN_KEY_LENGTH ? key : null;
+}
+function adminEmails() {
+  return new Set(
+    String(process.env.ADMIN_EMAILS || "").split(/[,;\s]+/).map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+}
+function sameSecret(given, expected) {
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 var requireAdminAuth = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  const adminKeyHeader = req.headers["x-admin-key"];
-  const adminSecret = process.env.ADMIN_API_KEY || "kantine-admin-secure-key-2026";
-  const fallbackSecret = "kantine-admin-secure-key-2026";
-  if (adminKeyHeader && (adminKeyHeader === adminSecret || adminKeyHeader === fallbackSecret)) {
+  const authHeader = String(req.headers.authorization || "");
+  const adminKeyHeader = String(req.headers["x-admin-key"] || "").trim();
+  const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const adminKey = configuredAdminKey();
+  const keyCandidate = adminKeyHeader || (bearer && bearer.length < 200 ? bearer : "");
+  if (adminKey && keyCandidate && sameSecret(keyCandidate, adminKey)) {
     req.user = { uid: "admin-cli", email: "admin@kantine.internal", isAdminKey: true };
     return next();
   }
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split("Bearer ")[1].trim();
-    if (token === adminSecret || token === fallbackSecret) {
-      req.user = { uid: "admin-cli", email: "admin@kantine.internal", isAdminKey: true };
-      return next();
-    }
+  if (bearer) {
+    let decoded;
     try {
-      const decodedToken = await adminAuth.verifyIdToken(token);
-      req.user = decodedToken;
-      if (decodedToken.email) {
-        await getOrCreateUser(decodedToken.uid, decodedToken.email).catch(
-          (e) => console.error("Failed to sync admin user record:", e)
-        );
-      }
-      return next();
-    } catch (error) {
-      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+      decoded = await adminAuth.verifyIdToken(bearer);
+    } catch {
+      return res.status(401).json({ error: "UNAUTHORIZED", message: "Sess\xE3o inv\xE1lida ou expirada. Entre novamente com o Google." });
     }
+    const email = String(decoded.email || "").toLowerCase();
+    const allowed = adminEmails();
+    if (!allowed.size) {
+      console.error("[auth] ADMIN_EMAILS n\xE3o configurada: nenhum login Google \xE9 aceito.");
+      return res.status(503).json({ error: "ADMIN_EMAILS_NOT_CONFIGURED", message: "Configure ADMIN_EMAILS (e-mails autorizados) no servidor." });
+    }
+    if (!email || decoded.email_verified === false || !allowed.has(email)) {
+      console.warn(`[auth] Login recusado para ${email || "conta sem e-mail"}`);
+      return res.status(403).json({ error: "FORBIDDEN", message: `A conta ${email || ""} n\xE3o tem acesso ao painel administrativo.` });
+    }
+    req.user = decoded;
+    await getOrCreateUser(decoded.uid, email).catch((e) => console.error("Failed to sync admin user record:", e));
+    return next();
   }
-  return res.status(401).json({ error: "Unauthorized: Missing or invalid authorization" });
+  return res.status(401).json({ error: "UNAUTHORIZED", message: "Entre com o Google para acessar o painel." });
 };
 
 // server.ts
@@ -10584,8 +10673,206 @@ init_eligibility();
 // src/server/takeatService.ts
 init_db();
 init_schema();
-import { eq as eq8, and as and6, desc as desc6, sql as sql8 } from "drizzle-orm";
+import { eq as eq8, and as and6, desc as desc6, sql as sql9 } from "drizzle-orm";
 init_routeService();
+
+// src/server/scheduleService.ts
+init_db();
+init_routeService();
+import { sql as sql8 } from "drizzle-orm";
+var db2 = { execute: (q) => getAdminDb().execute(q) };
+var OFFER_LEAD_MINUTES = () => {
+  const n = Number(process.env.OFFER_LEAD_MINUTES);
+  return Number.isFinite(n) && n >= 0 && n <= 24 * 60 ? n : 90;
+};
+var fmtBRT = (d) => d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+var iso = (v) => v ? new Date(v).toISOString() : null;
+var tableReady = null;
+var lastScheduleTableError = null;
+var CREATE_SQL = sql8`CREATE TABLE IF NOT EXISTS "route_schedules" (
+  "route_id" integer PRIMARY KEY,
+  "scheduled_for" timestamptz,
+  "publish_at" timestamptz,
+  "publish_error" text,
+  "published_at" timestamptz,
+  "updated_at" timestamptz DEFAULT now() NOT NULL
+)`;
+function ensureScheduleTable() {
+  if (!tableReady) {
+    tableReady = (async () => {
+      try {
+        await db2.execute(CREATE_SQL);
+        lastScheduleTableError = null;
+        return true;
+      } catch (e) {
+        try {
+          await db2.execute(sql8`SELECT 1 FROM "route_schedules" LIMIT 1`);
+          lastScheduleTableError = null;
+          return true;
+        } catch {
+          try {
+            await db.execute(CREATE_SQL);
+            return true;
+          } catch (e2) {
+            const why = (x) => String(x?.cause?.message || x?.message || x || "").split("\n")[0].slice(0, 200);
+            lastScheduleTableError = `admin: ${why(e)} | app: ${why(e2)}`;
+            console.error("[agendamento] tabela route_schedules indispon\xEDvel:", lastScheduleTableError);
+            tableReady = null;
+            return false;
+          }
+        }
+      }
+    })();
+  }
+  return tableReady;
+}
+function rowOf(r) {
+  return {
+    route_id: Number(r.route_id),
+    scheduled_for: iso(r.scheduled_for),
+    publish_at: iso(r.publish_at),
+    publish_error: r.publish_error || null,
+    published_at: iso(r.published_at)
+  };
+}
+var rowsOf = (res) => Array.isArray(res) ? res : res?.rows || [];
+var ScheduleService = class {
+  /** Agendamentos das rotas informadas (falha aqui nunca derruba a listagem de rotas). */
+  async getMany(routeIds) {
+    const out = /* @__PURE__ */ new Map();
+    const ids = routeIds.filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length || !await ensureScheduleTable()) return out;
+    try {
+      const res = await db2.execute(
+        sql8`SELECT * FROM "route_schedules" WHERE "route_id" IN (${sql8.join(ids.map((i) => sql8`${i}`), sql8`, `)})`
+      );
+      for (const r of rowsOf(res)) out.set(Number(r.route_id), rowOf(r));
+    } catch (e) {
+      console.warn("[agendamento] leitura falhou:", e?.message);
+    }
+    return out;
+  }
+  async get(routeId) {
+    return (await this.getMany([routeId])).get(routeId) || null;
+  }
+  /** Acrescenta scheduled_for / publish_at / publish_error às rotas (para a tela). */
+  async decorate(list) {
+    const map = await this.getMany(list.map((r) => r.id));
+    return list.map((r) => {
+      const s = map.get(r.id);
+      return s ? { ...r, scheduled_for: s.scheduled_for, publish_at: s.publish_at, publish_error: s.publish_error, schedule_published_at: s.published_at } : r;
+    });
+  }
+  /** Define (ou remove, com null) a data/hora de entrega. Ajusta a publicação programada, se houver. */
+  async setScheduledFor(routeId, when) {
+    if (!await ensureScheduleTable()) throw new Error(`SCHEDULE_UNAVAILABLE: ${lastScheduleTableError || ""}`);
+    const current = await this.get(routeId);
+    const publishAt = when && current?.publish_at ? new Date(when.getTime() - OFFER_LEAD_MINUTES() * 6e4) : null;
+    await db2.execute(sql8`
+      INSERT INTO "route_schedules" ("route_id", "scheduled_for", "publish_at", "publish_error", "updated_at")
+      VALUES (${routeId}, ${when ? when.toISOString() : null}, ${publishAt ? publishAt.toISOString() : null}, NULL, now())
+      ON CONFLICT ("route_id") DO UPDATE SET
+        "scheduled_for" = EXCLUDED."scheduled_for",
+        "publish_at" = EXCLUDED."publish_at",
+        "publish_error" = NULL,
+        "updated_at" = now()`);
+    if (when) await routeService.setFinalDeadlineText(routeId, `Entregar \xE0s ${fmtBRT(when)}`).catch(() => {
+    });
+    return await this.get(routeId);
+  }
+  /**
+   * Programa a publicação da oferta (entrega − antecedência). Se esse horário já passou,
+   * publica na hora. A rota precisa estar em rascunho e ter data/hora de entrega.
+   */
+  async schedulePublish(routeId, actor) {
+    const route = await routeService.getRouteById(routeId);
+    if (!route) throw new Error("ROUTE_NOT_FOUND");
+    if (route.status !== "DRAFT") throw new Error("ROUTE_NOT_DRAFT");
+    const s = await this.get(routeId);
+    if (!s?.scheduled_for) throw new Error("SCHEDULED_FOR_REQUIRED");
+    const delivery = new Date(s.scheduled_for);
+    if (delivery.getTime() < Date.now()) throw new Error("SCHEDULED_FOR_IN_PAST");
+    const publishAt = new Date(delivery.getTime() - OFFER_LEAD_MINUTES() * 6e4);
+    if (publishAt.getTime() <= Date.now()) {
+      await routeService.publishRoute(routeId, actor);
+      await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL,
+        "published_at" = now(), "updated_at" = now() WHERE "route_id" = ${routeId}`);
+      return { schedule: await this.get(routeId), publishedNow: true };
+    }
+    await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = ${publishAt.toISOString()}, "publish_error" = NULL,
+      "updated_at" = now() WHERE "route_id" = ${routeId}`);
+    await routeService.logRouteEvent(routeId, "ROUTE_UPDATED", actor, `Oferta agendada para ${fmtBRT(publishAt)} (entrega ${fmtBRT(delivery)}).`).catch(() => {
+    });
+    return { schedule: await this.get(routeId), publishedNow: false };
+  }
+  async unschedulePublish(routeId, actor) {
+    if (!await ensureScheduleTable()) throw new Error("SCHEDULE_UNAVAILABLE");
+    await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "publish_error" = NULL, "updated_at" = now()
+      WHERE "route_id" = ${routeId}`);
+    await routeService.logRouteEvent(routeId, "ROUTE_UPDATED", actor, "Oferta agendada desfeita (volta a ser rascunho comum).").catch(() => {
+    });
+    return this.get(routeId);
+  }
+  /**
+   * Publica as ofertas cujo horário chegou. Cada rota é "reservada" com um UPDATE atômico,
+   * então duas execuções simultâneas (timer interno + chamada externa) não publicam em dobro.
+   */
+  async tick() {
+    const result = { due: 0, published: 0, failed: 0 };
+    if (!await ensureScheduleTable()) return result;
+    const dueRes = await db2.execute(
+      sql8`SELECT "route_id", "publish_at" FROM "route_schedules" WHERE "publish_at" IS NOT NULL AND "publish_at" <= now() ORDER BY "publish_at" LIMIT 20`
+    );
+    for (const r of rowsOf(dueRes)) {
+      result.due++;
+      const id = Number(r.route_id);
+      const claimed = rowsOf(
+        await db2.execute(sql8`UPDATE "route_schedules" SET "publish_at" = NULL, "updated_at" = now()
+          WHERE "route_id" = ${id} AND "publish_at" IS NOT NULL RETURNING "route_id"`)
+      );
+      if (!claimed.length) continue;
+      try {
+        const route = await routeService.getRouteById(id);
+        if (!route || route.status !== "DRAFT") continue;
+        await routeService.publishRoute(id, "AGENDADOR");
+        await db2.execute(sql8`UPDATE "route_schedules" SET "published_at" = now(), "publish_error" = NULL, "updated_at" = now()
+          WHERE "route_id" = ${id}`);
+        result.published++;
+      } catch (e) {
+        result.failed++;
+        const msg = String(e?.message || e).slice(0, 300);
+        const s = await this.get(id).catch(() => null);
+        const stillTime = s?.scheduled_for && Date.parse(s.scheduled_for) > Date.now();
+        await db2.execute(sql8`UPDATE "route_schedules" SET
+          "publish_at" = ${stillTime ? sql8`now() + interval '5 minutes'` : sql8`NULL`},
+          "publish_error" = ${msg}, "updated_at" = now() WHERE "route_id" = ${id}`).catch(() => {
+        });
+        console.warn(`[agendamento] rota #${id} n\xE3o publicada: ${msg}`);
+      }
+    }
+    return result;
+  }
+};
+var scheduleService = new ScheduleService();
+
+// src/server/takeatService.ts
+function vehicleOf(order) {
+  const raw = order?.raw_payload || {};
+  const p = raw?.data || raw?.order || raw;
+  const v = String(p?.vehicle || "").toUpperCase();
+  const vehicle_category = v === "CAR" || v === "MOTO" ? v : null;
+  return { vehicle_category, vehicle_reason: vehicle_category ? String(p?.vehicleReason || "") || null : null };
+}
+var withVehicle = (o) => ({ ...o, ...vehicleOf(o) });
+function dropoffCoordsOf(raw) {
+  const p = raw?.data || raw?.order || raw || {};
+  const d = p?.delivery || p?.endereco || p?.deliveryAddress || p?.address || {};
+  const lat = Number(d?.latitude ?? d?.lat);
+  const lng = Number(d?.longitude ?? d?.lng ?? d?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 && lng === 0) return void 0;
+  if (lat < -19.6 || lat > -18.4 || lng < -48.9 || lng > -47.6) return void 0;
+  return { lat, lng };
+}
 var TakeatService = class {
   /**
    * Retorna todas as configurações de lojas cadastradas (Matriz e Vinhedos)
@@ -10673,13 +10960,15 @@ var TakeatService = class {
   /**
    * Calcula o frete preliminar pelo Motor de Fretes da Kantine considerando a loja de origem
    */
-  calculateOrderFreight(destinationNeighborhood, destinationAddress, pickupPresetKey = "MATRIZ", vehicleCategory = "MOTO") {
+  calculateOrderFreight(destinationNeighborhood, destinationAddress, pickupPresetKey = "MATRIZ", vehicleCategory = "MOTO", dropoffCoords) {
     const preset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
     const stopInput = {
       sequence: 1,
       destination_address: destinationAddress,
       destination_neighborhood: destinationNeighborhood,
-      is_horizontal_condo: false
+      is_horizontal_condo: false,
+      // Endereço exato (quando o Takeat informa); sem ele, o motor usa o centro do bairro
+      ...dropoffCoords ? { dropoff_coords: dropoffCoords } : {}
     };
     const calculation = calculateRoutePricing(
       vehicleCategory,
@@ -10725,6 +11014,31 @@ var TakeatService = class {
       payload?.displayId || payload?.code || payload?.numero || payload?.orderNumber || orderId.slice(-4)
     ).replace(/^#/, "");
     const displayId = `#${displayCode}`;
+    const event = String(rawPayload?.event || payload?.event || "");
+    if (event === "order.canceled") {
+      const [existing] = await db.select().from(takeatOrders).where(eq8(takeatOrders.takeat_order_id, orderId)).limit(1);
+      if (!existing) throw new Error(`Pedido ${orderId} n\xE3o encontrado para cancelar.`);
+      let routeCanceled = !existing.created_route_id;
+      if (existing.created_route_id) {
+        const route = await routeService.getRouteById(existing.created_route_id);
+        if (!route || route.status === "CANCELLED") routeCanceled = true;
+        else if ((route.status === "DRAFT" || route.status === "OFFERED") && !route.accepted_driver_id) {
+          await routeService.cancelRoute(route.id, "TAKEAT", `Pedido ${existing.display_id} cancelado no Takeat`);
+          routeCanceled = true;
+        }
+      }
+      if (routeCanceled && (existing.status === "PENDING_COURIER" || existing.status === "IN_ROUTE")) {
+        const [updated] = await db.update(takeatOrders).set({ status: "DISMISSED" }).where(eq8(takeatOrders.id, existing.id)).returning();
+        return { order: updated, action: "CANCELED", storeKey };
+      }
+      console.warn(`[Takeat] Pedido ${existing.display_id} cancelado no Takeat, mas a rota #${existing.created_route_id ?? "-"} j\xE1 tem entregador (${existing.status}): avise o entregador.`);
+      return {
+        order: existing,
+        action: "IGNORED",
+        storeKey,
+        reason: `Cancelado no Takeat, mas j\xE1 est\xE1 ${existing.status}: avise o entregador.`
+      };
+    }
     const customer = payload?.customer || payload?.cliente || {};
     const customerName = String(
       customer?.name || customer?.nome || payload?.customerName || payload?.nome_cliente || "Cliente Takeat"
@@ -10785,12 +11099,15 @@ var TakeatService = class {
       paymentMethod = payload.paymentMethod;
     }
     const pickupPresetKey = storeKey === "VINHEDOS" ? "VINHEDOS" : config.default_pickup_preset || "MATRIZ";
-    const modality = config.preferred_modality || "MOTO";
+    const incomingVehicle = String(payload?.vehicle || "").toUpperCase();
+    const vehicleCategory = incomingVehicle === "CAR" || incomingVehicle === "MOTO" ? incomingVehicle : null;
+    const modality = vehicleCategory || config.preferred_modality || "MOTO";
     const freightCalc = this.calculateOrderFreight(
       matchedNeighborhood,
       formattedAddress,
       pickupPresetKey,
-      modality
+      modality,
+      dropoffCoordsOf(rawPayload)
     );
     const calculatedFreightValue = freightCalc.route_operational_total.toFixed(2);
     const storeIdVal = payload?.store_id || payload?.storeId || config.store_id || null;
@@ -10854,10 +11171,19 @@ var TakeatService = class {
       raw_payload: rawPayload,
       accepted_at: /* @__PURE__ */ new Date()
     }).returning();
+    let order = inserted;
+    let draftError;
+    try {
+      order = (await this.convertOrderToRoute(order.id, { offerNow: false, asDraftRoute: true })).order;
+    } catch (e) {
+      draftError = String(e?.message || e);
+      console.warn(`[Takeat] Pedido ${displayId}: n\xE3o foi poss\xEDvel criar o rascunho de rota (${draftError}). Fica aguardando na aba Takeat.`);
+    }
     return {
-      order: inserted,
+      order: withVehicle(order),
       action: "CREATED",
-      storeKey
+      storeKey,
+      draftError
     };
   }
   /**
@@ -10874,13 +11200,13 @@ var TakeatService = class {
     let query = db.select().from(takeatOrders);
     if (conditions.length === 1) {
       const rows2 = await query.where(conditions[0]).orderBy(desc6(takeatOrders.created_at)).limit(60);
-      return rows2;
+      return rows2.map(withVehicle);
     } else if (conditions.length > 1) {
       const rows2 = await query.where(and6(...conditions)).orderBy(desc6(takeatOrders.created_at)).limit(60);
-      return rows2;
+      return rows2.map(withVehicle);
     }
     const rows = await query.orderBy(desc6(takeatOrders.created_at)).limit(60);
-    return rows;
+    return rows.map(withVehicle);
   }
   /**
    * Retorna a quantidade de pedidos aguardando entregador (PENDING_COURIER)
@@ -10888,7 +11214,7 @@ var TakeatService = class {
   async getPendingCount() {
     const rows = await db.select({
       store_key: takeatOrders.store_key,
-      count: sql8`count(*)`
+      count: sql9`count(*)`
     }).from(takeatOrders).where(eq8(takeatOrders.status, "PENDING_COURIER")).groupBy(takeatOrders.store_key);
     let matrizCount = 0;
     let vinhedosCount = 0;
@@ -10915,23 +11241,26 @@ var TakeatService = class {
     }
     const order = rows[0];
     const config = await this.getConfig(order.store_key || "MATRIZ");
-    const modality = options?.modality || config.preferred_modality || "MOTO";
+    const modality = vehicleOf(order).vehicle_category || options?.modality || config.preferred_modality || "MOTO";
     const pickupPresetKey = options?.pickupPreset || order.pickup_preset || (order.store_key === "VINHEDOS" ? "VINHEDOS" : "MATRIZ");
     const pickupPreset = PICKUP_PRESETS[pickupPresetKey] || PICKUP_PRESETS.MATRIZ;
     const freightCalc = this.calculateOrderFreight(
       order.destination_neighborhood,
       order.destination_address,
       pickupPresetKey,
-      modality
+      modality,
+      dropoffCoordsOf(order.raw_payload)
     );
     const storeLabel = order.store_key === "VINHEDOS" ? "Vinhedos" : "Matriz";
-    const cargoDescription = `Pedido Takeat ${order.display_id} (${storeLabel}) \u2014 ${order.customer_name}${order.order_items_summary ? ` | ${order.order_items_summary}` : ""}`;
+    const channelLabel = order.raw_payload?.channel === "site" ? "Pedido do site" : "Pedido Takeat";
+    const cargoDescription = `${channelLabel} ${order.display_id} (${storeLabel}) \u2014 ${order.customer_name}${order.order_items_summary ? ` | ${order.order_items_summary}` : ""}`;
     const createdRoute = await routeService.createDraft(
       {
         pickup_type: "REGISTERED",
-        pickup_location_id: pickupPresetKey === "VINHEDOS" ? 2 : 1,
-        final_deadline: "50 min",
-        total_fee: freightCalc.driver_remuneration.toFixed(2),
+        pickup_location_id: await this.pickupLocationId(pickupPresetKey === "VINHEDOS" ? "VINHEDOS" : "MATRIZ"),
+        final_deadline: this.routeDeadline(order),
+        // Mesmo critério do simulador: valor da corrida = preço da tabela (antes era só o repasse de 90%)
+        total_fee: freightCalc.route_operational_total.toFixed(2),
         accepted_vehicle_types: modality === "CAR" ? ["CAR"] : ["MOTO", "MOTO_WITH_BAG"],
         stops: [
           {
@@ -10940,12 +11269,18 @@ var TakeatService = class {
             cargo_description: cargoDescription,
             is_horizontal_condo: false,
             delivery_mode: "IN_PERSON",
-            observations: `Originado do Takeat (${storeLabel}). Valor pedido: R$ ${order.order_total || "0,00"}. Pagto: ${order.payment_method || "PIX"}`
+            observations: this.stopObservations(order, storeLabel)
           }
         ]
       },
       "TAKEAT_ORDER"
     );
+    const scheduledTo = order.raw_payload?.scheduledTo;
+    if (scheduledTo && Date.parse(scheduledTo) > Date.now()) {
+      await scheduleService.setScheduledFor(createdRoute.id, new Date(scheduledTo)).catch(
+        (e) => console.warn(`[Takeat] rota #${createdRoute.id}: data de entrega n\xE3o registrada (${e?.message})`)
+      );
+    }
     if (options?.offerNow) {
       try {
         await routeService.publishRoute(createdRoute.id, "TAKEAT_AUTO_DISPATCH");
@@ -10955,13 +11290,55 @@ var TakeatService = class {
     }
     const [updatedOrder] = await db.update(takeatOrders).set({
       created_route_id: createdRoute.id,
-      status: options?.offerNow ? "IN_ROUTE" : "PENDING_COURIER",
+      status: options?.offerNow || options?.asDraftRoute ? "IN_ROUTE" : "PENDING_COURIER",
       dispatched_at: options?.offerNow ? /* @__PURE__ */ new Date() : null
     }).where(eq8(takeatOrders.id, order.id)).returning();
     return {
       route: createdRoute,
       order: updatedOrder
     };
+  }
+  /** Local de coleta cadastrado da unidade (pelo nome: "Matriz"/"Vinhedos"); se não achar, os ids padrão 1/2. */
+  async pickupLocationId(store) {
+    const fallback = store === "VINHEDOS" ? 2 : 1;
+    try {
+      const all = await routeService.getPickupLocations();
+      const active = all.filter((p) => p.active !== false);
+      const want = store === "VINHEDOS" ? /vinhedo/i : /matriz/i;
+      const byName = active.find((p) => want.test(String(p.name || "")));
+      if (byName) return Number(byName.id);
+      if (active.some((p) => Number(p.id) === fallback)) return fallback;
+      if (store === "MATRIZ" && active.length === 1) return Number(active[0].id);
+    } catch {
+    }
+    return fallback;
+  }
+  /** Prazo da rota: horário agendado do Takeat, se houver; senão o padrão de 50 min. */
+  routeDeadline(order) {
+    const when = order.raw_payload?.scheduledTo;
+    if (!when || !Number.isFinite(Date.parse(when))) return "50 min";
+    return `Agendado ${new Date(when).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+  }
+  /** Observações da parada para o entregador (cobrança, troco, referência, horário agendado). */
+  stopObservations(order, storeLabel) {
+    const raw = order.raw_payload || {};
+    if (raw?.source !== "kantine-zelo-bridge") {
+      return `Originado do Takeat (${storeLabel}). Valor pedido: R$ ${order.order_total || "0,00"}. Pagto: ${order.payment_method || "PIX"}`;
+    }
+    const d = raw.delivery || {};
+    const brl = (n) => `R$ ${Number(n || 0).toFixed(2).replace(".", ",")}`;
+    const when = raw.scheduledTo ? new Date(raw.scheduledTo).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "";
+    return [
+      `${raw.channel === "site" ? "Site" : "Takeat"} ${order.display_id} (${storeLabel})`,
+      vehicleOf(order).vehicle_category === "CAR" ? `CARRO${vehicleOf(order).vehicle_reason ? ` (${vehicleOf(order).vehicle_reason})` : ""}` : "",
+      raw.isPaid ? `PAGO (${brl(raw.total)})` : String(order.payment_method || `Cobrar ${brl(raw.amountToCollect)} na entrega`).toUpperCase(),
+      order.change_for && Number(order.change_for) > 0 ? `Troco para ${brl(order.change_for)}` : "",
+      d.reference ? `Ref.: ${d.reference}` : "",
+      d.zipCode ? `CEP ${d.zipCode}` : "",
+      when ? `Agendado: ${when}` : "",
+      order.customer_phone ? `Tel.: ${order.customer_phone}` : "",
+      raw.notes ? `Obs.: ${raw.notes}` : ""
+    ].filter(Boolean).join(" \xB7 ");
   }
   /**
    * Descarta / dispensa pedido
@@ -11046,7 +11423,7 @@ var TakeatService = class {
       },
       storeKey
     );
-    return result.order;
+    return { ...result.order, draft_error: result.draftError || null };
   }
   /**
    * Consulta ativa à API REST da Takeat usando a Chave de REST (Bearer Token)
@@ -12159,7 +12536,7 @@ app.get("/api/admin/routes", requireAdminAuth, async (req, res) => {
       return res.status(400).json({ error: "INVALID_STATUS_FILTER" });
     }
     const routesList = await routeService.getRoutes(status);
-    res.json(routesList);
+    res.json(await scheduleService.decorate(routesList));
   } catch (err) {
     console.error("[API GET /api/admin/routes failed]", err.message);
     res.status(500).json({ error: "Failed to retrieve routes" });
@@ -12179,6 +12556,7 @@ app.get("/api/admin/routes/:id", requireAdminAuth, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
     const details = await routeService.getRouteDetails(id);
+    if (details?.route) details.route = (await scheduleService.decorate([details.route]))[0];
     res.json(details);
   } catch (err) {
     console.error(`[API GET /api/admin/routes/${req.params.id} failed]`, err.message);
@@ -12255,6 +12633,86 @@ app.post("/api/admin/routes/:id/cancel", requireAdminAuth, async (req, res) => {
     if (err.message === "ROUTE_NOT_FOUND") return res.status(404).json({ error: err.message });
     if (err.message === "ROUTE_ALREADY_CANCELLED") return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message || "Failed to cancel route" });
+  }
+});
+app.post("/api/admin/routes/:id/scheduled-for", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    const raw = req.body?.scheduled_for;
+    const when = raw ? new Date(raw) : null;
+    if (when && isNaN(when.getTime())) return res.status(400).json({ error: "INVALID_DATE", message: "Data/hora inv\xE1lida." });
+    const route = await routeService.getRouteById(id);
+    if (!route) return res.status(404).json({ error: "ROUTE_NOT_FOUND" });
+    if (route.status !== "DRAFT") return res.status(409).json({ error: "ROUTE_NOT_DRAFT", message: "S\xF3 d\xE1 para mudar o hor\xE1rio de rotas em rascunho." });
+    res.json({ success: true, schedule: await scheduleService.setScheduledFor(id, when) });
+  } catch (err) {
+    console.error(`[API POST /api/admin/routes/${req.params.id}/scheduled-for]`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/admin/routes/:id/schedule", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    if (req.body?.scheduled_for) {
+      const when = new Date(req.body.scheduled_for);
+      if (isNaN(when.getTime())) return res.status(400).json({ error: "INVALID_DATE", message: "Data/hora inv\xE1lida." });
+      await scheduleService.setScheduledFor(id, when);
+    }
+    const r = await scheduleService.schedulePublish(id, req.user?.email || "ADMIN");
+    res.json({ success: true, ...r, leadMinutes: OFFER_LEAD_MINUTES() });
+  } catch (err) {
+    const msg = String(err?.message || "");
+    const known = {
+      ROUTE_NOT_FOUND: [404, "Rota n\xE3o encontrada."],
+      ROUTE_NOT_DRAFT: [409, "S\xF3 rotas em rascunho podem ter a oferta agendada."],
+      SCHEDULED_FOR_REQUIRED: [400, "Informe a data e hora da entrega."],
+      SCHEDULED_FOR_IN_PAST: [400, "A data/hora da entrega j\xE1 passou."],
+      NO_ACTIVE_DRIVERS_AVAILABLE: [400, "Hor\xE1rio da oferta j\xE1 chegou, mas nenhum motorista ativo com ve\xEDculo compat\xEDvel est\xE1 dispon\xEDvel. A rota segue como rascunho."]
+    };
+    if (known[msg]) return res.status(known[msg][0]).json({ error: msg, message: known[msg][1] });
+    console.error(`[API POST /api/admin/routes/${req.params.id}/schedule]`, msg);
+    res.status(500).json({ error: msg || "Falha ao agendar a oferta." });
+  }
+});
+app.post("/api/admin/routes/:id/unschedule", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    res.json({ success: true, schedule: await scheduleService.unschedulePublish(id, req.user?.email || "ADMIN") });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/webhooks/scheduler/tick", async (req, res) => {
+  try {
+    const config = await takeatService.getConfig("MATRIZ");
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || "").trim();
+    const token = String(req.headers["x-webhook-token"] || req.headers["authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (!expected || a.length !== b.length || !crypto2.timingSafeEqual(a, b)) return res.status(401).json({ error: "INVALID_WEBHOOK_TOKEN" });
+    res.json({ success: true, ...await scheduleService.tick() });
+  } catch (err) {
+    console.error("[agendador tick]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.delete("/api/admin/routes/:id", requireAdminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "INVALID_ROUTE_ID" });
+    await routeService.deleteRouteWithoutDriver(id);
+    res.json({ success: true, message: `Rota #${id} exclu\xEDda.` });
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (msg === "ROUTE_NOT_FOUND") return res.status(404).json({ error: msg });
+    if (msg === "ROUTE_HAS_DRIVER" || msg === "ROUTE_NOT_DELETABLE") {
+      return res.status(409).json({ error: msg, message: "S\xF3 rotas em rascunho ou canceladas que nunca tiveram entregador podem ser exclu\xEDdas." });
+    }
+    console.error(`[API DELETE /api/admin/routes/${req.params.id} error]`, msg);
+    res.status(500).json({ error: msg || "Falha ao excluir rota." });
   }
 });
 app.post("/api/admin/routes/:id/edit-preview", requireAdminAuth, async (req, res) => {
@@ -12452,7 +12910,7 @@ app.post("/api/admin/routes/stops/:id/incident", requireAdminAuth, async (req, r
     res.status(400).json({ error: err.message });
   }
 });
-app.get("/api/telegram/file-url/:fileId", async (req, res) => {
+app.get("/api/telegram/file-url/:fileId", requireAdminAuth, async (req, res) => {
   try {
     const fileUrl = await telegramBot.getFileUrl(req.params.fileId);
     res.json({ url: fileUrl });
@@ -12898,7 +13356,7 @@ app.get(
     }
   }
 );
-app.get("/api/driver/routes/:id", async (req, res) => {
+app.get("/api/driver/routes/:id", requireAdminAuth, async (req, res) => {
   try {
     const routeId = parseInt(req.params.id, 10);
     const route = await routeService.getRouteById(routeId);
@@ -12938,13 +13396,19 @@ async function handleTakeatWebhook(req, res, explicitStoreKey) {
   try {
     const rawPayload = req.body;
     console.log(`[Takeat Webhook Received (${explicitStoreKey || "AUTO"})]`, JSON.stringify(rawPayload).slice(0, 300));
-    const storeKeyToValidate = explicitStoreKey === "VINHEDOS" ? "VINHEDOS" : "MATRIZ";
+    const storeKeyToValidate = String(explicitStoreKey || "").toUpperCase() === "VINHEDOS" ? "VINHEDOS" : "MATRIZ";
     const config = await takeatService.getConfig(storeKeyToValidate);
-    if (config.webhook_secret) {
-      const authHeader = req.headers["authorization"] || req.headers["x-takeat-signature"] || req.headers["x-webhook-token"];
-      if (authHeader && authHeader !== config.webhook_secret && !authHeader.includes(config.webhook_secret)) {
-        console.warn(`[Takeat Webhook ${storeKeyToValidate}] Token mismatch warning`);
-      }
+    const expected = String(config.webhook_secret || process.env.TAKEAT_WEBHOOK_SECRET || "").trim();
+    if (!expected) {
+      return res.status(503).json({ error: "WEBHOOK_SECRET_NOT_CONFIGURED", details: `Cadastre o Webhook secret da loja ${storeKeyToValidate} nas configura\xE7\xF5es do Takeat.` });
+    }
+    const rawToken = String(req.headers["x-webhook-token"] || req.headers["authorization"] || req.headers["x-takeat-signature"] || "");
+    const token = rawToken.replace(/^Bearer\s+/i, "").trim();
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto2.timingSafeEqual(a, b)) {
+      console.warn(`[Takeat Webhook ${storeKeyToValidate}] token inv\xE1lido \u2014 pedido recusado`);
+      return res.status(401).json({ error: "INVALID_WEBHOOK_TOKEN" });
     }
     const result = await takeatService.processIncomingWebhook(rawPayload, explicitStoreKey);
     res.status(200).json({
@@ -12954,7 +13418,9 @@ async function handleTakeatWebhook(req, res, explicitStoreKey) {
       orderId: result.order.id,
       displayId: result.order.display_id,
       status: result.order.status,
-      calculatedFreight: result.order.calculated_freight_value
+      calculatedFreight: result.order.calculated_freight_value,
+      routeId: result.order.created_route_id ?? null,
+      draftError: result.draftError ?? null
     });
   } catch (err) {
     console.error("[Takeat Webhook Error]", err.message);
@@ -13189,6 +13655,11 @@ async function startServer() {
   initDbConstraints().catch((err) => {
     console.error("[initDbConstraints] Startup check warning:", err.message);
   });
+  setInterval(() => {
+    scheduleService.tick().then((r) => {
+      if (r.published || r.failed) console.log("[agendador]", JSON.stringify(r));
+    }).catch((e) => console.warn("[agendador]", e?.message));
+  }, 6e4);
   telegramBot.start().catch((err) => {
     console.error("[Kantine Delivery M1] Telegram Bot start error:", err.message);
   });
