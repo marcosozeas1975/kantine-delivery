@@ -153,7 +153,17 @@ Use quando o argumento for um intervalo. Tudo o que vale para o dia vale aqui, c
   - O relatório **diário** continua com link novo a cada uso (seção 6).
   - **Nunca** publique um período no artifact do cache (seção 9).
 
-## 9. Cache no banco da página (histórico)
+## 8b. Comparação mensal e anual (relatório de pagamentos do Takeat)
+
+Para faturamento por mês (ou comparar anos), **não baixe comandas**: use `get_payments_report` com `report: "summary"`.
+- Mensal: `granularity: "monthly"`, `start_month`/`end_month` (AAAA-MM), `fill: true`, uma chamada por loja.
+- Diário (para recortar a mesma janela em anos diferentes): `granularity: "daily"`, `start_date`/`end_date`.
+- Use o campo **`gross_revenue_windowed`**: é o "Faturamento Total" do painel do Takeat (conferido: Vinhedos 01–26/11/2026 = R$ 156.783,44, igual à tela). Ele inclui iFood com taxa de entrega e o delivery próprio (`delivery_revenue_windowed`).
+- O mês corrente vem com `is_partial: true`; diga até que dia vai (`sources.productive_day`).
+- O relatório não separa o Natal 2026: compare o **CNPJ da Matriz inteiro** (Gastronomia + Center Shopping) com o ano anterior, e avise que em 2025 não havia a separação.
+- Requer a permissão `reports:payments:read` no conector Takeat Multilojas (liberada em 27/11/2026). Se vier 403, peça ao usuário para reconectar o conector e aceitar a permissão de relatórios.
+
+
 
 Os resumos diários ficam guardados no banco do artifact de cache (https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8), que é **somente cache: privado, nunca compartilhe nem divulgue esse link e não publique relatório nele**, na coleção **`dias`**, um documento por dia com id `AAAA-MM-DD`. A regra de acesso é `read: admin, write: admin`: só o dono e editores leem e gravam, mesmo que a página seja compartilhada. O cache guarda só números e nomes de produtos, sem nome nem telefone de cliente.
 
