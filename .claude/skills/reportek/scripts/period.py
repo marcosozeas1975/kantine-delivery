@@ -8,7 +8,7 @@ for f in glob.glob(os.path.join(pasta, '**', '*.json'), recursive=True):
     d = json.load(open(f)); d = d.get('data_doc', d) if isinstance(d, dict) else d
     if isinstance(d, dict) and 'operacoes' in d and ini <= d['data'] <= fim: docs[d['data']] = d
 SEM = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom']
-NOME = {'M': 'Kantine Gastronomia', 'V': 'Kantine Vinhedos', 'CS': 'Kantine Center Shopping'}
+NOME = {'M': 'Kantine Matriz', 'V': 'Kantine Vinhedos', 'CS': 'Kantine Center Shopping'}
 print('dias no cache:', len(docs), '|', min(docs) if docs else '-', 'a', max(docs) if docs else '-')
 for op in ['M', 'V', 'CS']:
     A = dict(rev=0, cmd=0, itens=0, ppl=0); chan = C.defaultdict(lambda: [0, 0]); pay = C.Counter(); prod = C.defaultdict(lambda: [0, 0])

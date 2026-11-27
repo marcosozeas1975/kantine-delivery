@@ -1,6 +1,6 @@
 ---
 name: reportek
-description: ReporteK — relatório diário de vendas das três operações Kantine (Kantine Gastronomia/Matriz, Kantine Vinhedos e Kantine Center Shopping, que é o quiosque temporário de Natal 2026). Use quando o usuário digitar /ReporteK ou /reportek, ou pedir "o reporte do dia", "relatório das três lojas", "como foram as vendas hoje" nas lojas Kantine. Aceita uma data opcional (ex.: /ReporteK 10/11; sem data, usa hoje) ou um período (ex.: /ReporteK semana, /ReporteK novembro, /ReporteK 01/11 a 10/11), que gera o relatório consolidado do período em outro link.
+description: ReporteK — relatório diário de vendas das três operações Kantine (Kantine Matriz, Kantine Vinhedos e Kantine Center Shopping, que é o quiosque temporário de Natal 2026). Use quando o usuário digitar /ReporteK ou /reportek, ou pedir "o reporte do dia", "relatório das três lojas", "como foram as vendas hoje" nas lojas Kantine. Aceita uma data opcional (ex.: /ReporteK 10/11; sem data, usa hoje) ou um período (ex.: /ReporteK semana, /ReporteK novembro, /ReporteK 01/11 a 10/11), que gera o relatório consolidado do período em outro link.
 ---
 
 # ReporteK — Relatório diário das operações Kantine
@@ -24,7 +24,7 @@ Fonte de dados: conector **Takeat Multilojas** (ferramentas `mcp__Takeat_Multilo
 
 | Operação no relatório | Origem | Como isolar |
 |---|---|---|
-| **Kantine Gastronomia (Matriz)** | loja `40695` "Kantine Matriz" | todas as comandas da loja **menos** os itens Natal 2026 |
+| **Kantine Matriz** | loja `40695` "Kantine Matriz" | todas as comandas da loja **menos** os itens Natal 2026 |
 | **Kantine Vinhedos** | loja `43896` "Kantine Vinhedos" | a loja inteira |
 | **Kantine Center Shopping** | loja `40695` (mesmo CNPJ da Matriz) | só os itens da categoria **NATAL 2026** |
 
@@ -59,7 +59,7 @@ python3 .claude/skills/reportek/scripts/calc.py <arquivo get_products da Matriz>
   --m <páginas get_table_sessions da Matriz...> --v <páginas da Vinhedos...>
 ```
 
-Ele imprime, por operação (`M` = Gastronomia, `CS` = Center Shopping, `V` = Vinhedos): faturamento, comandas, ticket, itens, pessoas, última comanda (já em horário local, ignore o `+00:00`), canais, pagamentos, faturamento por hora, ranking de produtos, descontos, maiores comandas, cancelamentos, exclusões, abertos incluídos e a conferência categoria × nome. Para detalhes de uma comanda específica (ex.: encomenda grande), consulte o arquivo com um trecho curto de Python.
+Ele imprime, por operação (`M` = Matriz, `CS` = Center Shopping, `V` = Vinhedos): faturamento, comandas, ticket, itens, pessoas, última comanda (já em horário local, ignore o `+00:00`), canais, pagamentos, faturamento por hora, ranking de produtos, descontos, maiores comandas, cancelamentos, exclusões, abertos incluídos e a conferência categoria × nome. Para detalhes de uma comanda específica (ex.: encomenda grande), consulte o arquivo com um trecho curto de Python.
 
 ## 4. Regras de cálculo (iguais ao relatório do Takeat — decisão de 26/11/2026)
 
@@ -84,7 +84,7 @@ O faturamento segue o relatório "Faturamento" do Takeat Multilojas, para que os
 
 Siga o estilo das análises de referência: título em negrito com o número principal, frases diretas, bullets curtos, e só os destaques que importam.
 
-**Kantine Gastronomia (Matriz)**
+**Kantine Matriz**
 - Total sem Natal 2026, nº de comandas, ticket médio. Também mostre o total bruto da loja e quanto foi Natal 2026.
 - Pedido fora da curva (se houver) e o dia "normal" sem ele.
 - Canais, pagamentos, picos de horário, top 5 produtos por faturamento. Nos canais, mostre **delivery próprio e iFood em linhas separadas** (comandas, faturamento e ticket de cada um). Avise quantas comandas do delivery próprio foram retirada na loja (`with_withdrawal`) e o total de taxas de entrega, que não entra no faturamento. Encomenda fora da curva fica fora dessa conta.
@@ -109,7 +109,7 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 - Por loja: nota média, quantidade de avaliações e média de cada critério (`food` = comida, `service` = atendimento, `price` = preço, `enviroment` = ambiente), dizendo em quantas avaliações os critérios foram preenchidos.
 - **Destaque toda nota abaixo de 5**, seja a nota geral ou de um critério, em bloco de alerta: cliente, mesa, horário local, nota geral e quais critérios ficaram abaixo de 5.
 - **Mostre todos os comentários** escritos (`comment` não vazio), na íntegra, com cliente, mesa, horário e nota. Se não houver, diga que nenhum cliente comentou.
-- As avaliações da loja 40695 entram na Kantine Gastronomia. Se a mesa da avaliação for do quiosque ou a comanda ligada tiver só itens Natal 2026, atribua ao Center Shopping.
+- As avaliações da loja 40695 entram na Kantine Matriz. Se a mesa da avaliação for do quiosque ou a comanda ligada tiver só itens Natal 2026, atribua ao Center Shopping.
 - Na resposta do chat, inclua a nota média de cada loja e as notas abaixo de 5.
 
 **Conferência** (rodapé): problemas do cruzamento categoria × nome, páginas não carregadas e qualquer dado que pareça inconsistente.
@@ -117,7 +117,7 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 ## 6. Publicação (página com link novo a cada uso)
 
 1. Antes de escrever o HTML, carregue a skill `artifact-design` (e `dataviz` se houver gráfico, como faturamento por hora).
-2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. **Cores fixas por operação** (use em cartões, marcadores e gráficos): **azul** para Kantine Gastronomia (Matriz) `#2a5d9c` (tema escuro `#82aee6`), **vinho** para Kantine Vinhedos `#7b3046` (escuro `#e08ba2`), **verde** para Kantine Center Shopping `#2f7a4a` (escuro `#7cc79a`). Mantenha o mesmo layout dos relatórios anteriores. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Gastronomia → Vinhedos → Center Shopping → Conferência.
+2. Monte uma página HTML única, legível no celular, com o título **"Reporte Kantine"**. **Cores fixas por operação** (use em cartões, marcadores e gráficos): **azul** para Kantine Matriz `#2a5d9c` (tema escuro `#82aee6`), **vinho** para Kantine Vinhedos `#7b3046` (escuro `#e08ba2`), **verde** para Kantine Center Shopping `#2f7a4a` (escuro `#7cc79a`). Mantenha o mesmo layout dos relatórios anteriores. Mostre a data do relatório em destaque no topo e as seções na ordem: Consolidado → Matriz → Vinhedos → Center Shopping → Conferência.
 3. **Link novo a cada uso (decisão de 23/11/2026)**: o link antigo vazou para quem não devia ver os dados, então **nunca reutilize o `url` de um relatório anterior**. Publique sempre um artifact novo (sem `url`, `icon: "chart"`), de modo que cada execução gere um link diferente. Não passe `capabilities` e não use o artifact do cache (seção 9) como página de relatório.
 4. A página é privada. O usuário decide se compartilha o link pelo claude.ai.
 
@@ -160,7 +160,7 @@ Para faturamento por mês (ou comparar anos), **não baixe comandas**: use `get_
 - Diário (para recortar a mesma janela em anos diferentes): `granularity: "daily"`, `start_date`/`end_date`.
 - Use o campo **`gross_revenue_windowed`**: é o "Faturamento Total" do painel do Takeat (conferido: Vinhedos 01–26/11/2026 = R$ 156.783,44, igual à tela). Ele inclui iFood com taxa de entrega e o delivery próprio (`delivery_revenue_windowed`).
 - O mês corrente vem com `is_partial: true`; diga até que dia vai (`sources.productive_day`).
-- O relatório não separa o Natal 2026: compare o **CNPJ da Matriz inteiro** (Gastronomia + Center Shopping) com o ano anterior, e avise que em 2025 não havia a separação.
+- O relatório não separa o Natal 2026: compare o **CNPJ da Matriz inteiro** (Matriz + Center Shopping) com o ano anterior, e avise que em 2025 não havia a separação.
 - Requer a permissão `reports:payments:read` no conector Takeat Multilojas (liberada em 27/11/2026). Se vier 403, peça ao usuário para reconectar o conector e aceitar a permissão de relatórios.
 
 
