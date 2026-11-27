@@ -77,7 +77,8 @@ O faturamento segue o relatório "Faturamento" do Takeat Multilojas, para que os
 - **Pessoas atendidas**: soma de `people_at_table` (quando houver).
 - **Horários**: agrupe o faturamento por hora local de abertura da comanda (`start_time` − 3h). Aponte o pico e as horas fracas fora do padrão.
 - **Pedido fora da curva**: uma comanda isolada que represente **≥ 10% do faturamento do dia** da operação, ou encomenda grande (muitas unidades, retirada futura, desconto negociado), deve ser destacada como "Atenção a um pedido grande": mostre os itens, o desconto, a data de retirada (se estiver em `details`, `scheduled_to` ou observações) e o **dia sem esse pedido** (faturamento, comandas, ticket).
-- **Cancelamentos e descontos**: liste os itens cancelados (valor e `cancel_reason`) e o total de descontos com a origem (cupom iFood, `discount_obs`, etc.).
+- **Cancelamentos**: liste os itens cancelados (valor e `cancel_reason`).
+- **Descontos (decisão de 27/11/2026)**: não liste desconto por desconto. Agrupe por tipo (o nome do desconto, como "funcionario", "Cupom iFood", "dobro"; sem diferenciar maiúsculas; sem nome = "sem descrição") e mostre, para cada tipo, **quantidade, total e valor médio**, do maior total para o menor. No título do bloco, o total do dia e a quantidade: `Descontos (total R$ 56,53 em 5)`. Linha: `funcionario: 2 · total R$ 3,55 · média R$ 1,78`. O `calc.py` já imprime isso em `disc_grupos` (nome, qtd, total, média). Nomes diferentes ficam em tipos diferentes (ex.: "uberlandia em dobro" e "dobro"), a menos que o usuário diga que são a mesma promoção.
 - Valores em R$ no padrão brasileiro (`R$ 1.874,00`). Nos rankings pode arredondar para inteiro (`R$ 266`).
 
 ## 5. Conteúdo do relatório (por operação)
@@ -96,13 +97,14 @@ Siga o estilo das análises de referência: título em negrito com o número pri
 
 **Kantine Center Shopping (Natal 2026)**
 - Total, itens vendidos, comandas, ticket médio por comanda.
-- Canal predominante e descontos.
+- Canal predominante e descontos (agrupados por tipo, como nas outras operações).
 - Top 5 por faturamento e a lista dos demais itens, agrupando famílias (ex.: "Bolos de pote (sabores...)", "Sininhos (chocolate e coco)").
 - Horário da última venda.
 
 **Consolidado do dia** (topo da página)
-- Cartões com as 3 operações (faturamento, comandas, ticket) e o total do grupo.
-- **Comparativo**: Matriz "normal" (sem Natal e sem pedido fora da curva) × Vinhedos × Center Shopping. Inclua diferença % de faturamento, ticket médio e perfil de canal (salão × balcão).
+- Cartões com as 3 operações (faturamento, comandas, ticket) e o total do grupo. **Layout (decisão de 27/11/2026): cartões quadrados lado a lado**, não empilhados: 4 numa linha no computador e 2×2 no celular. CSS de referência:
+  `.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}` · `.card{aspect-ratio:1/1;display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;padding:12px;border-top:5px solid <cor da operação>}` · nome `.95rem`, valor `1.35rem` negrito sem quebra de linha, comandas/ticket `.85rem`.
+- **Comparativo** (tabela, uma coluna por operação): Matriz "normal" (sem Natal e sem pedido fora da curva) × Vinhedos × Center Shopping. Linhas: faturamento, ticket e o perfil de canal em % do faturamento de cada operação, com **Salão (mesa), Balcão, Delivery iFood e Delivery próprio, cada um na sua linha** (decisão de 27/11/2026; canal sem venda = 0%). Embaixo, a diferença % de faturamento e de ticket entre as lojas.
 
 **Avaliações do dia no Takeat** (antes da Conferência)
 - Busque com `get_ratings(restaurant_id=<id>, start_date=<dia>, end_date=<dia+1>)` para cada loja. As datas dessa ferramenta são em UTC: filtre por `created_at` − 3h para ficar só com o dia local.

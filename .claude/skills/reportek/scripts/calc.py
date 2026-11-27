@@ -93,6 +93,12 @@ for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
     print(' media/dia',round(O['rev']/len(O['day']),2),'| dias com venda',len(O['day']))
   print(' top',[(k,O['items'][k],round(v,2)) for k,v in O['rev_i'].most_common(40)])
   print(' disc',O['disc'])
+  # descontos agrupados por tipo (nome do desconto, sem diferenciar maiusculas): qtd, total e media
+  dg=C.OrderedDict()
+  for d in O['disc']:
+    k=(d[2] or '').strip() or 'sem descrição'; g=dg.setdefault(k.lower(),[k,0,0.0]); g[1]+=1; g[2]+=d[1]
+  dgl=sorted(dg.values(),key=lambda g:-g[2])
+  print(' disc_grupos (total %.2f em %d)'%(sum(g[2] for g in dgl),sum(g[1] for g in dgl)),[(g[0],g[1],round(g[2],2),round(g[2]/g[1],2)) for g in dgl])
   big=sorted(O['sess'],key=lambda x:-x[1])[:3]; print(' big',[(b[0],round(b[1],2),b[2]['bills'][0]['buyer'] and b[2]['bills'][0]['buyer']['name']) for b in big])
 print('canc M',OM['_canc']['canc']);print('canc V',OV['_canc']['canc'])
 print('excl M',em,'open M',im);print('excl V',ev,'open V',iv)
