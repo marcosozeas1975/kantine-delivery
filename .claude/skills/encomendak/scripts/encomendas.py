@@ -59,13 +59,13 @@ if CACHE:
         if not (isinstance(doc,dict) and 'pedidos' in doc and 'loja' in doc): continue
         k=doc['loja']
         for r in doc['pedidos']:
-            items=[dict(q=i['q'],n=i['nome'],cat=i['cat'],g=grupo(i['nome'],i['cat']),v=i['v']) for i in r['itens']]
+            items=[dict(q=float(i['q']),n=i['nome'],cat=i['cat'],g=grupo(i['nome'],i['cat']),v=float(i['v'])) for i in r['itens']]
             un='S' if any(i['cat']=='Site Kantine' for i in items) else k
             un=EXCECOES.get((k,r['n']),un)
             for i in items:
                 if i['cat']=='?': conf.append(f"Comanda {r['n']}: produto sem categoria ({i['n']})")
             rows.append(dict(num=r['n'],un=un,when=dt.datetime.fromisoformat(r['entrega']),canc=r['cancelada'],status=r['status'],ret=r['retirada'],
-                items=items,total=r['total'],paid=r['pago'],created=dt.datetime.fromisoformat(r['criada'])))
+                items=items,total=float(r['total']),paid=float(r['pago']),created=dt.datetime.fromisoformat(r['criada'])))
 for k in ('M','V'):
     for s in S[k].values():
         if not s['scheduled_to']: continue

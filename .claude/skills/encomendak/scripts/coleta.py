@@ -100,7 +100,8 @@ def expandir_dias(specs):
     return out
 
 def assinatura(r):
-    return json.dumps([[i['q'],i['nome'],i['cat'],i['v']] for i in r['itens']],ensure_ascii=False)
+    # float() porque o banco devolve 1.0 como 1: sem isso, ler o cache de volta geraria falsas mudancas de item
+    return json.dumps([[float(i['q']),i['nome'],i['cat'],float(i['v'])] for i in r['itens']],ensure_ascii=False)
 
 def diferencas(velho,novo,loja):
     """Mudancas de UMA comanda (dicts) entre o cache e a nova leitura."""
