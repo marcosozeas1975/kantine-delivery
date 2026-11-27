@@ -35,7 +35,8 @@ def loc(t): return dt.datetime.fromisoformat(t.replace('Z','+00:00')).replace(tz
 NAT_KW=('kantitone','chocotone','panetone','gingerbread','natal','tora de')
 def grupo(name,cat):
     n=name.lower().strip()
-    if n.startswith('site '): n=n[5:]  # produtos da categoria Site Kantine ganharam o prefixo 'Site ' em 27/11/2026
+    for pre in ('site - ','site '):  # produtos da categoria Site Kantine ganharam o prefixo 'Site - ' em 27/11/2026
+        if n.startswith(pre): n=n[len(pre):]; break
     if cat=='Sobremesas de Natal': return 'Sobremesas de Natal'
     if cat in ('NATAL','NATAL 2026','KANTITONES') or any(k in n for k in NAT_KW): return 'Natal'
     if cat=='REVENDA': return 'Revenda'
