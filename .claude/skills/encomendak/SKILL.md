@@ -24,6 +24,8 @@ Fonte: conector **Takeat Multilojas** (`mcp__Takeat_Multilojas__*`; carregue com
 
 1. `get_products` das duas lojas (limit 100) para mapear produto → categoria (os arquivos são grandes e vão para `tool-results/`; não leia no contexto).
 2. `get_table_sessions` por loja, de `2026-11-01` até hoje, **um dia por chamada** (`start_date = end_date`, `limit=100`; os dias podem rodar em paralelo). Para cada dia com `has_more=true`, siga `pagination.next.cursor` **com os mesmos filtros** até `has_more=false`. A API filtra pela data de **criação** da comanda, não pela entrega; por isso o intervalo vai desde 01/11. Nunca trate a primeira página como total.
+   - **Respostas inline**: se uma página voltar no corpo da resposta em vez de ser salva em arquivo, **refaça a mesma chamada (mesmos filtros e cursor) com `limit` menor, por exemplo 60**, até ela ser salva. Nunca deixe páginas de fora do script nem suponha que não têm encomendas.
+   - **`--today`** é a data de hoje no fuso `America/Sao_Paulo` (`TZ=America/Sao_Paulo date +%F`), nunca a data UTC: às 22h30 a data UTC já é a do dia seguinte.
 3. As respostas são salvas em arquivos; rode o script (ele deduplica por id):
 
 ```

@@ -208,7 +208,7 @@ var old=d.querySelector('.pastb');if(old)old.remove();if(n<0){d.classList.add('p
 if(n<0)return;var nums={},v=0;d.querySelectorAll('.ord .num').forEach(function(x){nums[x.textContent]=1});d.querySelectorAll('.it[data-v]').forEach(function(i){v+=parseFloat(i.dataset.v)});var c=Object.keys(nums).length;
 K.p[0]+=c;K.p[1]+=v;if(n===0){K.h[0]+=c;K.h[1]+=v}if(n===1){K.a[0]+=c;K.a[1]+=v}if(n<=7){K.w[0]+=c;K.w[1]+=v}});
 Object.keys(K).forEach(function(k){document.getElementById('kv-'+k).textContent=K[k][0];document.getElementById('ks-'+k).textContent=brl(K[k][1])});
-var u=document.getElementById('upd'),st=document.getElementById('stale');if(u.dataset.gen!==today){st.hidden=false;st.textContent='Dados gerados em '+u.dataset.genl+'. Hoje é '+today.split('-').reverse().slice(0,2).join('/')+': datas e contagens foram recalculadas, mas pedidos novos só entram na próxima atualização (22h30).'}else{st.hidden=true}}
+var u=document.getElementById('upd'),st=document.getElementById('stale');if(u.dataset.gen<today){st.hidden=false;st.textContent='Dados gerados em '+u.dataset.genl+'. Hoje é '+today.split('-').reverse().slice(0,2).join('/')+': datas e contagens foram recalculadas, mas pedidos novos só entram na próxima atualização (22h30).'}else{st.hidden=true}}
 
 fillC();fillP();relDays();
 document.getElementById('fd').onchange=function(){ST.f=this.value;apply()};document.getElementById('ft').onchange=function(){ST.t=this.value;apply()};
