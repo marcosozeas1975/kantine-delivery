@@ -20,6 +20,11 @@ S={'M':_load(mf),'V':_load(vf)}
 print('produtos NATAL 2026:',len(NAT),'| comandas Matriz:',len(S['M']),'| Vinhedos:',len(S['V']))
 def isnat_name(n): s=n.strip(); return s.upper()==s and re.search(r'NATAL\s*$',s) is not None
 CS_INI=dt.date(2026,11,6); CS_FIM=dt.date(2027,1,5)  # periodo do quiosque Center Shopping
+def _nome_desc(n):
+  """Nome do tipo de desconto: tira e-mail do operador, simbolos soltos nas pontas (" -", "]") e espacos extras."""
+  n=re.sub(r'\S+@\S+','',n or '')
+  n=re.sub(r'\s+',' ',n).strip(' -–—[]()._,;:/|')
+  return n or 'sem descrição'
 def loc(t): return dt.datetime.fromisoformat(t.replace('Z','+00:00'))-dt.timedelta(hours=3)
 conf=[]
 def proc(sess,split):
@@ -93,6 +98,12 @@ for nm,O in [('M',OM['M']),('CS',OM['CS']),('V',OV['V'])]:
     print(' media/dia',round(O['rev']/len(O['day']),2),'| dias com venda',len(O['day']))
   print(' top',[(k,O['items'][k],round(v,2)) for k,v in O['rev_i'].most_common(40)])
   print(' disc',O['disc'])
+  # descontos agrupados por tipo (nome do desconto, sem diferenciar maiusculas): qtd, total e media
+  dg=C.OrderedDict()
+  for d in O['disc']:
+    k=_nome_desc(d[2]); g=dg.setdefault(k.lower(),[k,0,0.0]); g[1]+=1; g[2]+=d[1]
+  dgl=sorted(dg.values(),key=lambda g:-g[2])
+  print(' disc_grupos (total %.2f em %d)'%(sum(g[2] for g in dgl),sum(g[1] for g in dgl)),[(g[0],g[1],round(g[2],2),round(g[2]/g[1],2)) for g in dgl])
   big=sorted(O['sess'],key=lambda x:-x[1])[:3]; print(' big',[(b[0],round(b[1],2),b[2]['bills'][0]['buyer'] and b[2]['bills'][0]['buyer']['name']) for b in big])
 print('canc M',OM['_canc']['canc']);print('canc V',OV['_canc']['canc'])
 print('excl M',em,'open M',im);print('excl V',ev,'open V',iv)
