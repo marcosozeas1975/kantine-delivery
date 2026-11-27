@@ -28,16 +28,22 @@ S={'M':{},'V':{}}
 for k,fl in (('M',lst('--m')),('V',lst('--v'))):
     for f in fl:
         for s in json.load(open(f))['data']: S[k][s['id']]=s
+# Excecoes manuais de unidade: (loja, numero da comanda) -> unidade ('M' Matriz, 'V' Vinhedos, 'S' Site).
+# #4722: produto da loja lançado por engano na categoria Site Kantine (pedido do usuário em 27/11/2026).
+EXCECOES={('M',4722):'M'}
 def loc(t): return dt.datetime.fromisoformat(t.replace('Z','+00:00')).replace(tzinfo=None)-dt.timedelta(hours=3)
 NAT_KW=('kantitone','chocotone','panetone','gingerbread','natal','tora de')
 def grupo(name,cat):
-    n=name.lower()
+    n=name.lower().strip()
+    for pre in ('site - ','site '):  # produtos da categoria Site Kantine ganharam o prefixo 'Site - ' em 27/11/2026
+        if n.startswith(pre): n=n[len(pre):]; break
     if cat=='Sobremesas de Natal': return 'Sobremesas de Natal'
     if cat in ('NATAL','NATAL 2026','KANTITONES') or any(k in n for k in NAT_KW): return 'Natal'
     if cat=='REVENDA': return 'Revenda'
     if cat=='BOLOS E SOBREMESAS' or (cat=='Site Kantine' and any(k in n for k in ('bolo','cheesecake','merengue','torta'))): return 'Bolos e sobremesas'
     if cat in ('PÂTISSERIE FRANCESA & SOBREMESAS','CHOCOLATES E MACARONS','LE PETITS (Miniaturas)') or 'macaron' in n: return 'Doces e pâtisserie'
     if cat=='PARA PRESENTEAR': return 'Cestas e presentes'
+    if n.startswith(('bolo ','bolo\xa0')) or ' bolo ' in n or n.startswith(('cheesecake','merengue','torta ')): return 'Bolos e sobremesas'
     return 'Outros'
 GORD=['Natal','Sobremesas de Natal','Bolos e sobremesas','Doces e pâtisserie','Cestas e presentes','Revenda','Outros']
 UN={'M':'Matriz','V':'Vinhedos','S':'Site'}
@@ -62,6 +68,7 @@ for k in ('M','V'):
                         p=o['product']; cat=CM[k].get(p['id'],'?')
                         items.append(dict(q=float(o['amount']),n=p['name'].strip(),cat=cat,g=grupo(p['name'],cat),v=float(o['total_price'])))
         un='S' if any(i['cat']=='Site Kantine' for i in items) else k
+        un=EXCECOES.get((k,s['session_number']),un)
         for i in items:
             if i['cat']=='?': conf.append(f"Comanda {s['session_number']}: produto sem categoria ({i['n']})")
         when=loc(s['scheduled_to']); paid=sum(float(p['payment_value']) for p in s['payments'])
@@ -81,14 +88,12 @@ def brl(v): return 'R$ '+f'{v:,.2f}'.replace(',','X').replace('.',',').replace('
 def q(v): return str(int(v)) if float(v).is_integer() else str(v)
 DOW=['segunda','terça','quarta','quinta','sexta','sábado','domingo']
 def dlabel(d):
-    diff=(d-TODAY).days
-    t={0:'Hoje',1:'Amanhã'}.get(diff,'')
-    return f"{(t+' · ') if t else ''}{DOW[d.weekday()]}, {d:%d/%m}"
+    return f"{DOW[d.weekday()]}, {d:%d/%m}"
 # ---------- agregados
 def tot(rs): return sum(r['total'] for r in rs)
 hoje=[r for r in pend if r['when'].date()==TODAY]; amanha=[r for r in pend if r['when'].date()==TODAY+dt.timedelta(1)]
 prox7=[r for r in pend if r['when'].date()<=TODAY+dt.timedelta(7)]
-def kpi(l,v,s=''): return f'<div class="kpi"><div class="kl">{E(l)}</div><div class="kv">{v}</div><div class="ks">{s}</div></div>'
+def kpi(l,v,s='',i=''): return f'<div class="kpi"><div class="kl">{E(l)}</div><div class="kv" id="kv-{i}">{v}</div><div class="ks" id="ks-{i}">{s}</div></div>'
 def chip(u): return f'<span class="chip u{u}">{UN[u]}</span>'
 def item_lines(r,g=None):
     return ''.join(f'<div class="it"><b>{q(i["q"])}×</b> {E(i["n"])}</div>' for i in r['items'] if g is None or i['g']==g)
@@ -97,7 +102,7 @@ def pend_day(d):
     cats=C.defaultdict(lambda:C.defaultdict(float)); cv=C.defaultdict(float)
     for r in rs:
         for i in r['items']: cats[i['g']][i['n']]+=i['q']; cv[i['g']]+=i['v']
-    out=f'<section class="day" data-day="{d}"><h3>{E(dlabel(d))} <span class="sub">{len(rs)} encomenda{"s" if len(rs)!=1 else ""} · {brl(tot(rs))}</span> <span class="sub dq"></span></h3>'
+    out=f'<section class="day" data-day="{d}"><h3><span class="dl">{E(dlabel(d))}</span> <span class="sub">{len(rs)} encomenda{"s" if len(rs)!=1 else ""} · {brl(tot(rs))}</span> <span class="sub dq"></span></h3>'
     for g in GORD:
         gr=[(r,[i for i in r['items'] if i['g']==g]) for r in rs]; gr=[(r,it) for r,it in gr if it]
         if not gr: continue
@@ -144,7 +149,7 @@ for r in pend+hist:
 th=''.join(f'<tr><td>{E(g)}</td>'+''.join(f'<td>{brl(mat[g][u]) if mat[g][u] else "–"}</td>' for u in 'MVS')+f'<td><b>{brl(sum(mat[g].values()))}</b></td></tr>' for g in GORD if g in mat)
 conf_h=''.join(f'<li>{E(c)}</li>' for c in dict.fromkeys(conf)) or '<li>Nenhuma inconsistência encontrada.</li>'
 now=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)-dt.timedelta(hours=3)
-CSS_EXTRA=r'''.filters2{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:0 0 14px}.filters2 label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mu);min-width:0}.filters2 input{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);min-width:0}.filters2 select{font:inherit;font-size:14px;padding:7px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);max-width:100%;min-width:0}#fx{border:1px solid var(--ln);background:var(--card);color:var(--tx);padding:7px 13px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer}.fsum{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px 16px;margin-bottom:12px}.fsum table td:first-child{text-align:left}#fpr{border:1px solid var(--tx);background:var(--tx);color:var(--bg);padding:7px 13px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer}.fl{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mu);min-width:0}.ms{position:relative}.ms summary{list-style:none;cursor:pointer;font-size:14px;color:var(--tx);padding:7px 10px;border:1px solid var(--ln);border-radius:8px;background:var(--card);min-width:150px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ms summary::-webkit-details-marker{display:none}.ms summary::after{content:"▾";float:right;margin-left:8px;color:var(--mu)}.msp{position:absolute;z-index:5;top:100%;left:0;margin-top:4px;min-width:260px;max-width:min(340px,86vw);background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:8px;box-shadow:0 6px 24px rgba(0,0,0,.18)}.msp input[type=search]{width:100%;margin-bottom:6px}.msl{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:2px}.msl label{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--tx);padding:4px 2px;cursor:pointer}.filters2 .msl label{flex-direction:row;font-size:14px;color:var(--tx)}.msl input{accent-color:var(--tx);flex:none}#mp .msp{left:auto;right:0}.msp{max-width:calc(100vw - 32px)!important;width:300px}.mst{display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:4px}.mst button{border:0;background:none;color:var(--mu);cursor:pointer;text-decoration:underline;font:inherit;padding:0}.dq{font-weight:700;color:var(--tx)}
+CSS_EXTRA=r'''.filters2{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:0 0 14px}.filters2 label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mu);min-width:0}.filters2 input{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);min-width:0}.filters2 select{font:inherit;font-size:14px;padding:7px 8px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--tx);max-width:100%;min-width:0}#fx{border:1px solid var(--ln);background:var(--card);color:var(--tx);padding:7px 13px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer}.fsum{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px 16px;margin-bottom:12px}.fsum table td:first-child{text-align:left}#fpr{border:1px solid var(--tx);background:var(--tx);color:var(--bg);padding:7px 13px;border-radius:8px;font:inherit;font-size:14px;cursor:pointer}.fl{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mu);min-width:0}.ms{position:relative}.ms summary{list-style:none;cursor:pointer;font-size:14px;color:var(--tx);padding:7px 10px;border:1px solid var(--ln);border-radius:8px;background:var(--card);min-width:150px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ms summary::-webkit-details-marker{display:none}.ms summary::after{content:"▾";float:right;margin-left:8px;color:var(--mu)}.msp{position:absolute;z-index:5;top:100%;left:0;margin-top:4px;min-width:260px;max-width:min(340px,86vw);background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:8px;box-shadow:0 6px 24px rgba(0,0,0,.18)}.msp input[type=search]{width:100%;margin-bottom:6px}.msl{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:2px}.msl label{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--tx);padding:4px 2px;cursor:pointer}.filters2 .msl label{flex-direction:row;font-size:14px;color:var(--tx)}.msl input{accent-color:var(--tx);flex:none}#mp .msp{left:auto;right:0}.msp{max-width:calc(100vw - 32px)!important;width:300px}.mst{display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:4px}.mst button{border:0;background:none;color:var(--mu);cursor:pointer;text-decoration:underline;font:inherit;padding:0}.day.past{opacity:.6}.stale{margin:8px 0 0;color:var(--warn)!important;font-weight:600}.dq{font-weight:700;color:var(--tx)}
 '''
 JS=r'''<script>
 (function(){var ST={u:'',g:[],p:[],f:'',t:''},mcl=document.getElementById('mcl'),mpl=document.getElementById('mpl'),mcs=document.getElementById('mcs'),mps=document.getElementById('mps'),fps=document.getElementById('fps'),sum=document.getElementById('fsum');
@@ -153,7 +158,8 @@ function uniq(a){return a.filter(function(x,i){return a.indexOf(x)===i}).sort(fu
 function lab(sel,all,one){return sel.length?(sel.length===1?sel[0]:sel.length+' selecionados'):all}
 function mk(box,vals,sel,cb){box.innerHTML='';var t=document.createElement('div');t.className='mst';var x=document.createElement('button');x.type='button';x.textContent='Limpar seleção';x.onclick=function(){cb([])};t.appendChild(x);box.appendChild(t);
 vals.forEach(function(v){var l=document.createElement('label'),c=document.createElement('input');c.type='checkbox';c.value=v;c.checked=sel.indexOf(v)>-1;c.onchange=function(){var cur=[].slice.call(box.querySelectorAll('input:checked')).map(function(e){return e.value});cb(cur)};var sp=document.createElement('span');sp.textContent=v;l.appendChild(c);l.appendChild(sp);box.appendChild(l)})}
-function fillC(){mk(mcl,uniq(items.map(function(i){return i.dataset.g})),ST.g,function(sel){ST.g=sel;fillC();fillP();apply()});mcs.textContent=lab(ST.g,'Todas')}
+function fillC(){mk(mcl,uniq(items.map(function(i){return i.dataset.g})),ST.g,function(sel){ST.g=sel;
+fillC();fillP();apply()});mcs.textContent=lab(ST.g,'Todas')}
 function fillP(){var q=(fps.value||'').toLowerCase();var all=uniq(items.filter(function(i){return !ST.g.length||ST.g.indexOf(i.dataset.g)>-1}).map(function(i){return i.dataset.p}));ST.p=ST.p.filter(function(n){return all.indexOf(n)>-1});
 var vals=all.filter(function(n){return !q||n.toLowerCase().indexOf(q)>-1||ST.p.indexOf(n)>-1});mk(mpl,vals,ST.p,function(sel){ST.p=sel;fillP();apply()});mps.textContent=lab(ST.p,'Todos')}
 function brl(v){return 'R$ '+v.toFixed(2).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.')}
@@ -192,10 +198,19 @@ var body=sec(P,'Pendentes de entrega',false)+sec(H,'Já entregues',true);
 if(!pk.length)return null;
 var now=new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'});
 return '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Encomendas Kantine</title><style>@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font:10pt/1.35 Arial,Helvetica,sans-serif;color:#000;margin:0}h1{font-size:16pt;margin:0 0 2mm}h2{font-size:12pt;margin:6mm 0 1mm;border-bottom:1.5px solid #000;padding-bottom:1mm}h3{font-size:10.5pt;margin:4mm 0 1mm;break-after:avoid}h3::first-letter{text-transform:uppercase}.meta{font-size:9pt;color:#333;margin-bottom:2mm}table{width:100%;border-collapse:collapse;margin-bottom:2mm;table-layout:fixed}th:nth-child(1){width:8%}th:nth-child(2){width:9%}th:nth-child(3){width:11%}th:nth-child(4){width:6%}th:nth-child(5){width:28%}th:nth-child(6){width:17%}th:nth-child(7){width:10%}th:nth-child(8){width:11%}.pt th:nth-child(n){width:auto}td{overflow-wrap:anywhere}th,td{border:1px solid #888;padding:1.2mm 1.6mm;text-align:left;vertical-align:top;font-size:9pt}th{background:#e8e8e8}thead{display:table-header-group}tr{break-inside:avoid}.r{text-align:right;white-space:nowrap}.st td{font-weight:bold;background:#f3f3f3}.bar{margin:0 0 4mm;padding:2mm;background:#eee}button{font:inherit;padding:2mm 4mm;cursor:pointer}@media print{.bar{display:none}}</style></head><body><div class="bar"><button onclick="window.print()">Imprimir (A4)</button> Escolha papel A4, margens padrão.</div><h1>Encomendas Kantine</h1><div class="meta">Gerado em '+esc(now)+(fl.length?' · Filtros: '+esc(fl.join(' · ')):' · Sem filtros')+'</div>'+body+rt+'<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},400)})<\/script></body></html>'}
-claude.use('downloads').then(function(dl){if(!dl)return;var pb=document.getElementById('fpr');pb.hidden=false;pb.onclick=function(){var h=buildPrint();if(!h){alert2('Nenhuma encomenda no filtro atual.');return}
+(window.claude&&window.claude.use?window.claude.use('downloads'):Promise.resolve(null)).then(function(dl){if(!dl)return;var pb=document.getElementById('fpr');pb.hidden=false;pb.onclick=function(){var h=buildPrint();if(!h){alert2('Nenhuma encomenda no filtro atual.');return}
 pb.disabled=true;dl.save({filename:'encomendas-kantine.html',data:h}).then(function(){alert2('Arquivo salvo. Abra-o e imprima em A4 (a janela de impressão abre sozinha).')},function(e){if(e&&e.code!=='declined')alert2('Não foi possível salvar o arquivo.')}).then(function(){pb.disabled=false})}}).catch(function(){});
 function alert2(m){var s=document.getElementById('fsum2');if(!s){s=document.createElement('div');s.id='fsum2';s.className='sub';s.style.cssText='margin:-6px 0 10px';document.querySelector('.filters2').after(s)}s.textContent=m}
-fillC();fillP();
+function relDays(){var today=new Date().toLocaleDateString('en-CA',{timeZone:'America/Sao_Paulo'});function df(d){return Math.round((Date.parse(d+'T00:00:00Z')-Date.parse(today+'T00:00:00Z'))/864e5)}
+var K={p:[0,0],h:[0,0],a:[0,0],w:[0,0]};
+document.querySelectorAll('.day').forEach(function(d){var n=df(d.dataset.day),dl=d.querySelector('.dl');if(!dl.dataset.b)dl.dataset.b=dl.textContent;dl.textContent=(n===0?'Hoje · ':n===1?'Amanhã · ':'')+dl.dataset.b;
+var old=d.querySelector('.pastb');if(old)old.remove();if(n<0){d.classList.add('past');var b=document.createElement('span');b.className='bad pastb';b.textContent=' entrega já passou';dl.after(b)}else{d.classList.remove('past')}
+if(n<0)return;var nums={},v=0;d.querySelectorAll('.ord .num').forEach(function(x){nums[x.textContent]=1});d.querySelectorAll('.it[data-v]').forEach(function(i){v+=parseFloat(i.dataset.v)});var c=Object.keys(nums).length;
+K.p[0]+=c;K.p[1]+=v;if(n===0){K.h[0]+=c;K.h[1]+=v}if(n===1){K.a[0]+=c;K.a[1]+=v}if(n<=7){K.w[0]+=c;K.w[1]+=v}});
+Object.keys(K).forEach(function(k){document.getElementById('kv-'+k).textContent=K[k][0];document.getElementById('ks-'+k).textContent=brl(K[k][1])});
+var u=document.getElementById('upd'),st=document.getElementById('stale');if(u.dataset.gen<today){st.hidden=false;st.textContent='Dados gerados em '+u.dataset.genl+'. Hoje é '+today.split('-').reverse().slice(0,2).join('/')+': datas e contagens foram recalculadas, mas pedidos novos só entram na próxima atualização (22h30).'}else{st.hidden=true}}
+
+fillC();fillP();relDays();
 document.getElementById('fd').onchange=function(){ST.f=this.value;apply()};document.getElementById('ft').onchange=function(){ST.t=this.value;apply()};
 fps.oninput=function(){fillP()};document.addEventListener('click',function(e){document.querySelectorAll('.ms[open]').forEach(function(d){if(!d.contains(e.target))d.open=false})});
 document.getElementById('fx').onclick=function(){ST.g=[];ST.p=[];ST.f='';ST.t='';fps.value='';document.getElementById('fd').value='';document.getElementById('ft').value='';fillC();fillP();apply()};
@@ -223,8 +238,9 @@ main{{max-width:980px;margin:0 auto;padding-block:20px 48px;padding-left:max(16p
 table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{padding:7px 6px;font-size:13px;border-bottom:1px solid var(--ln);text-align:right}}td:first-child,th:first-child{{text-align:left}}
 .sec{{padding:14px 16px}}details{{border-top:1px solid var(--ln);padding:8px 0}}summary{{cursor:pointer;font-weight:600}}.canc{{opacity:.7}}.empty{{color:var(--mu)}}ul{{margin:6px 0 0;padding-left:20px}}
 {CSS_EXTRA}</style><main>
-<div class="top"><h1>Encomendas Kantine</h1><div class="upd">Atualizado em {now:%d/%m/%Y} às {now:%H:%M} · histórico desde {SINCE:%d/%m/%Y}</div></div>
-<div class="kpis">{kpi('Pendentes de entrega',len(pend),brl(tot(pend)))}{kpi('Para hoje',len(hoje),brl(tot(hoje)))}{kpi('Para amanhã',len(amanha),brl(tot(amanha)))}{kpi('Próximos 7 dias',len(prox7),brl(tot(prox7)))}{kpi('Entregues no período',len(hist),brl(tot(hist)))}</div>
+<div class="top"><h1>Encomendas Kantine</h1><div class="upd" id="upd" data-gen="{TODAY}" data-genl="{now:%d/%m} às {now:%H:%M}">Atualizado em {now:%d/%m/%Y} às {now:%H:%M} · histórico desde {SINCE:%d/%m/%Y}</div></div>
+<div class="stale sub" id="stale" hidden></div>
+<div class="kpis">{kpi('Pendentes de entrega',len(pend),brl(tot(pend)),'p')}{kpi('Para hoje',len(hoje),brl(tot(hoje)),'h')}{kpi('Para amanhã',len(amanha),brl(tot(amanha)),'a')}{kpi('Próximos 7 dias',len(prox7),brl(tot(prox7)),'w')}{kpi('Entregues no período',len(hist),brl(tot(hist)))}</div>
 <h2>Pendentes de entrega · por dia e categoria</h2>
 <p class="sub" style="margin:-6px 0 10px">Os filtros valem também para o histórico mais abaixo.</p>
 <div class="filters" id="f"><button class="on" data-u="">Todas</button><button data-u="M">Matriz</button><button data-u="V">Vinhedos</button><button data-u="S">Site</button></div>

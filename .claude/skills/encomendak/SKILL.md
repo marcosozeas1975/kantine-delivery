@@ -12,6 +12,8 @@ Fonte: conector **Takeat Multilojas** (`mcp__Takeat_Multilojas__*`; carregue com
 ## Regras
 
 - **Unidades**: *Matriz* (loja 40695), *Vinhedos* (loja 43896) e *Site* = comandas que tenham pelo menos um item da categoria **"Site Kantine"** (a comanda inteira vai para Site, em qualquer loja). Itens "NATAL 2026" (Center Shopping) **não** têm encomendas e ficam fora desta análise.
+- **Exceções manuais**: a comanda `#4722` (Matriz) é produto da loja lançado por engano na categoria Site Kantine e conta como **Matriz**. Novas exceções vão em `EXCECOES` no script.
+- **Prefixo "Site"**: desde 27/11/2026 todo produto da categoria "Site Kantine" no Takeat começa com "Site - " (para a loja não lançá-los por engano). A chave da integração com o site é o SKU, não o nome. O backup dos nomes antigos está em `data/site_nomes_antes_2026-11-27.json`. A classificação por categoria do relatório ignora o prefixo.
 - **Pendente** = `scheduled_to` (horário local = UTC−3) de **hoje em diante** e não cancelada. Atenção: a comanda de encomenda costuma estar `completed`/paga mesmo antes da entrega, então **não use o status** para saber se foi entregue; use a data.
 - **Cancelada**: status `canceled` ou `delivery_canceled_at` preenchido. Itens cancelados saem do total.
 - **Retirada** quando `with_withdrawal` é verdadeiro; senão, Entrega.
@@ -22,6 +24,8 @@ Fonte: conector **Takeat Multilojas** (`mcp__Takeat_Multilojas__*`; carregue com
 
 1. `get_products` das duas lojas (limit 100) para mapear produto → categoria (os arquivos são grandes e vão para `tool-results/`; não leia no contexto).
 2. `get_table_sessions` por loja, de `2026-11-01` até hoje, **um dia por chamada** (`start_date = end_date`, `limit=100`; os dias podem rodar em paralelo). Para cada dia com `has_more=true`, siga `pagination.next.cursor` **com os mesmos filtros** até `has_more=false`. A API filtra pela data de **criação** da comanda, não pela entrega; por isso o intervalo vai desde 01/11. Nunca trate a primeira página como total.
+   - **Respostas inline**: se uma página voltar no corpo da resposta em vez de ser salva em arquivo, **refaça a mesma chamada (mesmos filtros e cursor) com `limit` menor, por exemplo 60**, até ela ser salva. Nunca deixe páginas de fora do script nem suponha que não têm encomendas.
+   - **`--today`** é a data de hoje no fuso `America/Sao_Paulo` (`TZ=America/Sao_Paulo date +%F`), nunca a data UTC: às 22h30 a data UTC já é a do dia seguinte.
 3. As respostas são salvas em arquivos; rode o script (ele deduplica por id):
 
 ```
