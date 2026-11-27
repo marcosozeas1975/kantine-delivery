@@ -52,3 +52,13 @@ Curta, para celular: pendentes (nº e valor), as de hoje e amanhã, o que produz
 ## Agendamento
 
 Roda todo dia às 22h30 (America/Sao_Paulo) atualizando o mesmo link.
+
+## Modo incremental (em teste, a rotina ainda usa o modo completo)
+
+Objetivo: gastar menos buscando só o que pode ter mudado. Scripts: `scripts/coleta.py` (extrair, mesclar, dias) e `scripts/encomendas.py --cache-dir`.
+
+- **Cache**: um documento por loja e dia de criação em `dias/_encomendas/docs/<L>-<AAAA-MM-DD>` (L = M Matriz, V Vinhedos) no artifact de cache `WfY4…`. Esse caminho herda a proteção da coleção `dias` (confirmado com `as_level: view`); **não** use uma coleção `encomendas` solta, que fica legível por qualquer viewer.
+- **Dias a buscar** (`coleta.py dias --cache DIR --hoje AAAA-MM-DD`): janela A = hoje e os 2 dias anteriores nas duas lojas; janela B = dias de criação das comandas "vivas" (entrega nos últimos 7 dias ou futura, ou comanda aberta); janela C = todos os dias desde 01/11 (`--completo`, aos domingos ou com cache vazio).
+- **Mesclar** (`coleta.py mesclar`): o documento novo de cada dia buscado substitui o do cache; dia buscado sem agendamento apaga o documento. Gera a lista de mudanças (nova, cancelada, item, entrega, pago, tipo, removida).
+- **Página** (`encomendas.py --cache-dir DIR --mudancas ARQ.json`): gera o mesmo HTML do modo completo (verificado) e acrescenta a seção "Mudanças desde a última atualização".
+- Escritas no cache: `ArtifactData` `batch` (até 50 por chamada), com `if_version` nos documentos que já existem.

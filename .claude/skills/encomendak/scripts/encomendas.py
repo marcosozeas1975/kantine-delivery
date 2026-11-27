@@ -1,5 +1,8 @@
 """EncomendaK: gera o HTML do relatorio de encomendas com agendamento (campo scheduled_to).
-Uso: python3 encomendas.py --today AAAA-MM-DD --since AAAA-MM-DD --out ARQ.html \
+Dois modos de entrada:
+  (a) cache (coleta incremental): --cache-dir DIR [--mudancas ARQ.json], com os documentos do cache (ver coleta.py);
+  (b) respostas salvas do Takeat (modo completo), como abaixo.
+Uso (modo b): python3 encomendas.py --today AAAA-MM-DD --since AAAA-MM-DD --out ARQ.html \
        --pm PRODUTOS_MATRIZ.json --pv PRODUTOS_VINHEDOS.json \
        --m SESSOES_M_p1.json [p2 ...] --v SESSOES_V_p1.json [...]
 Os arquivos sao as respostas salvas de get_products / get_table_sessions (Takeat).
@@ -23,7 +26,8 @@ def catmap(f):
         for c in it['categories']:
             for p in c.get('products',[]): m[p['id']]=c['name'].strip()
     return m
-CM={'M':catmap(opt('--pm')),'V':catmap(opt('--pv'))}
+CACHE=opt('--cache-dir')
+CM={'M':catmap(opt('--pm')),'V':catmap(opt('--pv'))} if not CACHE else {}
 S={'M':{},'V':{}}
 for k,fl in (('M',lst('--m')),('V',lst('--v'))):
     for f in fl:
@@ -48,6 +52,20 @@ def grupo(name,cat):
 GORD=['Natal','Sobremesas de Natal','Bolos e sobremesas','Doces e pâtisserie','Cestas e presentes','Revenda','Outros']
 UN={'M':'Matriz','V':'Vinhedos','S':'Site'}
 rows=[];conf=[]
+if CACHE:
+    import glob,os
+    for f in sorted(glob.glob(os.path.join(CACHE,'**','*.json'),recursive=True)):
+        doc=json.load(open(f))
+        if not (isinstance(doc,dict) and 'pedidos' in doc and 'loja' in doc): continue
+        k=doc['loja']
+        for r in doc['pedidos']:
+            items=[dict(q=i['q'],n=i['nome'],cat=i['cat'],g=grupo(i['nome'],i['cat']),v=i['v']) for i in r['itens']]
+            un='S' if any(i['cat']=='Site Kantine' for i in items) else k
+            un=EXCECOES.get((k,r['n']),un)
+            for i in items:
+                if i['cat']=='?': conf.append(f"Comanda {r['n']}: produto sem categoria ({i['n']})")
+            rows.append(dict(num=r['n'],un=un,when=dt.datetime.fromisoformat(r['entrega']),canc=r['cancelada'],status=r['status'],ret=r['retirada'],
+                items=items,total=r['total'],paid=r['pago'],created=dt.datetime.fromisoformat(r['criada'])))
 for k in ('M','V'):
     for s in S[k].values():
         if not s['scheduled_to']: continue
@@ -75,6 +93,15 @@ for k in ('M','V'):
         tot=sum(i['v'] for i in items)
         rows.append(dict(num=s['session_number'],un=un,when=when,canc=canc,status=s['status'],ret=bool(s['with_withdrawal']),
             items=items,total=tot,paid=paid,created=loc(s['start_time'])))
+MUD=opt('--mudancas')
+MUD_H=''
+if MUD:
+    _t={'nova':'comanda nova','cancelada':'cancelada','reativada':'reativada','item':'item trocado','entrega':'data/hora de entrega mudou','pago':'valor pago mudou','tipo':'retirada/entrega mudou','removida':'comanda removida'}
+    _lj={'M':'Matriz','V':'Vinhedos'}
+    _l=json.load(open(MUD))
+    _li=''.join('<li><b>#%s</b> (%s): %s%s</li>'%(html.escape(str(m['n'])),_lj.get(m['loja'],m['loja']),_t.get(m['tipo'],m['tipo']),
+        (' — '+html.escape(str(m.get('antes','')))+' → '+html.escape(str(m.get('depois',''))) if m.get('antes') and m.get('depois') else (' — '+html.escape(str(m.get('depois') or m.get('antes'))) if (m.get('depois') or m.get('antes')) else ''))) for m in _l)
+    MUD_H='<h2>Mudanças desde a última atualização</h2><div class="sec">'+('<ul>'+_li+'</ul>' if _li else '<p class="empty">Nenhuma mudança.</p>')+'</div>'
 rows.sort(key=lambda r:(r['when'],r['num']))
 for r in rows:
     r['pend']=(not r['canc']) and r['when'].date()>=TODAY
@@ -241,6 +268,7 @@ table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{padding:7px 6p
 <div class="top"><h1>Encomendas Kantine</h1><div class="upd" id="upd" data-gen="{TODAY}" data-genl="{now:%d/%m} às {now:%H:%M}">Atualizado em {now:%d/%m/%Y} às {now:%H:%M} · histórico desde {SINCE:%d/%m/%Y}</div></div>
 <div class="stale sub" id="stale" hidden></div>
 <div class="kpis">{kpi('Pendentes de entrega',len(pend),brl(tot(pend)),'p')}{kpi('Para hoje',len(hoje),brl(tot(hoje)),'h')}{kpi('Para amanhã',len(amanha),brl(tot(amanha)),'a')}{kpi('Próximos 7 dias',len(prox7),brl(tot(prox7)),'w')}{kpi('Entregues no período',len(hist),brl(tot(hist)))}</div>
+{MUD_H}
 <h2>Pendentes de entrega · por dia e categoria</h2>
 <p class="sub" style="margin:-6px 0 10px">Os filtros valem também para o histórico mais abaixo.</p>
 <div class="filters" id="f"><button class="on" data-u="">Todas</button><button data-u="M">Matriz</button><button data-u="V">Vinhedos</button><button data-u="S">Site</button></div>
