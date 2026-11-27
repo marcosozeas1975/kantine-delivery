@@ -12,6 +12,8 @@ Fonte: conector **Takeat Multilojas** (`mcp__Takeat_Multilojas__*`; carregue com
 ## Regras
 
 - **Unidades**: *Matriz* (loja 40695), *Vinhedos* (loja 43896) e *Site* = comandas que tenham pelo menos um item da categoria **"Site Kantine"** (a comanda inteira vai para Site, em qualquer loja). Itens "NATAL 2026" (Center Shopping) **não** têm encomendas e ficam fora desta análise.
+- **Exceções manuais**: a comanda `#4722` (Matriz) é produto da loja lançado por engano na categoria Site Kantine e conta como **Matriz**. Novas exceções vão em `EXCECOES` no script.
+- **Prefixo "Site"**: desde 27/11/2026 todo produto da categoria "Site Kantine" no Takeat começa com "Site " (para a loja não lançá-los por engano). A chave da integração com o site é o SKU, não o nome. O backup dos nomes antigos está em `data/site_nomes_antes_2026-11-27.json`. A classificação por categoria do relatório ignora o prefixo.
 - **Pendente** = `scheduled_to` (horário local = UTC−3) de **hoje em diante** e não cancelada. Atenção: a comanda de encomenda costuma estar `completed`/paga mesmo antes da entrega, então **não use o status** para saber se foi entregue; use a data.
 - **Cancelada**: status `canceled` ou `delivery_canceled_at` preenchido. Itens cancelados saem do total.
 - **Retirada** quando `with_withdrawal` é verdadeiro; senão, Entrega.

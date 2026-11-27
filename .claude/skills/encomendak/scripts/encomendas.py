@@ -28,10 +28,14 @@ S={'M':{},'V':{}}
 for k,fl in (('M',lst('--m')),('V',lst('--v'))):
     for f in fl:
         for s in json.load(open(f))['data']: S[k][s['id']]=s
+# Excecoes manuais de unidade: (loja, numero da comanda) -> unidade ('M' Matriz, 'V' Vinhedos, 'S' Site).
+# #4722: produto da loja lançado por engano na categoria Site Kantine (pedido do usuário em 27/11/2026).
+EXCECOES={('M',4722):'M'}
 def loc(t): return dt.datetime.fromisoformat(t.replace('Z','+00:00')).replace(tzinfo=None)-dt.timedelta(hours=3)
 NAT_KW=('kantitone','chocotone','panetone','gingerbread','natal','tora de')
 def grupo(name,cat):
-    n=name.lower()
+    n=name.lower().strip()
+    if n.startswith('site '): n=n[5:]  # produtos da categoria Site Kantine ganharam o prefixo 'Site ' em 27/11/2026
     if cat=='Sobremesas de Natal': return 'Sobremesas de Natal'
     if cat in ('NATAL','NATAL 2026','KANTITONES') or any(k in n for k in NAT_KW): return 'Natal'
     if cat=='REVENDA': return 'Revenda'
@@ -63,6 +67,7 @@ for k in ('M','V'):
                         p=o['product']; cat=CM[k].get(p['id'],'?')
                         items.append(dict(q=float(o['amount']),n=p['name'].strip(),cat=cat,g=grupo(p['name'],cat),v=float(o['total_price'])))
         un='S' if any(i['cat']=='Site Kantine' for i in items) else k
+        un=EXCECOES.get((k,s['session_number']),un)
         for i in items:
             if i['cat']=='?': conf.append(f"Comanda {s['session_number']}: produto sem categoria ({i['n']})")
         when=loc(s['scheduled_to']); paid=sum(float(p['payment_value']) for p in s['payments'])

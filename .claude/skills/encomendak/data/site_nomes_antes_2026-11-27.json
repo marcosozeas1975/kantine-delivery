@@ -1,0 +1,593 @@
+{
+ "restaurant_id": 40695,
+ "brand_id": 877,
+ "categoria": "Site Kantine (1106777)",
+ "gerado_em": "2026-11-27",
+ "obs": "Nomes ANTES de acrescentar o prefixo \"Site \". Para desfazer, restaure name = valor deste arquivo.",
+ "produtos": [
+  {
+   "id": 3343858,
+   "name": "Vela Artesanal Croissant",
+   "price": "45.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Vela artesanal feita com cera de coco (100% vegetal) no formato de mini croissant. Aroma de croissant de amêndoas."
+  },
+  {
+   "id": 3343850,
+   "name": "Drip Coffee Caramelo",
+   "price": "15.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Sachê com dose individual de café moído. Faça seu café na própria xícara com praticidade e rapidez (basta adicionar água quente). Peso 10g."
+  },
+  {
+   "id": 3343852,
+   "name": "Geleia ZERO de Frutas Amarelas",
+   "price": "24.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Geleia de frutas amarelas sem açúcar. Feita com damasco, maracujá, manga e abacaxi. Feitas na nossa cozinha, sem açúcar e sem adoçante. Peso 150g."
+  },
+  {
+   "id": 3343853,
+   "name": "Cappuccino Tradicional Kantine",
+   "price": "28.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pó para capuccino. Feito com leite em pó, café solúvel, açúcar, bicarbonato de sódio, cacau e canela. Peso: 100g."
+  },
+  {
+   "id": 3343854,
+   "name": "Café Especial Caminho Verde",
+   "price": "45.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Uma experiência rica e equilibrada, perfeita para quem aprecia os sabores autênticos do Cerrado Mineiro. Café 100% Arábica com notas sensoriais de chocolate, leve toque de doce de leite, caramelo e nozes."
+  },
+  {
+   "id": 3343855,
+   "name": "Café Especial de Chocolate e Caramelo",
+   "price": "49.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Fundo de caramelo, mel, laranja e açúcar mascavo, com doçura envolvente. Acidez tartárica leve, proporcionando uma sensação equilibrada e suave. Corpo cremoso, com finalização longa e persistente."
+  },
+  {
+   "id": 3343856,
+   "name": "Suspiro Artesanal (pote)",
+   "price": "17.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Suspiro artesanal. É leve, docinho e derrete na boca! Contém aprox. 55g"
+  },
+  {
+   "id": 3343857,
+   "name": "Chocolate Quente Cremoso",
+   "price": "32.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pó para chocolate quente cremoso. Ingredientes: sacarose, cacau, amido de milho e goma guar. Não contém glúten. Peso: 70g"
+  },
+  {
+   "id": 3343859,
+   "name": "Meia de Algodão Kantine",
+   "price": "39.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "A Kantine não está só na cabeça, no coração e no estômago, estamos nos pés também. Meia de algodão branca com listras azuis e mini croissant. Tamanho ÚNICO (veste do 36 ao 42)."
+  },
+  {
+   "id": 3343860,
+   "name": "Cappuccino ZERO",
+   "price": "32.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pó para cappucino zero açúcar e zero lactose. Feito aqui na Kantine com: leite em pó zero lactose, café solúvel, adoçante, cacau e canela."
+  },
+  {
+   "id": 3343861,
+   "name": "Croissant Congelado",
+   "price": "10.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Nosso tradicional croissant assado e congelado prontinho para você levar para casa. Para consumir basta passar no forno ou air fryer."
+  },
+  {
+   "id": 3343862,
+   "name": "Brookie Chocolatudo",
+   "price": "16.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Mistura de cookie e brownie. Nosso primeiro carro chefe: é um brownie bem chocolatudo com pedaços de chocolate no formato de cookie! Sugerimos levá-lo ao microondas por alguns segundos antes de consumir."
+  },
+  {
+   "id": 3343863,
+   "name": "Waffer de Nutella",
+   "price": "18.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Biscoito crocante recheado com bastante Nutella pura e coberto por chocolate ao leite. É um dos queridinhos da Kantine desde o início da loja."
+  },
+  {
+   "id": 3343864,
+   "name": "Geleia Artesanal de Frutas Vermelhas",
+   "price": "24.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Geleia feita na casa com morangos, framboesa, amora e mirtilos com pouquíssimo açúcar. Peso 150g."
+  },
+  {
+   "id": 3343865,
+   "name": "Amanteigados (sablé) de Amêndoas",
+   "price": "23.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Receita de um maravilhoso biscoito amanteiado de farinha de amêndoas do chef francês Xaviel Thill compartilhado com nossa Chef Luana Ávila. É leve, crocante e derrete na boca. Perfeito para comer com nossos cafés especiais. Pote com 150g de sablé."
+  },
+  {
+   "id": 3343866,
+   "name": "Bolo Três Amores (GG 3,5kg)",
+   "price": "390.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló, creme Kantine com morangos e mousse de chocolate. Decorado com morangos."
+  },
+  {
+   "id": 3343867,
+   "name": "Bolo Três Amores (G 2,5kg)",
+   "price": "320.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló, creme Kantine com morangos e mousse de chocolate. Decorado com morangos."
+  },
+  {
+   "id": 3343868,
+   "name": "Bolo Três Amores (M 2kg)",
+   "price": "250.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló, creme Kantine com morangos e mousse de chocolate. Decorado com morangos."
+  },
+  {
+   "id": 3343869,
+   "name": "Bolo Três Amores (P 1,5kg)",
+   "price": "190.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló, creme Kantine com morangos e mousse de chocolate. Decorado com morangos."
+  },
+  {
+   "id": 3343870,
+   "name": "Bolo Três Amores (Mini 1kg)",
+   "price": "140.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló, creme Kantine com morangos e mousse de chocolate. Decorado com morangos."
+  },
+  {
+   "id": 3343871,
+   "name": "Bolo de Pistache com Frutas Vermelhas (GG 3,5kg)",
+   "price": "390.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló cortado em fatias fininhas recheado com camadas de creme de pistache e geleia de frutas vermelhas."
+  },
+  {
+   "id": 3343872,
+   "name": "Bolo de Pistache com Frutas Vermelhas (G 2,5kg)",
+   "price": "320.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló cortado em fatias fininhas recheado com camadas de creme de pistache e geleia de frutas vermelhas."
+  },
+  {
+   "id": 3343873,
+   "name": "Bolo de Pistache com Frutas Vermelhas (M 2kg)",
+   "price": "250.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló cortado em fatias fininhas recheado com camadas de creme de pistache e geleia de frutas vermelhas."
+  },
+  {
+   "id": 3343874,
+   "name": "Bolo de Pistache com Frutas Vermelhas (P 1,5kg)",
+   "price": "190.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló cortado em fatias fininhas recheado com camadas de creme de pistache e geleia de frutas vermelhas."
+  },
+  {
+   "id": 3343875,
+   "name": "Bolo de Pistache com Frutas Vermelhas (Mini 1kg)",
+   "price": "140.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Pão de ló cortado em fatias fininhas recheado com camadas de creme de pistache e geleia de frutas vermelhas."
+  },
+  {
+   "id": 3343876,
+   "name": "Bolo Chocolatudo (GG 3,5kg)",
+   "price": "350.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Bolo 100% cacau e mousse de chocolate. Decorado com morangos frescos."
+  },
+  {
+   "id": 3343877,
+   "name": "Bolo Chocolatudo (G 2,5kg)",
+   "price": "290.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Bolo 100% cacau e mousse de chocolate. Decorado com morangos frescos."
+  },
+  {
+   "id": 3343878,
+   "name": "Bolo Chocolatudo (M 2kg)",
+   "price": "230.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Bolo 100% cacau e mousse de chocolate. Decorado com morangos frescos."
+  },
+  {
+   "id": 3343879,
+   "name": "Bolo Chocolatudo (P 1,5kg)",
+   "price": "170.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Bolo 100% cacau e mousse de chocolate. Decorado com morangos frescos."
+  },
+  {
+   "id": 3343880,
+   "name": "Bolo Chocolatudo (Mini 1kg)",
+   "price": "125.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Bolo 100% cacau e mousse de chocolate. Decorado com morangos frescos."
+  },
+  {
+   "id": 3343881,
+   "name": "Bolo Leo Ávila (GG 3,5kg)",
+   "price": "350.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "O bolo do meu pai! Pão de ló recheado com compota caseira de abacaxi e creme Kantine. Decorado com raspas de chocolate branco."
+  },
+  {
+   "id": 3343882,
+   "name": "Bolo Leo Ávila (G 2,5kg)",
+   "price": "290.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "O bolo do meu pai! Pão de ló recheado com compota caseira de abacaxi e creme Kantine. Decorado com raspas de chocolate branco."
+  },
+  {
+   "id": 3343883,
+   "name": "Bolo Leo Ávila (M 2kg)",
+   "price": "230.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "O bolo do meu pai! Pão de ló recheado com compota caseira de abacaxi e creme Kantine. Decorado com raspas de chocolate branco."
+  },
+  {
+   "id": 3343884,
+   "name": "Bolo Leo Ávila (P 1,5kg)",
+   "price": "170.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "O bolo do meu pai! Pão de ló recheado com compota caseira de abacaxi e creme Kantine. Decorado com raspas de chocolate branco."
+  },
+  {
+   "id": 3343885,
+   "name": "Bolo Leo Ávila (Mini 1kg)",
+   "price": "125.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "O bolo do meu pai! Pão de ló recheado com compota caseira de abacaxi e creme Kantine. Decorado com raspas de chocolate branco."
+  },
+  {
+   "id": 3343886,
+   "name": "Le Petit",
+   "price": "58.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Quer envivar um mimo? Essa é uma ótima opção!"
+  },
+  {
+   "id": 3343887,
+   "name": "Cesta Bonjour",
+   "price": "108.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Imagine acordar a pessoa que você ama com um café caprichado como esse? Ela vai amar!"
+  },
+  {
+   "id": 3343888,
+   "name": "Cesta Experiência Kantine",
+   "price": "198.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Imagine acordar a pessoa que você ama com um café caprichado como esse? Ela vai amar!"
+  },
+  {
+   "id": 3343889,
+   "name": "Torta 3 Chocolates",
+   "price": "348.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Composta por brownie de chocolate e três mousses: de chocolate meio amargo, ao leite e branco."
+  },
+  {
+   "id": 3343890,
+   "name": "Pavê 3 Amores",
+   "price": "250.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Nossa versão de pavê tem: morangos frescos, pedaços de bolo de chocolate e brownie, creme super levinho e ganache cremosa de chocolate."
+  },
+  {
+   "id": 3343901,
+   "name": "Merengue de Morango",
+   "price": "250.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Levinho, equilibrado e elegante. Composto por morangos frescos, creme Kantine bem levinho, suspiros da casa e creme de leite fresco batido em ponto de chantilly."
+  },
+  {
+   "id": 3343910,
+   "name": "Tiramisù na Travessa (G)",
+   "price": "200.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Creme levinho de mascarpone, calda de café com toque de Amaretto, savoiardi feito na nossa cozinha e fina camada de cacau. Pouco açúcar. 1,5kg, serve 15 pessoas. Acompanha a travessa."
+  },
+  {
+   "id": 3343912,
+   "name": "Mousse de Chocolate Zero na Travessa (G)",
+   "price": "200.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Mousse de chocolate intenso 56% cacau, zero açúcar. Se não contar que é zero, ninguém perceberá! 1,5kg, serve 15 pessoas. Acompanha a travessa."
+  },
+  {
+   "id": 3343851,
+   "name": "Geleia de Cebola Roxa com Balsâmico",
+   "price": "24.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Geleia artesanal de Cebola Roxa com toque de vinagre balsâmico. Peso: 150g."
+  },
+  {
+   "id": 3365957,
+   "name": "Kantitone Tradicional Mini (100g)",
+   "price": "22.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Panetone de chocolate (ou frutas) feito artesanalmente com manteiga, ovos e chocolate nobre. Vem com caixa presenteável."
+  },
+  {
+   "id": 3365958,
+   "name": "Kantitone Tradicional Grande (400g)",
+   "price": "64.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Panetone de chocolate (ou frutas) feito artesanalmente com manteiga, ovos e chocolate nobre. Vem com caixa presenteável."
+  },
+  {
+   "id": 3365959,
+   "name": "Kantitone Maxi Chocolate (700g)",
+   "price": "129.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone artesanal com inserções de creme Kantine de chocolate. Tem um ótimo equilíbrio entre massa e recheio. Aprox. 700g."
+  },
+  {
+   "id": 3365960,
+   "name": "Kantitone Maxi Doce de Leite Argentino (700g)",
+   "price": "129.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone artesanal com inserções de doce de leite argentino. Tem um ótimo equilíbrio entre massa e recheio. Aprox. 700g."
+  },
+  {
+   "id": 3365961,
+   "name": "Mini Kantitone Recheado (200g)",
+   "price": "44.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone recheado mini, aprox. 200g. Escolha o seu recheio."
+  },
+  {
+   "id": 3365962,
+   "name": "Kantitone Recheado Dois Amores (800g)",
+   "price": "139.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "O sabor mais clássico e mais vendido da casa: creme Kantine (feito com chocolate branco) e creme Kantine com chocolate preto. Aprox. 800g."
+  },
+  {
+   "id": 3365963,
+   "name": "Kantitone Recheado Maracujá e Chocolate (800g)",
+   "price": "145.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone artesanal recheado com chocolate e maracujá, coberto com chocolate. Aprox. 800g."
+  },
+  {
+   "id": 3365964,
+   "name": "Kantitone Recheado Pistache e Kantine (800g)",
+   "price": "145.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone recheado com creme de pistache e creme de chocolate, coberto com chocolate branco. Aprox. 800g."
+  },
+  {
+   "id": 3365965,
+   "name": "Kantitone Recheado Nutella Crunch (800g)",
+   "price": "149.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone recheado com pura Nutella® misturada ao nosso crocante artesanal. Aprox. 800g."
+  },
+  {
+   "id": 3365966,
+   "name": "Kantitone Recheado Caramelo Salgado e Chocolate (800g)",
+   "price": "139.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Kantitone recheado com chocolate e nosso famoso caramelo salgado artesanal. Aprox. 800g."
+  },
+  {
+   "id": 3343903,
+   "name": "Rafa-Quem?",
+   "price": "228.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Nossa versão do bombom Raffaello: mousse de baunilha, cocada cremosa, crocante de amêndoas, pão de ló e cobertura de chocolate branco crocante. Serve cerca de 16 pessoas. Peso aprox. 1,6kg (20cm)."
+  },
+  {
+   "id": 3343904,
+   "name": "Bosque de Natal",
+   "price": "228.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Mousse de baunilha com cremoso de chocolate meio amargo, crocante de chocolate e geleia de amora e amarena ao vinho tinto. Leve e com pouco açúcar. Serve cerca de 16 pessoas. Peso aprox. 1,6kg."
+  },
+  {
+   "id": 3343906,
+   "name": "Soleil Cítrico",
+   "price": "228.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Leve, frutado e azedinho: mousse cítrica com cremoso de limão e mexerica, marmelada cítrica, crumble de amêndoas e pão de ló. Serve cerca de 16 pessoas. Peso aprox. 1,6kg (20cm)."
+  },
+  {
+   "id": 3343907,
+   "name": "Merveilleux de Chocolate",
+   "price": "248.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Discos de suspiro recheados com mousse de chocolate meio amargo e raspas de chocolate. Calda de frutas vermelhas opcional. Sem glúten adicionado (pode haver contaminação cruzada). Serve cerca de 16 pessoas. Aprox. 1,6kg."
+  },
+  {
+   "id": 3343908,
+   "name": "Absolutamente Pistache",
+   "price": "298.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Base de sablé de amêndoas com creme e ganache de pistache. Um deleite para os amantes do pistache! Serve cerca de 16 pessoas. Peso aprox. 2kg (23cm)."
+  },
+  {
+   "id": 3343909,
+   "name": "Tiramisù na Travessa (M)",
+   "price": "148.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Creme levinho de mascarpone, calda de café com toque de Amaretto, savoiardi feito na nossa cozinha e fina camada de cacau. Pouco açúcar. 1kg, serve 10 pessoas. Acompanha a travessa."
+  },
+  {
+   "id": 3343911,
+   "name": "Mousse de Chocolate Zero na Travessa (M)",
+   "price": "228.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Mousse de chocolate intenso 56% cacau, zero açúcar. Se não contar que é zero, ninguém perceberá! 1kg, serve 10 pessoas. Acompanha a travessa."
+  },
+  {
+   "id": 3343913,
+   "name": "Intensamente Maracujá",
+   "price": "228.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Mousse de chocolate com cremoso e caramelo ácido de maracujá, crocante de chocolate e fina camada de bolinho de cacau. Intenso e azedinho. Serve cerca de 16 pessoas. Peso aprox. 1,6kg."
+  },
+  {
+   "id": 3343914,
+   "name": "Rocher Duo Ninho e Nutella",
+   "price": "198.00",
+   "available": true,
+   "available_in_delivery": true,
+   "description": "Mousse de Ninho, interior cremoso de Nutella e cobertura crocante de chocolate branco. O preferido das crianças! Serve cerca de 16 pessoas. Peso aprox. 1,6kg. Decoração pode variar."
+  },
+  {
+   "id": 3343891,
+   "name": "Bolo Marta Rocha Naked (GG 3,5kg)",
+   "price": "350.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343894,
+   "name": "Bolo Marta Rocha Naked (P 1,5kg)",
+   "price": "170.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343898,
+   "name": "Bolo Marta Rocha Tradicional (M 2kg)",
+   "price": "250.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343892,
+   "name": "Bolo Marta Rocha Naked (G 2,5kg)",
+   "price": "290.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343893,
+   "name": "Bolo Marta Rocha Naked (M 2kg)",
+   "price": "230.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343895,
+   "name": "Bolo Marta Rocha Naked (Mini 1kg)",
+   "price": "125.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343896,
+   "name": "Bolo Marta Rocha Tradicional (GG 3,5kg)",
+   "price": "390.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343897,
+   "name": "Bolo Marta Rocha Tradicional (G 2,5kg)",
+   "price": "320.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343899,
+   "name": "Bolo Marta Rocha Tradicional (P 1,5kg)",
+   "price": "190.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  },
+  {
+   "id": 3343900,
+   "name": "Bolo Marta Rocha Tradicional (Mini 1kg)",
+   "price": "140.00",
+   "available": false,
+   "available_in_delivery": false,
+   "description": "Bolo de chocolate, creme Kantine com crocante de castanhas, suspiro caseiro, pão de ló, geleia de damasco, chantilly e crocante de castanhas."
+  }
+ ]
+}
