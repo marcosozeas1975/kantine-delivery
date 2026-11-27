@@ -62,3 +62,17 @@ Objetivo: gastar menos buscando só o que pode ter mudado. Scripts: `scripts/col
 - **Mesclar** (`coleta.py mesclar`): o documento novo de cada dia buscado substitui o do cache; dia buscado sem agendamento apaga o documento. Gera a lista de mudanças (nova, cancelada, item, entrega, pago, tipo, removida).
 - **Página** (`encomendas.py --cache-dir DIR --mudancas ARQ.json`): gera o mesmo HTML do modo completo (verificado) e acrescenta a seção "Mudanças desde a última atualização".
 - Escritas no cache: `ArtifactData` `batch` (até 50 por chamada), com `if_version` nos documentos que já existem.
+
+### Procedimento em paralelo (noites de teste: o modo incremental roda DEPOIS do modo completo e NÃO publica)
+
+Variáveis: `HOJE` = data de São Paulo (`TZ=America/Sao_Paulo date +%F`); `W` = pasta de trabalho nova (ex.: `/tmp/enc_inc`); `CACHE` = `https://claude.ai/artifact/WfY4v8DJ4S6uJowKWx7Nc8`; `S` = `.claude/skills/encomendak/scripts`. Lojas: `M` = 40695 (marca 877), `V` = 43896 (marca 845).
+
+1. **Ler o cache**: `ArtifactData` `list` em `CACHE`, coleção `dias/_encomendas/docs`, `query.limit` 1000, `out_dir` = `W/cache`. Anote a `version` de cada documento.
+2. **Dias a buscar**: `python3 -I S/coleta.py dias --cache W/cache --hoje HOJE` (acrescente `--completo` se HOJE for domingo: `date +%u` = 7). A saída traz uma linha `L:AAAA-MM-DD` por loja e dia.
+3. **Produtos**: `get_products` uma vez por loja (as respostas vão para arquivo; não leia no contexto).
+4. **Comandas**: para cada linha da lista, `get_table_sessions` com `restaurant_id` da loja, `start_date = end_date = dia`, `limit` 100, seguindo `pagination.next.cursor` até `has_more=false`. Vários dias em paralelo. Páginas que voltarem inline (sem arquivo): refaça a busca numa janela ISO maior (1 h antes da primeira comanda necessária até a manhã seguinte) até ser salva em arquivo e confira os ids. Conte as chamadas de `get_table_sessions` (para comparar com o modo completo).
+5. **Extrair e mesclar**: `coleta.py extrair --pm <produtos M> --pv <produtos V> --m <sessões M> --v <sessões V> --out W/novo`; depois `coleta.py mesclar --cache W/cache --novo W/novo --dias <todas as linhas do passo 2, como argumentos separados> --saida W/saida --mudancas W/mud.json`.
+6. **Gravar o cache** (só o que mudou): `ArtifactData` `batch` em `CACHE`, coleção `dias/_encomendas/docs`: `set` com `file_path` = `W/saida/escrever/<doc>.json` para cada documento a escrever (com `if_version` quando o documento já existia no cache) e `delete` (com `if_version`) para cada id de `W/saida/apagar.txt`. Se o lote falhar por versão, releia, refaça `mesclar` e tente de novo uma vez.
+7. **Montar a página de teste**: copie `W/cache` para `W/merged`, aplique as escritas e exclusões do passo 6 e rode `python3 -I S/encomendas.py --today HOJE --since 2026-11-01 --out W/sombra.html --cache-dir W/merged --mudancas W/mud.json`.
+8. **Comparar com a página publicada pelo modo completo**: `Artifact` `read` com `path: "index.html"` no link fixo das encomendas (salva um arquivo) e `python3 -I S/comparar.py <arquivo publicado> W/sombra.html`.
+9. **Relatório** (máx. 20 linhas): resultado do comparador (IDENTICO ou as diferenças), quantas chamadas de `get_table_sessions` o incremental fez (e quantas páginas), quantos documentos leu, escreveu e apagou, a lista de mudanças (máx. 10) e qualquer falha. **Não publique nada.**
